@@ -1,6 +1,6 @@
 # cloudmake
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+**License:** [Apache License 2.0](LICENSE)
 
 `cloudmake` makes modern cloud hardware feel like a familiar local build target.
 Its primary objective is to make a locally executable, Make-based project work
