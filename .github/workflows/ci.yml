@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -r requirements-test.txt
+      - run: python -m pytest
+
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Validate Python, shell, notebooks, and whitespace
+        run: |
+          python -m py_compile bin/cloudmake tools/*.py tests/*.py tests/contract/*.py
+          sh -n tools/remote_lock.sh tests/real_projects/prepare.sh
+          python -m json.tool notebooks/colab.ipynb >/dev/null
+          python -m json.tool notebooks/kaggle.ipynb >/dev/null
+          git diff --check

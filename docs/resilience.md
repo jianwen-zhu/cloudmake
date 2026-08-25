@@ -88,6 +88,12 @@ directory traversal, links, devices, and other special files are rejected. New
 artifacts are extracted into a staging directory, so an invalid or interrupted
 download leaves the previous `artifacts/` directory intact.
 
+Extraction is rejected before writing when configured file-count, total-size,
+per-file-size, compressed-size, or expansion-ratio budgets are exceeded. A
+collection run deletes its prior remote artifact archive before invoking the
+project target, so a failed target cannot make an older archive appear to be its
+result.
+
 Project-generated files remain wherever the project Makefile places them. A
 reusable backend retains them while its synchronized project workspace remains
 valid; a batch backend starts from a fresh source snapshot.
@@ -112,6 +118,12 @@ sessions are reconciled through `colab sessions`; Codespaces is probed through
 `gh`. If generated SSH configuration has expired, cloudmake refreshes it once
 after a failed connection.
 
+Colab retries its non-mutating remote-readiness probe once. If the named kernel
+remains unreachable, Cloudmake refuses automatic recreation because it cannot
+verify remote ownership through the broken connection. The operator must inspect
+status and explicitly stop the session before retrying. Cloudmake never applies
+readiness retries to a project target.
+
 Cloudmake does not blindly retry target execution or a mutating notebook
 submission. An ambiguous failure may already have started work, so automatic
 repetition could produce duplicate jobs or side effects.
@@ -129,6 +141,12 @@ Provider-specific status is retained and followed by one normalized state:
 
 `unknown` means the provider response was recognized as neither a successful
 nor a failed terminal state; it is not silently treated as success.
+
+Launcher executions retain private local JSON provenance under the project's
+external Cloudmake state directory. Records include the source and collected
+artifact fingerprints, target, backend, resource, timestamps, and result. Make
+assignment values are hashed rather than copied. Use `cloudmake --history` to
+locate and summarize recent records.
 
 ## Recovery checklist
 

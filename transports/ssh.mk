@@ -105,6 +105,7 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
+		$(CLOUDMAKE_SECRET_OPTION) \
 		--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' >/dev/null
 	@set -eu; \
 	temporary='$(SSH_REMOTE_OWNER_COPY).tmp'; \
@@ -137,6 +138,9 @@ _ssh-execute: _ssh-start
 	cleanup() { $(SSH) "sh -s -- release '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh' >/dev/null 2>&1 || :; }; \
 	trap cleanup EXIT HUP INT TERM; \
 	$(MAKE) --no-print-directory _ssh-sync-unlocked; \
+	if test -n '$(REMOTE_COLLECT_DIR_B64)'; then \
+		$(SSH) "rm -f '$(REMOTE_ARTIFACT_ARCHIVE)'"; \
+	fi; \
 	command="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_make_command.py' \
 		--source '$(REMOTE_SRC)' --makefile '$(REMOTE_MAKEFILE)' \
 		--jobs '$(JOBS)' --target '$(REMOTE_TARGET)' \
@@ -164,7 +168,7 @@ _ssh-fetch: _ssh-start
 	$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
 		$(SSH_HOST):$(REMOTE_ARTIFACT_ARCHIVE) '$(SSH_ARTIFACT_ARCHIVE).tmp'; \
 	mv '$(SSH_ARTIFACT_ARCHIVE).tmp' '$(SSH_ARTIFACT_ARCHIVE)'; \
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/safe_extract.py' \
+	$(CLOUDMAKE_SAFE_EXTRACT) \
 		--archive '$(SSH_ARTIFACT_ARCHIVE)' --destination '$(ARTIFACT_DIR)'
 
 _ssh-shell: _ssh-start

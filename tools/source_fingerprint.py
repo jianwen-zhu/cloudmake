@@ -5,6 +5,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import tarfile
@@ -18,6 +19,19 @@ EXCLUDED_ROOTS = {
     ".git",
     ".cloud-state",
     "artifacts",
+}
+SECRET_SCAN_BYTES = 2 * 1024 * 1024
+SECRET_PATTERNS = (
+    ("private key", re.compile(br"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----")),
+    ("GitHub token", re.compile(br"\bgithub_pat_[A-Za-z0-9_]{20,}\b")),
+    ("GitHub token", re.compile(br"\bgh[pousr]_[A-Za-z0-9]{30,}\b")),
+)
+SUSPICIOUS_CREDENTIAL_NAMES = {
+    ".env",
+    ".env.local",
+    "application_default_credentials.json",
+    "credentials.json",
+    "kaggle.json",
 }
 
 
@@ -152,6 +166,26 @@ def scan(root: Path) -> dict[str, Any]:
     }
 
 
+def scan_secrets(root: Path, manifest: dict[str, Any]) -> tuple[list[str], list[str]]:
+    blocked: list[str] = []
+    warnings: list[str] = []
+    for relative, entry in manifest["entries"].items():
+        if entry["kind"] != "file":
+            continue
+        path = root / relative
+        if path.name in SUSPICIOUS_CREDENTIAL_NAMES:
+            warnings.append(f"credential-like filename: {relative}")
+        with path.open("rb") as stream:
+            content = stream.read(SECRET_SCAN_BYTES)
+        if b"\0" in content[:8192]:
+            continue
+        for label, pattern in SECRET_PATTERNS:
+            if pattern.search(content):
+                blocked.append(f"{label}: {relative}")
+                break
+    return blocked, warnings
+
+
 def atomic_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -225,10 +259,30 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--warn-mb", type=float, default=0)
     parser.add_argument("--max-mb", type=float, default=0)
+    parser.add_argument("--allow-secrets", action="store_true")
     arguments = parser.parse_args()
 
     root = arguments.root.expanduser().resolve()
     manifest = scan(root)
+    blocked_secrets, secret_warnings = scan_secrets(root, manifest)
+    for warning in secret_warnings[:10]:
+        print(f"[cloudmake] Warning: {warning}", file=sys.stderr)
+    if len(secret_warnings) > 10:
+        print(
+            f"[cloudmake] Warning: {len(secret_warnings) - 10} additional credential-like filenames selected.",
+            file=sys.stderr,
+        )
+    if blocked_secrets:
+        severity = "Warning" if arguments.allow_secrets else "Refusing source transfer"
+        for finding in blocked_secrets[:10]:
+            print(f"[cloudmake] {severity}: detected {finding}", file=sys.stderr)
+        if not arguments.allow_secrets:
+            print(
+                "[cloudmake] Exclude the file with .cloudmakeignore or deliberately set "
+                "CLOUDMAKE_ALLOW_SECRETS=1.",
+                file=sys.stderr,
+            )
+            return 2
     selected_mb = manifest["total_bytes"] / (1024 * 1024)
     if arguments.max_mb > 0 and selected_mb > arguments.max_mb:
         print(

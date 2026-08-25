@@ -18,6 +18,8 @@ BACKEND_REQUIRES_PYTHON := yes
 BACKEND_INSTALL_HINT := Install GitHub CLI, OpenSSH, and rsync; then run: gh auth refresh -h github.com -s codespace
 BACKEND_VALIDATE := case '$(CODESPACE)' in ''|*[!A-Za-z0-9._-]*) echo 'CODESPACE contains unsupported characters' >&2; exit 2;; esac
 BACKEND_DOCTOR_PROBE := $(GH_BIN) auth status -h github.com >/dev/null && $(GH_BIN) codespace view -c $(CODESPACE) >/dev/null
+BACKEND_VERSION_COMMAND := $(GH_BIN) --version
+BACKEND_TESTED_CLIENT := GitHub CLI 2.55.x
 BACKEND_RESOURCE_ID := $(CODESPACE)
 BACKEND_REMOTE_REQUIRED_COMMANDS := make rsync tar
 

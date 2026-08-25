@@ -124,6 +124,20 @@ elif command == "download":
     shutil.copyfile(source, local)
 elif command == "exec":
     script = Path(option("-f", ""))
+    if (
+        (
+            os.environ.get("FAKE_COLAB_READINESS_FAIL_ALWAYS")
+            or os.environ.get("FAKE_COLAB_READINESS_FAIL_ONCE")
+        )
+        and script.name == "remote_prerequisites.py"
+        and (
+            os.environ.get("FAKE_COLAB_READINESS_FAIL_ALWAYS")
+            or not (remote / "readiness-failed-once").exists()
+        )
+    ):
+        (remote / "readiness-failed-once").write_text("failed", encoding="utf-8")
+        print("Connection was lost.")
+        raise SystemExit(1)
     if script.name == "colab_sync.py":
         shutil.copyfile(remote / "cloud-build-source.sha256", remote / "source.sha256")
         shutil.copyfile(remote / "cloud-build-owner.json", remote / ".cloudmake-owner.json")
@@ -179,7 +193,7 @@ elif arguments[:2] == ["kernels", "list"]:
 elif arguments[:2] == ["kernels", "push"]:
     print("Kernel version submitted")
 elif arguments[:2] == ["kernels", "status"]:
-    print("complete")
+    print(os.environ.get("FAKE_KAGGLE_STATUS", "complete"))
 elif arguments[:2] == ["kernels", "output"]:
     output = Path(arguments[arguments.index("-p") + 1])
     output.mkdir(parents=True, exist_ok=True)
@@ -216,6 +230,8 @@ if arguments[:2] == ["auth", "status"]:
         print("GitHub authentication expired")
         raise SystemExit(1)
     print("Logged in")
+elif arguments == ["--version"]:
+    print("gh version 2.55.0")
 elif arguments[:3] == ["codespace", "ssh", "--config"]:
     identity = remote / "codespaces.auto"
     identity.write_text("fake private key", encoding="utf-8")
@@ -350,6 +366,36 @@ def test_launcher_prepares_external_project_for_kaggle_batch(
 
 
 @pytest.mark.integration
+def test_kaggle_failure_still_downloads_and_prints_the_run_log(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    project = external_project(tmp_path / "external-kaggle-failure")
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update(
+        {
+            "KAGGLE_USERNAME": "tester",
+            "KAGGLE_POLL_SECONDS": "0.01",
+            "FAKE_KAGGLE_STATUS": "error: compiler unavailable",
+        }
+    )
+
+    result = run_command(
+        [LAUNCHER, "-b", "kaggle", "benchmark"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "fake kaggle log" in result.stdout
+    assert any(
+        call[1:3] == ["kernels", "output"]
+        for call in calls(Path(env["FAKE_LOG"]), "kaggle")
+    )
+
+
+@pytest.mark.integration
 def test_launcher_runs_external_project_through_codespaces_ssh(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -421,6 +467,19 @@ def test_ssh_collect_fetches_artifacts_transactionally(
         and any("tar -C" in argument and "/src/dist" in argument for argument in call[1:])
         for call in calls(Path(env["FAKE_LOG"]))
     )
+    assert any(
+        call[0] == "ssh"
+        and any("rm -f" in argument and ".cloudmake-artifacts.tar.gz" in argument for argument in call[1:])
+        for call in calls(Path(env["FAKE_LOG"]))
+    )
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["status"] == "succeeded"
+    assert provenance["resource_id"] == "test-space"
+    assert len(provenance["source"]["fingerprint"]) == 64
+    assert provenance["artifacts"]["files"] == 1
+    assert provenance["artifacts"]["total_bytes"] > 0
+    assert len(provenance["artifacts"]["fingerprint"]) == 64
 
 
 @pytest.mark.integration
@@ -566,6 +625,53 @@ def test_colab_native_reconciles_a_disappeared_session(
     colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
     assert any(call[1] == "new" for call in colab_calls)
     assert any(call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz" for call in colab_calls)
+
+
+@pytest.mark.integration
+def test_colab_native_retries_only_the_non_mutating_readiness_probe(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_READINESS_FAIL_ONCE"] = "1"
+
+    result = run_command(["make", "build"], cwd=prototype, env=env)
+
+    assert "Readiness connection failed" in result.stdout
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    readiness = [
+        call
+        for call in colab_calls
+        if call[1] == "exec" and call[-1].endswith("remote_prerequisites.py")
+    ]
+    target_runs = [
+        call
+        for call in colab_calls
+        if call[1] == "exec" and call[-1].endswith("runner.ipynb")
+    ]
+    assert len(readiness) == 2
+    assert len(target_runs) == 1
+
+
+@pytest.mark.integration
+def test_colab_native_refuses_to_destroy_an_unreachable_named_session(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_READINESS_FAIL_ALWAYS"] = "1"
+
+    result = run_command(["make", "build"], cwd=prototype, env=env, check=False)
+
+    assert result.returncode != 0
+    assert "refusing automatic recreation" in result.stdout
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert sum(call[1] == "new" for call in colab_calls) == 1
+    assert not any(call[1] == "stop" for call in colab_calls)
+    assert not any(
+        call[1] == "exec" and call[-1].endswith("runner.ipynb")
+        for call in colab_calls
+    )
 
 
 @pytest.mark.integration

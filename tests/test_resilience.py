@@ -285,6 +285,70 @@ def test_safe_extract_rejects_links(tmp_path: Path) -> None:
     assert "links are not accepted" in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("option", "value", "expected"),
+    [
+        ("--max-files", "1", "members; limit is 1"),
+        ("--max-total-mb", "0.000001", "contents are"),
+        ("--max-file-mb", "0.000001", "per-file limit"),
+        ("--max-archive-mb", "0.000001", "artifact archive is"),
+    ],
+)
+def test_safe_extract_enforces_resource_budgets_without_replacing_output(
+    tmp_path: Path, option: str, value: str, expected: str
+) -> None:
+    destination = tmp_path / "artifacts"
+    destination.mkdir()
+    (destination / "keep").write_text("keep", encoding="utf-8")
+    archive = tmp_path / "budget.tar.gz"
+    write_tar(
+        archive,
+        [
+            (tarfile.TarInfo("one"), b"one"),
+            (tarfile.TarInfo("two"), b"two"),
+        ],
+    )
+
+    result = run_command(
+        [
+            sys.executable,
+            SAFE_EXTRACT,
+            "--archive",
+            archive,
+            "--destination",
+            destination,
+            option,
+            value,
+        ],
+        cwd=tmp_path,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert expected in result.stdout
+    assert (destination / "keep").read_text(encoding="utf-8") == "keep"
+
+
+def test_safe_extract_rejects_excessive_expansion_ratio(tmp_path: Path) -> None:
+    archive = tmp_path / "compressed.tar.gz"
+    write_tar(archive, [(tarfile.TarInfo("zeros"), b"0" * 1024 * 1024)])
+    result = run_command(
+        [
+            sys.executable,
+            SAFE_EXTRACT,
+            "--archive",
+            archive,
+            "--destination",
+            tmp_path / "artifacts",
+            "--max-ratio",
+            "2",
+        ],
+        cwd=tmp_path,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "expansion ratio" in result.stdout
+
+
 def remote_lock(operation: str, directory: Path, token: str, stale: int = 3600):
     return run_command(
         ["sh", REMOTE_LOCK, operation, directory, token, str(stale)],

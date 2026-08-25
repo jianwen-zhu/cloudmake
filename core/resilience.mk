@@ -13,6 +13,19 @@ CLOUDMAKE_PROJECT_ROOT ?= $(PROJECT_DIR)
 CLOUDMAKE_PROJECT_ARGS_B64 ?= W10=
 SOURCE_WARN_MB ?= 25
 SOURCE_MAX_MB ?= 0
+CLOUDMAKE_ALLOW_SECRETS ?= 0
+CLOUDMAKE_SECRET_OPTION = $(if $(filter 1,$(CLOUDMAKE_ALLOW_SECRETS)),--allow-secrets,)
+ARTIFACT_MAX_FILES ?= 50000
+ARTIFACT_MAX_MB ?= 2048
+ARTIFACT_MAX_FILE_MB ?= 1024
+ARTIFACT_MAX_ARCHIVE_MB ?= 1024
+ARTIFACT_MAX_RATIO ?= 500
+
+CLOUDMAKE_SAFE_EXTRACT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/safe_extract.py' \
+	--max-files '$(ARTIFACT_MAX_FILES)' --max-total-mb '$(ARTIFACT_MAX_MB)' \
+	--max-file-mb '$(ARTIFACT_MAX_FILE_MB)' \
+	--max-archive-mb '$(ARTIFACT_MAX_ARCHIVE_MB)' \
+	--max-ratio '$(ARTIFACT_MAX_RATIO)'
 
 BACKEND_API_VERSION ?=
 BACKEND_LIFECYCLE ?=
@@ -62,4 +75,5 @@ sync-dry-run: backend-contract
 	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--compare '$(CLOUDMAKE_MANIFEST)' --dry-run \
+		$(CLOUDMAKE_SECRET_OPTION) \
 		--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)'

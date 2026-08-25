@@ -53,6 +53,15 @@ CLOUDMAKE_TEST_LIVE_COLAB=1 python3 -m pytest \
   tests/test_real_github_projects.py -m live_cloud
 ```
 
+The repository also provides three automation layers:
+
+- `CI` runs the offline suite on supported macOS/Linux and Python combinations;
+- `Upstream compatibility` runs the pinned public CUDA projects weekly or on
+  demand without allocating cloud compute;
+- `Live Colab regression` requires a typed confirmation, approval of the
+  `live-colab` GitHub environment, and the `COLAB_CONFIG_TAR_GZ_B64` secret
+  described in `docs/releasing.md`.
+
 `tests/contract/` exercises the public `cloudmake` launcher interface, including
 configuration precedence, aliases, external project isolation, arbitrary target
 dispatch, zero reserved project names, target-agnostic artifact collection,
@@ -77,6 +86,8 @@ internals:
 - shared source manifests, dry-run plans, ignore rules, source-size gates, and
   backend capability contracts;
 - safe transactional artifact replacement and status normalization; and
+- artifact resource budgets, secret-transfer refusal, execution provenance, and
+  fresh installed-runtime behavior; and
 - the launcher against external projects through Colab, Kaggle, and the common
   SSH transport, including lossless Make-variable passthrough without host-engine
   interpretation.

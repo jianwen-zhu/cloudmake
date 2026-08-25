@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 with Path(os.environ["CLOUDMAKE_TEST_ENGINE_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(sys.argv[1:]) + "\n")
+raise SystemExit(int(os.environ.get("CLOUDMAKE_TEST_ENGINE_EXIT", "0")))
 ''',
     )
     environment = {
@@ -105,7 +106,7 @@ def test_no_arguments_is_read_only_and_does_not_invoke_engine(
     assert engine_calls(log) == []
 
 
-@pytest.mark.parametrize("arguments", [("--version",), ("--backends",)])
+@pytest.mark.parametrize("arguments", [("--version",), ("--backends",), ("--history",)])
 def test_information_commands_do_not_invoke_build_engine(
     tmp_path: Path, fake_bin: Path, arguments: tuple[str, ...]
 ) -> None:
@@ -468,3 +469,62 @@ def test_credentials_are_not_written_to_project_or_cloudmake_preferences(
         for path in project.rglob("*")
         if path.is_file()
     )
+
+
+def test_execution_provenance_hashes_assignment_values_and_tracks_result(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    secret = "do-not-store-this-value"
+
+    result = invoke(project, environment, "benchmark", f"TOKEN={secret}")
+
+    latest_records = list((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    assert len(latest_records) == 1
+    latest = latest_records[0]
+    record = json.loads(latest.read_text(encoding="utf-8"))
+    assert record["status"] == "succeeded"
+    assert record["target"] == "benchmark"
+    assert record["exit_code"] == 0
+    assert record["assignments"][0]["name"] == "TOKEN"
+    assert len(record["assignments"][0]["value_sha256"]) == 64
+    assert secret not in latest.read_text(encoding="utf-8")
+    assert latest.stat().st_mode & 0o077 == 0
+    assert f"run={record['run_id']}" in result.stdout
+    assert any(
+        argument == f"CLOUDMAKE_RUN_ID={record['run_id']}"
+        for argument in engine_calls(log)[0]
+    )
+
+
+def test_failed_execution_is_retained_in_provenance(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, _ = contract_environment(tmp_path, fake_bin)
+    environment["CLOUDMAKE_TEST_ENGINE_EXIT"] = "7"
+
+    result = invoke(project, environment, "build", check=False)
+
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    record = json.loads(latest.read_text(encoding="utf-8"))
+    assert result.returncode == 7
+    assert record["status"] == "failed"
+    assert record["exit_code"] == 7
+
+
+def test_history_lists_recent_execution_without_invoking_engine_again(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "benchmark")
+    before = engine_calls(log)
+
+    history = invoke(project, environment, "--history")
+
+    assert "succeeded" in history.stdout
+    assert "benchmark" in history.stdout
+    assert "Provenance directory" in history.stdout
+    assert engine_calls(log) == before

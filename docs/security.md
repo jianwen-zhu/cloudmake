@@ -49,6 +49,13 @@ This is a convenience boundary, not a secrets manager. Review the effective
 selection with `cloudmake --sync-dry-run` before the first upload and after changing
 exclusions.
 
+Cloudmake scans selected regular files before packaging. It refuses unmistakable
+private-key blocks and GitHub access-token forms and warns about common
+credential-like filenames. The scan is intentionally conservative and cannot
+identify every secret. An intentional fixture can use `CLOUDMAKE_ALLOW_SECRETS=1`
+for one command; this does not make the destination safe or prevent provider
+retention.
+
 A private provider notebook, unlisted Gist, archive URL, or hard-to-guess
 identifier still grants access through an account or possession of a link. None
 should be used as a credential store.
@@ -77,6 +84,13 @@ destination, unsafe symbolic or hard links, and special files. Source replacemen
 and artifact retrieval use staging directories so failed validation preserves
 the prior valid tree.
 
+Artifact extraction also enforces member-count, expanded-size, individual-file,
+compressed-archive, and expansion-ratio limits. They default respectively to
+50,000 files, 2 GiB total, 1 GiB per file, 1 GiB compressed, and 500:1. Advanced
+users can set `ARTIFACT_MAX_FILES`, `ARTIFACT_MAX_MB`,
+`ARTIFACT_MAX_FILE_MB`, `ARTIFACT_MAX_ARCHIVE_MB`, and `ARTIFACT_MAX_RATIO` in
+the host environment.
+
 Source symbolic links may not escape the local project. SSH synchronization
 checks remote ownership before allowing `rsync --delete`. These controls protect
 filesystem boundaries during normal operation; they do not sandbox arbitrary
@@ -96,7 +110,8 @@ stable between sessions.
 
 ## Reporting a security issue
 
-Do not include live credentials, private source, or provider tokens in an issue
-or test fixture. A useful report includes the backend, lifecycle step, sanitized
+Follow the private reporting process in [`SECURITY.md`](../SECURITY.md). Do not
+include live credentials, private source, or provider tokens in a public issue or
+test fixture. A useful report includes the backend, lifecycle step, sanitized
 provider response, expected boundary, and a minimal reproduction using dummy
 files or fake-provider tests.

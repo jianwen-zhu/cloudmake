@@ -140,6 +140,35 @@ def test_colab_notebook_collects_artifacts_only_when_explicitly_requested(
         assert "stale.txt" not in names
 
 
+def test_colab_collect_removes_stale_artifact_before_a_failing_target(
+    tmp_path: Path,
+) -> None:
+    remote = tmp_path / "colab" / "workspace"
+    source = remote / "src"
+    source.mkdir(parents=True)
+    (source / "Makefile").write_text("fail:\n\t@false\n", encoding="utf-8")
+    artifact = remote / "artifacts.tar.gz"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"stale")
+    control = tmp_path / "colab" / "target"
+    control.parent.mkdir(parents=True, exist_ok=True)
+    control.write_text(
+        f"{base64.urlsafe_b64encode(b'fail').decode()}\n1\nMakefile\nW10=\nLg==\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Exception):
+        execute_code_cells(
+            load_notebook(COLAB_NOTEBOOK),
+            {
+                "/content/.cloud-build/workspace": str(remote),
+                "/content/.cloud-build/artifacts.tar.gz": str(artifact),
+                "/content/cloud-build-target": str(control),
+            },
+        )
+    assert not artifact.exists()
+
+
 def test_colab_notebook_executes_project_specific_target(tmp_path: Path) -> None:
     remote = tmp_path / "colab" / "workspace"
     source = remote / "src"

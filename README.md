@@ -110,6 +110,7 @@ Cloudmake is installed once as a stable tool:
 cloudmake/
 |-- bin/cloudmake
 |-- Makefile
+|-- VERSION
 |-- core/
 |-- backends/
 |-- transports/
@@ -267,10 +268,10 @@ make install
 cloudmake --version
 ```
 
-Installation creates an unprivileged launcher under
-`~/.local/bin/cloudmake`. Add that directory to `PATH` if necessary. Before
-installation, the same interface is available as `./bin/cloudmake` from the
-tool checkout.
+Installation creates an unprivileged launcher under `~/.local/bin/cloudmake`
+and installs its self-contained runtime under `~/.local/libexec/cloudmake/`.
+Add `~/.local/bin` to `PATH` if necessary. Before installation, the same
+interface is available as `./bin/cloudmake` from the tool checkout.
 
 ### 3. Check provider readiness
 
@@ -283,7 +284,9 @@ cloudmake --backends
 
 `cloudmake --backends` reports the adapters and whether their main host clients are
 installed. `cloudmake --doctor` checks the selected backend's complete local
-prerequisites and provider authentication without allocating a VM.
+prerequisites and provider authentication without allocating a VM. It also
+prints the installed client version and the client line used for Cloudmake's
+latest compatibility validation.
 
 The checker has two levels:
 
@@ -332,6 +335,7 @@ cloudmake -b kaggle test
 cloudmake compile
 cloudmake verify
 cloudmake --collect dist export-release
+cloudmake --history
 ```
 
 The names in this example belong entirely to the project; any other target works
@@ -661,6 +665,11 @@ automatically. Cloudmake does not infer that names such as `build/`, `.venv/`,
 `src/`, or `*_output.ipynb` are disposable; exclude them explicitly when that is
 correct for the project.
 
+Before transfer, Cloudmake refuses unmistakable private-key blocks and GitHub
+access-token forms. Credential-like filenames produce a warning. Exclude such
+files with `.cloudmakeignore`; for a deliberate test fixture, the conspicuous
+one-command override is `CLOUDMAKE_ALLOW_SECRETS=1 cloudmake TARGET`.
+
 `make sync-dry-run` reports added, modified, and deleted paths without
 authenticating, allocating compute, or contacting the provider. Read
 [Resilience and recovery](docs/resilience.md) before adopting a workspace,
@@ -668,7 +677,14 @@ adjusting source limits, or recovering an interrupted operation.
 
 Direct engine state lives under `.cloud-state/`. The launcher instead keeps state
 and cache data in user directories outside both repositories. Downloaded project
-output is extracted under the actual project's `artifacts/` directory.
+output is extracted under the actual project's `artifacts/` directory. Artifact
+archives are bounded by configurable member-count, total-size, per-file-size,
+compressed-size, and expansion-ratio limits before extraction.
+
+Every project execution creates a private local provenance record containing the
+backend, remote resource, target, source fingerprint, result, and—when collected—
+an artifact fingerprint. Make-assignment names are recorded, but their values are
+stored only as hashes. `cloudmake --history` shows the ten latest runs.
 
 ## Reliability and security
 
@@ -687,6 +703,9 @@ documents before using private source or diagnosing a failure:
 - [Security model](docs/security.md)
 - [Project contract](docs/project-contract.md)
 - [Backend contract](docs/backend-contract.md)
+- [Security reporting](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Release process](docs/releasing.md)
 
 ## Testing
 
@@ -714,6 +733,11 @@ lessons, installs regression-only Makefile overlays, and exercises them without
 vendoring either repository. A second, explicitly enabled gate runs both
 overlays on temporary Colab T4 sessions. See [`tests/README.md`](tests/README.md)
 for the commands and allocation warning.
+
+GitHub Actions runs the offline suite on Linux and macOS, checks syntax and
+notebook structure, exercises pinned upstream CUDA projects weekly, and exposes
+an approval-gated live Colab workflow. Stable version tags produce checksummed
+source releases only after the offline suite passes again.
 
 `tests/contract/` exercises the public launcher behavior. It specifies backend
 aliases, configuration precedence, external project state, `-C`, arbitrary

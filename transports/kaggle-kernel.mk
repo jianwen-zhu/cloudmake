@@ -84,6 +84,7 @@ _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
+		$(CLOUDMAKE_SECRET_OPTION) \
 		--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' \
 		> '$(KAGGLE_CURRENT_FINGERPRINT).tmp'
 	@mv '$(KAGGLE_CURRENT_FINGERPRINT).tmp' '$(KAGGLE_CURRENT_FINGERPRINT)'
@@ -96,6 +97,7 @@ _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
 			--root '$(PROJECT_DIR)' \
 			--archive '$(KAGGLE_ARCHIVE)' \
+			$(CLOUDMAKE_SECRET_OPTION) \
 			--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' >/dev/null; \
 		mv '$(KAGGLE_CURRENT_FINGERPRINT)' '$(KAGGLE_FINGERPRINT)'; \
 		mv '$(CLOUDMAKE_CURRENT_MANIFEST)' '$(CLOUDMAKE_MANIFEST)'; \
@@ -122,14 +124,19 @@ _kaggle-execute: _kaggle-start _kaggle-sync | $(KAGGLE_KERNEL_DIR) $(KAGGLE_OUTP
 		--accelerator '$(KAGGLE_ACCELERATOR)'
 	$(KAGGLE_BIN) kernels push -p '$(KAGGLE_KERNEL_DIR)' \
 		--timeout '$(KAGGLE_TIMEOUT)' $(KAGGLE_ACCELERATOR_OPTION)
+	@set +e; \
 	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_wait.py' \
 		--kaggle '$(KAGGLE_BIN)' \
 		--kernel '$(KAGGLE_KERNEL_REF)' \
 		--timeout '$(KAGGLE_TIMEOUT)' \
-		--poll '$(KAGGLE_POLL_SECONDS)'
+		--poll '$(KAGGLE_POLL_SECONDS)'; \
+	wait_status=$$?; \
 	$(KAGGLE_BIN) kernels output '$(KAGGLE_KERNEL_REF)' \
-		-p '$(KAGGLE_OUTPUT_DIR)' -o --file-pattern 'cloud-build[.]log$$'
-	@cat '$(KAGGLE_RUN_LOG)'
+		-p '$(KAGGLE_OUTPUT_DIR)' -o --file-pattern 'cloud-build[.]log$$'; \
+	output_status=$$?; \
+	test ! -f '$(KAGGLE_RUN_LOG)' || cat '$(KAGGLE_RUN_LOG)'; \
+	if test $$wait_status -ne 0; then exit $$wait_status; fi; \
+	exit $$output_status
 
 _kaggle-collect: _kaggle-execute
 	@$(MAKE) --no-print-directory _kaggle-fetch
@@ -137,7 +144,7 @@ _kaggle-collect: _kaggle-execute
 _kaggle-fetch: _kaggle-start | $(KAGGLE_OUTPUT_DIR)
 	$(KAGGLE_BIN) kernels output '$(KAGGLE_KERNEL_REF)' \
 		-p '$(KAGGLE_OUTPUT_DIR)' -o --file-pattern 'artifacts[.]tar[.]gz$$'
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/safe_extract.py' \
+	$(CLOUDMAKE_SAFE_EXTRACT) \
 		--archive '$(KAGGLE_ARTIFACT_ARCHIVE)' --destination '$(ARTIFACT_DIR)'
 
 _kaggle-open: _kaggle-start

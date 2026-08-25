@@ -1,0 +1,38 @@
+name: Live Colab regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RUN to allocate temporary Colab T4 sessions
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  live-colab:
+    if: inputs.confirmation == 'RUN'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: live-colab
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - uses: astral-sh/setup-uv@v6
+      - run: python -m pip install -r requirements-test.txt
+      - run: uv tool install google-colab-cli
+      - name: Restore Colab CLI credentials
+        env:
+          COLAB_CONFIG_TAR_GZ_B64: ${{ secrets.COLAB_CONFIG_TAR_GZ_B64 }}
+        run: |
+          test -n "$COLAB_CONFIG_TAR_GZ_B64"
+          printf '%s' "$COLAB_CONFIG_TAR_GZ_B64" | base64 --decode | tar -xzf - -C "$HOME"
+          colab sessions >/dev/null
+      - name: Run live CUDA project gate
+        env:
+          CLOUDMAKE_TEST_LIVE_COLAB: "1"
+        run: python -m pytest tests/test_real_github_projects.py -m live_cloud -s

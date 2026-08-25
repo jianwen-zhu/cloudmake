@@ -53,3 +53,32 @@ def test_sample_makefile_reuses_unchanged_objects(tmp_path: Path) -> None:
     assert before == after
     assert "Nothing to be done" in second.stdout or "is up to date" in second.stdout
 
+
+def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
+    destination = tmp_path / "install-root"
+    prefix = "/usr/local"
+    run_command(
+        ["make", "install", f"DESTDIR={destination}", f"PREFIX={prefix}"],
+        cwd=PROJECT_ROOT,
+    )
+
+    launcher = destination / "usr" / "local" / "bin" / "cloudmake"
+    runtime = destination / "usr" / "local" / "libexec" / "cloudmake"
+    assert launcher.is_file()
+    for relative in (
+        "Makefile",
+        "VERSION",
+        "backends/colab-notebook.mk",
+        "core/resilience.mk",
+        "notebooks/colab.ipynb",
+        "tools/source_fingerprint.py",
+        "transports/ssh.mk",
+    ):
+        assert (runtime / relative).is_file()
+
+    version = run_command([launcher, "--version"], cwd=tmp_path)
+    assert version.stdout.strip() == f"cloudmake {(PROJECT_ROOT / 'VERSION').read_text().strip()}"
+
+    project = sample_project(tmp_path)
+    dry_run = run_command([launcher, "-C", project, "--sync-dry-run"], cwd=tmp_path)
+    assert "Makefile" in dry_run.stdout

@@ -92,8 +92,17 @@ _colab-start: ensure-owner | $(COLAB_STATE_DIR)
 		'$$1 == "[" session "]" { found = 1 } END { exit !found }'; then \
 		$(COLAB_BIN) new -s '$(COLAB_SESSION)' $(COLAB_ACCELERATOR); \
 	fi
-	@$(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
-		-f '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_prerequisites.py'
+	@set -e; \
+	if ! $(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
+		-f '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_prerequisites.py'; then \
+		echo '[colab] Readiness connection failed; retrying the non-mutating probe once.' >&2; \
+		if ! $(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
+			-f '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_prerequisites.py'; then \
+			echo '[colab] The named session remains unreachable; refusing automatic recreation because remote ownership is ambiguous.' >&2; \
+			echo '[colab] Inspect cloudmake --status, then use cloudmake --stop and retry only after verifying the session.' >&2; \
+			exit 1; \
+		fi; \
+	fi
 
 _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 	@set -e; \
@@ -113,6 +122,7 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
+		$(CLOUDMAKE_SECRET_OPTION) \
 		--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' \
 		> '$(COLAB_FINGERPRINT).tmp'
 	@mv '$(COLAB_FINGERPRINT).tmp' '$(COLAB_FINGERPRINT)'
@@ -127,6 +137,7 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
 			--root '$(PROJECT_DIR)' \
 			--archive '$(COLAB_ARCHIVE)' \
+			$(CLOUDMAKE_SECRET_OPTION) \
 			--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' >/dev/null; \
 		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
 			'$(COLAB_ARCHIVE)' '$(COLAB_REMOTE_ARCHIVE)'; \
@@ -166,7 +177,7 @@ _colab-fetch-ready: | $(COLAB_STATE_DIR)
 	$(COLAB_BIN) download -s '$(COLAB_SESSION)' \
 		'$(COLAB_REMOTE_ARTIFACTS)' '$(COLAB_ARTIFACT_ARCHIVE).tmp'
 	@mv '$(COLAB_ARTIFACT_ARCHIVE).tmp' '$(COLAB_ARTIFACT_ARCHIVE)'
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/safe_extract.py' \
+	$(CLOUDMAKE_SAFE_EXTRACT) \
 		--archive '$(COLAB_ARTIFACT_ARCHIVE)' --destination '$(ARTIFACT_DIR)'
 
 _colab-open: _colab-start

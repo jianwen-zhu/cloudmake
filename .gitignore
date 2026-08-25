@@ -1,6 +1,7 @@
 .cloud-state/
 artifacts/
 build/
+dist/
 *_output.ipynb
 .pytest_cache/
 __pycache__/

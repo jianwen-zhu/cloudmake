@@ -1,0 +1,25 @@
+name: Upstream compatibility
+
+on:
+  schedule:
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-cuda-projects:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements-test.txt
+      - name: Clone and exercise pinned NVIDIA and GPU MODE projects
+        env:
+          CLOUDMAKE_TEST_REAL_GITHUB: "1"
+        run: python -m pytest tests/test_real_github_projects.py -m real_github

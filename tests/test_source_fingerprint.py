@@ -74,3 +74,63 @@ def test_fingerprint_includes_empty_directories_and_names(tmp_path: Path) -> Non
     renamed = fingerprint(tmp_path)
 
     assert len({initial, with_directory, renamed}) == 3
+
+
+def test_source_scan_refuses_private_keys_before_packaging(tmp_path: Path) -> None:
+    key = tmp_path / "deployment.key"
+    key.write_text(
+        "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nnot-a-real-key\n",
+        encoding="utf-8",
+    )
+    archive = tmp_path / "source.tar.gz"
+
+    refused = run_command(
+        ["python3", SCRIPT, "--root", tmp_path, "--archive", archive],
+        cwd=tmp_path,
+        check=False,
+    )
+    assert refused.returncode == 2
+    assert "Refusing source transfer" in refused.stdout
+    assert not archive.exists()
+
+    allowed = run_command(
+        [
+            "python3",
+            SCRIPT,
+            "--root",
+            tmp_path,
+            "--archive",
+            archive,
+            "--allow-secrets",
+        ],
+        cwd=tmp_path,
+    )
+    assert "Warning" in allowed.stdout
+    assert archive.is_file()
+
+
+def test_source_scan_warns_for_credential_like_names_and_honors_ignore(
+    tmp_path: Path,
+) -> None:
+    credentials = tmp_path / ".env"
+    credentials.write_text("MODE=development\n", encoding="utf-8")
+    warned = run_command(["python3", SCRIPT, "--root", tmp_path], cwd=tmp_path)
+    assert "credential-like filename" in warned.stdout
+
+    (tmp_path / ".cloudmakeignore").write_text(".env\n", encoding="utf-8")
+    ignored = run_command(["python3", SCRIPT, "--root", tmp_path], cwd=tmp_path)
+    assert "credential-like filename" not in ignored.stdout
+
+
+def test_source_scan_does_not_treat_binary_constants_as_credentials(
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "compiled.bin"
+    binary.write_bytes(
+        b"\0\1binary\0-----BEGIN " + b"OPENSSH PRIVATE KEY-----\0constant"
+    )
+
+    result = run_command(["python3", SCRIPT, "--root", tmp_path], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "Refusing source transfer" not in result.stdout

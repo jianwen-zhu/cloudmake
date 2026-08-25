@@ -13,12 +13,25 @@ import socket
 import subprocess
 import sys
 import tempfile
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-VERSION = "0.4.3"
-TOOL_ROOT = Path(__file__).resolve().parents[1]
+def locate_tool_root() -> Path:
+    launcher = Path(__file__).resolve()
+    prefix = launcher.parents[1]
+    candidates = (prefix, prefix / "libexec" / "cloudmake")
+    for candidate in candidates:
+        if (candidate / "Makefile").is_file() and (candidate / "VERSION").is_file():
+            return candidate
+    searched = ", ".join(os.fspath(candidate) for candidate in candidates)
+    raise RuntimeError(f"cloudmake runtime files were not found; searched: {searched}")
+
+
+TOOL_ROOT = locate_tool_root()
+VERSION = (TOOL_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ENGINE = TOOL_ROOT / "Makefile"
 ALIASES = {
     "colab": "colab-notebook",
@@ -42,6 +55,7 @@ ACTION_OPTIONS = {
     "--doctor": "doctor",
     "--fetch": "fetch",
     "--help": "help",
+    "--history": "history",
     "--open": "open",
     "--shell": "shell",
     "--start": "start",
@@ -61,6 +75,7 @@ RESERVED_ASSIGNMENTS = {
     "CLOUDMAKE_CACHE_ROOT",
     "CLOUDMAKE_PROJECT_ARGS_B64",
     "CLOUDMAKE_PROJECT_ROOT",
+    "CLOUDMAKE_RUN_ID",
     "CLOUDMAKE_STATE_ROOT",
     "CLOUDMAKE_TOOL_ROOT",
     "JOBS",
@@ -140,6 +155,84 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def assignment_receipts(arguments: list[str]) -> list[dict[str, str]]:
+    receipts = []
+    for argument in arguments:
+        name, value = argument.split("=", 1)
+        receipts.append(
+            {
+                "name": name,
+                "value_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+            }
+        )
+    return receipts
+
+
+def source_manifest_snapshot(state_root: Path, backend: str) -> dict[Path, int]:
+    directory = state_root / "manifests" / backend
+    return {
+        path: path.stat().st_mtime_ns
+        for path in directory.glob("*.json")
+        if path.is_file()
+    }
+
+
+def newest_source_manifest(
+    state_root: Path, backend: str, previous: dict[Path, int]
+) -> tuple[str | None, dict[str, Any] | None]:
+    directory = state_root / "manifests" / backend
+    candidates = sorted(
+        (
+            path
+            for path in directory.glob("*.json")
+            if path.is_file() and previous.get(path) != path.stat().st_mtime_ns
+        ),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    if not candidates:
+        return None, None
+    path = candidates[0]
+    try:
+        manifest = load_json(path, optional=False)
+    except Exception:
+        return path.stem, None
+    return path.stem, {
+        "fingerprint": manifest.get("fingerprint"),
+        "total_bytes": manifest.get("total_bytes"),
+        "entries": len(manifest.get("entries", {})),
+    }
+
+
+def artifact_receipt(directory: Path) -> dict[str, Any] | None:
+    if not directory.is_dir():
+        return None
+    digest = hashlib.sha256()
+    total_bytes = 0
+    files = 0
+    for path in sorted(directory.rglob("*"), key=lambda item: item.as_posix()):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(directory).as_posix().encode("utf-8")
+        add = len(relative).to_bytes(8, "big") + relative
+        digest.update(add)
+        files += 1
+        total_bytes += path.stat().st_size
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return {
+        "path": os.fspath(directory),
+        "fingerprint": digest.hexdigest(),
+        "files": files,
+        "total_bytes": total_bytes,
+    }
 
 
 def canonical_backend(value: str) -> str:
@@ -240,7 +333,7 @@ Project options: -b BACKEND, -C DIR, -j N, --gpu[=TYPE], --cpu, --verbose
 Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
                   --sync-dry-run, --status, --fetch, --open, --shell, --stop
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
-Information: --help, --version
+Information: --help, --version, --history
 """
 
 
@@ -249,6 +342,27 @@ def show_backends() -> None:
     for name, (lifecycle, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
         print(f"{name:19} {lifecycle:10} {transport:27} {client} ({installed})")
+
+
+def show_history(state_home: Path, key: str) -> None:
+    runs = state_home / "projects" / key / "runs"
+    paths = sorted(
+        (path for path in runs.glob("*.json") if path.name != "latest.json"),
+        reverse=True,
+    )[:10]
+    if not paths:
+        print("No cloudmake executions have been recorded for this project.")
+        return
+    print("STARTED                      STATUS       BACKEND              TARGET")
+    for path in paths:
+        record = load_json(path, optional=False)
+        print(
+            f"{str(record.get('started_at', '-')):28} "
+            f"{str(record.get('status', 'unknown')):12} "
+            f"{str(record.get('backend', '-')):20} "
+            f"{record.get('target', '-')}"
+        )
+    print(f"Provenance directory: {runs}")
 
 
 def resolve_preferences(
@@ -336,6 +450,7 @@ def engine_command(
     assignments: list[str],
     remote_target: str | None = None,
     remote_collect_dir: str | None = None,
+    run_id: str | None = None,
 ) -> int:
     make = shutil.which("make")
     if make is None:
@@ -354,6 +469,8 @@ def engine_command(
         f"BACKEND={backend}",
         f"PYTHON_BIN={sys.executable}",
     ]
+    if run_id is not None:
+        variables.append(f"CLOUDMAKE_RUN_ID={run_id}")
     if jobs is not None:
         if not jobs.isdigit() or int(jobs) < 1:
             raise UsageError("-j requires a positive integer")
@@ -396,6 +513,11 @@ def run(arguments: list[str]) -> int:
         if positional:
             raise UsageError("--backends does not accept arguments")
         show_backends()
+        return 0
+    if action == "history":
+        if positional:
+            raise UsageError("--history does not accept arguments")
+        show_history(state_home, key)
         return 0
     if action == "use":
         if positional:
@@ -468,21 +590,80 @@ def run(arguments: list[str]) -> int:
         if not (project / "Makefile").is_file():
             raise UsageError(f"project Makefile was not found: {project / 'Makefile'}")
 
-    return engine_command(
-        project=project,
-        backend=backend,
-        accelerator=accelerator,
-        accelerator_set=accelerator_set,
-        jobs=options["jobs"],
-        verbose=options["verbose"],
-        state_home=state_home,
-        cache_home=cache_home,
-        key=key,
-        target=engine_target,
-        assignments=assignments,
-        remote_target=remote_target,
-        remote_collect_dir=remote_collect_dir,
+    state_root = state_home / "projects" / key
+    if engine_target not in {"dispatch", "collect"}:
+        return engine_command(
+            project=project,
+            backend=backend,
+            accelerator=accelerator,
+            accelerator_set=accelerator_set,
+            jobs=options["jobs"],
+            verbose=options["verbose"],
+            state_home=state_home,
+            cache_home=cache_home,
+            key=key,
+            target=engine_target,
+            assignments=assignments,
+            remote_target=remote_target,
+            remote_collect_dir=remote_collect_dir,
+        )
+
+    run_id = uuid.uuid4().hex
+    manifest_before = source_manifest_snapshot(state_root, backend)
+    runs = state_root / "runs"
+    record_path = runs / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{run_id}.json"
+    record: dict[str, Any] = {
+        "schema": 1,
+        "run_id": run_id,
+        "cloudmake_version": VERSION,
+        "project": os.fspath(project),
+        "project_key": key,
+        "backend": backend,
+        "operation": "collect" if engine_target == "collect" else "execute",
+        "target": remote_target,
+        "assignments": assignment_receipts(assignments),
+        "collect_directory": remote_collect_dir,
+        "started_at": utc_timestamp(),
+        "status": "running",
+    }
+    atomic_json(record_path, record)
+    try:
+        exit_code = engine_command(
+            project=project,
+            backend=backend,
+            accelerator=accelerator,
+            accelerator_set=accelerator_set,
+            jobs=options["jobs"],
+            verbose=options["verbose"],
+            state_home=state_home,
+            cache_home=cache_home,
+            key=key,
+            target=engine_target,
+            assignments=assignments,
+            remote_target=remote_target,
+            remote_collect_dir=remote_collect_dir,
+            run_id=run_id,
+        )
+    except BaseException:
+        record.update(status="interrupted", finished_at=utc_timestamp())
+        atomic_json(record_path, record)
+        atomic_json(runs / "latest.json", record)
+        raise
+
+    resource_id, source = newest_source_manifest(state_root, backend, manifest_before)
+    record.update(
+        status="succeeded" if exit_code == 0 else "failed",
+        exit_code=exit_code,
+        finished_at=utc_timestamp(),
+        resource_id=resource_id,
+        source=source,
     )
+    if engine_target == "collect" and exit_code == 0:
+        record["artifacts"] = artifact_receipt(project / "artifacts")
+    atomic_json(record_path, record)
+    atomic_json(runs / "latest.json", record)
+    print(f"[cloudmake] run={run_id} provenance={record_path}")
+    return exit_code
 
 
 def main() -> int:

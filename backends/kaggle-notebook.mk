@@ -24,4 +24,6 @@ BACKEND_INSTALL_HINT := Install and authenticate with: uv tool install kaggle; k
 KAGGLE_VALIDATE_POSITIVE = $(PYTHON_BIN) -c 'import re,sys; value=sys.argv[1]; raise SystemExit(not (re.fullmatch("(?:[0-9]+(?:[.][0-9]*)?|[.][0-9]+)", value) and float(value) > 0))'
 BACKEND_VALIDATE := case '$(KAGGLE_USERNAME)' in ''|*[!A-Za-z0-9._-]*) echo 'KAGGLE_USERNAME contains unsupported characters' >&2; exit 2;; esac; case '$(KAGGLE_KERNEL_SLUG)' in ''|*[!A-Za-z0-9._-]*) echo 'KAGGLE_KERNEL_SLUG contains unsupported characters' >&2; exit 2;; esac; case '$(KAGGLE_ACCELERATOR)' in *[!A-Za-z0-9._-]*) echo 'KAGGLE_ACCELERATOR contains unsupported characters' >&2; exit 2;; esac; $(KAGGLE_VALIDATE_POSITIVE) '$(KAGGLE_TIMEOUT)' || { echo 'KAGGLE_TIMEOUT must be a positive number' >&2; exit 2; }; $(KAGGLE_VALIDATE_POSITIVE) '$(KAGGLE_POLL_SECONDS)' || { echo 'KAGGLE_POLL_SECONDS must be a positive number' >&2; exit 2; }
 BACKEND_DOCTOR_PROBE := $(KAGGLE_BIN) --version >/dev/null && $(KAGGLE_BIN) kernels list -m --page-size 1 >/dev/null
+BACKEND_VERSION_COMMAND := $(KAGGLE_BIN) --version
+BACKEND_TESTED_CLIENT := Kaggle CLI 2.2.x
 BACKEND_RESOURCE_ID := $(KAGGLE_KERNEL_SLUG)
