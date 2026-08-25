@@ -9,6 +9,8 @@ once a version is published as a GitHub release.
   that its image does not guarantee the standalone `nvcc` compiler.
 - Sharpen the project narrative around fragmented accelerator-cloud access and
   distinguish that problem from mature general-purpose CPU cloud tooling.
+- State the non-goal principles explicitly, including that Cloudmake preserves
+  rather than changes the intended capabilities of backend VMs and runtimes.
 
 ## 0.7.0 - 2026-08-25
 

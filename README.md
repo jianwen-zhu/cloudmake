@@ -112,12 +112,29 @@ The design has seven goals:
 ## What Cloudmake does not do
 
 Cloudmake is deliberately a narrow host-side dispatcher and transfer layer
-around a project's existing Make interface. It keeps the following
-responsibilities outside that boundary:
+around a project's existing Make interface. Three principles govern that
+boundary:
+
+1. **Preserve project intent.** Cloudmake adapts itself to the project; it does
+   not redefine the project's targets, layout, dependencies, source authority,
+   or output semantics.
+2. **Preserve backend intent.** Cloudmake does not change the intended
+   capability of backend VMs or runtimes. It uses provider-supported execution,
+   lifecycle, persistence, and access surfaces as they actually exist. It does
+   not turn a notebook into an SSH VM, a batch job into persistent compute, a
+   runtime image into a development image, or free-tier access into paid-tier
+   entitlement.
+3. **Coordinate rather than replace.** Cloudmake synchronizes source, dispatches
+   Make, and retrieves selected output. It does not absorb the responsibilities
+   of build systems, source control, secrets managers, infrastructure
+   provisioners, schedulers, IDEs, or deployment platforms.
+
+The detailed exclusions follow from those principles:
 
 | Cloudmake does not | Responsibility remains with |
 | --- | --- |
 | Provision generic cloud infrastructure, networks, storage systems, or clusters | Cloud providers and established infrastructure tools. |
+| Change the intended capability of a backend VM or runtime | The provider's supported image, lifecycle, access method, persistence model, quota, and entitlement remain authoritative. |
 | Define `build`, `test`, `run`, or any other project target | The project's Makefile. Every positional target is project-provided. |
 | Replace Make or interpret the project's recipes and variables | The project and its chosen build tools. |
 | Prescribe source, build, output, or dependency directory layouts | The project. Cloudmake preserves relative paths. |
@@ -132,7 +149,8 @@ responsibilities outside that boundary:
 
 These exclusions are design boundaries rather than missing implicit behavior.
 New backends should adapt providers to the same small project contract instead
-of expanding Cloudmake into any of these roles.
+of changing provider capabilities or expanding Cloudmake into any of these
+roles.
 
 ## Design
 
