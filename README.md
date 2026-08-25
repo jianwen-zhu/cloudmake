@@ -97,9 +97,29 @@ The design has seven goals:
 7. Support reusable sessions, batch notebooks, and SSH VMs without pretending
    that their lifecycles are identical.
 
-Cloudmake is not a replacement for Make, a source-control system, a secrets
-manager, or a promise that cloud VMs are persistent. It is a host-side dispatcher
-and transfer layer around a project's existing Make targets.
+## What Cloudmake does not do
+
+Cloudmake is deliberately a narrow host-side dispatcher and transfer layer
+around a project's existing Make interface. It keeps the following
+responsibilities outside that boundary:
+
+| Cloudmake does not | Responsibility remains with |
+| --- | --- |
+| Define `build`, `test`, `run`, or any other project target | The project's Makefile. Every positional target is project-provided. |
+| Replace Make or interpret the project's recipes and variables | The project and its chosen build tools. |
+| Prescribe source, build, output, or dependency directory layouts | The project. Cloudmake preserves relative paths. |
+| Install compilers, CUDA toolchains, libraries, or project dependencies | The selected cloud image or the project's own setup rules. Cloudmake checks only its documented execution prerequisites. |
+| Clone, commit, push, or otherwise manage project source control | The developer. The local working tree, including uncommitted files, remains authoritative. |
+| Manage provider credentials or act as a secrets manager | Official provider clients and the developer's secret-management mechanism. Selected project files are transferred, so secrets must be excluded from source synchronization. |
+| Decide which project output is an artifact | The project chooses and populates a directory; `--collect` only retrieves the explicitly selected directory. |
+| Erase differences between reusable sessions, batch jobs, and SSH VMs | Each backend retains its real lifecycle and exposes it consistently through Cloudmake operations. |
+| Guarantee free compute, a particular accelerator, runtime duration, persistence, capacity, or price | The cloud provider's current policy, quota, image, and availability. |
+| Automatically retry an ambiguously completed project target | The developer must first determine whether the original execution produced side effects. |
+| Provide a full remote IDE, job scheduler, or deployment platform | Existing provider interfaces and purpose-built tools. Cloudmake supplies only the documented execution, shell, browser, and artifact surfaces. |
+
+These exclusions are design boundaries rather than missing implicit behavior.
+New backends should adapt providers to the same small project contract instead
+of expanding Cloudmake into any of these roles.
 
 ## Design
 

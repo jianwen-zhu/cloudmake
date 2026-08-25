@@ -10,6 +10,8 @@ once a version is published as a GitHub release.
 - Make user documentation explicit that example target names are supplied by
   the project's Makefile, and move the internal engine contract to maintainer
   documentation.
+- Document Cloudmake's deliberate non-goals and the responsibilities retained
+  by projects, provider clients, developers, and cloud services.
 
 ## 0.6.0 - 2026-08-25
 
