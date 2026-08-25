@@ -7,7 +7,7 @@ unlisted URL into trusted secret storage.
 ## Trust boundaries
 
 The selected local source is uploaded to a third-party provider or a
-user-selected lab host and executed there. Review the environment's retention,
+user-selected SSH host and executed there. Review the environment's retention,
 privacy, access, billing, and acceptable-use policies before using non-public
 source or data. Stopping compute does not
 necessarily delete notebook history, VM storage, logs, output, or account
@@ -25,8 +25,8 @@ Authentication remains owned by the official provider clients:
 - the Colab CLI owns Google authorization and session credentials;
 - the Kaggle CLI owns Kaggle authentication;
 - the GitHub CLI and OpenSSH own Codespaces authentication and keys;
-- OpenSSH owns lab-host aliases, authentication, keys, agents, certificates,
-  host verification, and jump-host configuration; and
+- OpenSSH owns user-managed host aliases, authentication, keys, agents,
+  certificates, host verification, and jump-host configuration; and
 - the Lightning CLI and OpenSSH own Studio authentication and keys.
 
 Cloudmake does not store provider passwords, OAuth tokens, personal access
@@ -42,10 +42,12 @@ The Codespaces anchor checkout and uploaded project are separate. The anchor
 repository provisions a VM; cloudmake does not use its repository token to
 clone, commit, or push the actual project.
 
-For `lab-ssh`, Cloudmake passes the configured `LAB_HOST` alias to the local
-`ssh` and `rsync` clients. It does not generate SSH configuration, copy an
-identity, or administer the selected machine. Access policy and machine
-lifecycle remain with the user and lab administrator.
+For `host-ssh`, Cloudmake passes the locally selected `SSH_HOST` alias to the
+local `ssh` and `rsync` clients. It does not generate SSH configuration, copy
+an identity, or administer the selected machine. Access policy and machine
+lifecycle remain with the user and host administrator or cloud provider. The
+host alias may be saved in local user preferences, but repository-shared
+configuration cannot select it.
 
 ## Source hygiene
 

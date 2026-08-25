@@ -41,8 +41,8 @@ ALIASES = {
     "codespaces": "codespaces-ssh",
     "codespaces-ssh": "codespaces-ssh",
     "colab-ssh": "colab-ssh",
-    "lab": "lab-ssh",
-    "lab-ssh": "lab-ssh",
+    "ssh": "host-ssh",
+    "host-ssh": "host-ssh",
     "lightning": "lightning-studio-ssh",
     "lightning-studio-ssh": "lightning-studio-ssh",
 }
@@ -51,7 +51,7 @@ BACKENDS = {
     "kaggle-notebook": ("batch", "private notebook job", "kaggle"),
     "codespaces-ssh": ("session", "SSH and rsync", "gh"),
     "colab-ssh": ("session", "paid-tier SSH and rsync", "colab"),
-    "lab-ssh": ("session", "user-managed SSH and rsync", "ssh"),
+    "host-ssh": ("session", "user-managed SSH and rsync", "ssh"),
     "lightning-studio-ssh": ("session", "persistent Studio SSH and rsync", "lightning"),
 }
 GPU_BACKENDS = {
@@ -80,6 +80,7 @@ ACTION_OPTIONS = {
 }
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.DOTALL)
 ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
+SSH_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 RESERVED_ASSIGNMENTS = {
     "ARTIFACT_DIR",
     "BACKEND",
@@ -275,6 +276,7 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         "jobs": None,
         "accelerator": None,
         "accelerator_set": False,
+        "host": None,
         "global": False,
         "use_backend": None,
         "verbose": False,
@@ -297,6 +299,11 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
             options["jobs"], index = take_value(arguments, index, argument)
         elif argument.startswith("-j") and len(argument) > 2:
             options["jobs"] = argument[2:]
+            index += 1
+        elif argument == "--host":
+            options["host"], index = take_value(arguments, index, argument)
+        elif argument.startswith("--host="):
+            options["host"] = argument.split("=", 1)[1]
             index += 1
         elif argument == "--gpu":
             options["accelerator_set"] = True
@@ -330,17 +337,23 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
     return options, arguments[index:]
 
 
-def help_text(project: Path, backend: str) -> str:
+def help_text(project: Path, backend: str, ssh_host: str | None) -> str:
+    host_line = (
+        f"\nSSH host: {ssh_host or 'not configured'}"
+        if backend == "host-ssh"
+        else ""
+    )
     return f"""cloudmake {VERSION}
 Project: {project}
-Backend: {backend}
+Backend: {backend}{host_line}
 
 Usage: cloudmake [options] TARGET [NAME=value ...]
 
 Every positional name is passed unchanged to the project Makefile. Cloudmake
 reserves no project target names.
 
-Project options: -b BACKEND, -C DIR, -j N, --gpu[=TYPE], --cpu, --verbose
+Project options: -b BACKEND, -C DIR, -j N, --host HOST, --gpu[=TYPE], --cpu,
+                 --verbose
 Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
                   --sync-dry-run, --status, --fetch, --open, --shell, --stop
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
@@ -376,9 +389,27 @@ def show_history(state_home: Path, key: str) -> None:
     print(f"Provenance directory: {runs}")
 
 
+def resolve_ssh_host(
+    options: dict[str, Any], project_config: dict[str, Any], global_config: dict[str, Any]
+) -> str | None:
+    value: Any = options["host"]
+    if value is None:
+        value = os.environ.get("CLOUDMAKE_SSH_HOST") or os.environ.get("SSH_HOST")
+    if value is None:
+        value = project_config.get("host", global_config.get("host"))
+    if value is None:
+        return None
+    if not isinstance(value, str) or not SSH_HOST_ALIAS.fullmatch(value):
+        raise UsageError(
+            "SSH host aliases must begin with a letter or number and contain only "
+            "letters, numbers, dot, dash, and underscore"
+        )
+    return value
+
+
 def resolve_preferences(
     project: Path, options: dict[str, Any], config_home: Path, key: str
-) -> tuple[str, str | None, bool]:
+) -> tuple[str, str | None, bool, str | None]:
     global_config = load_json(config_home / "config.json")
     shared_config = load_json(project / ".cloudmake.json")
     project_config = load_json(config_home / "projects" / f"{key}.json")
@@ -392,18 +423,23 @@ def resolve_preferences(
         or "colab-notebook"
     )
     backend = canonical_backend(str(backend_value))
+    ssh_host = (
+        resolve_ssh_host(options, project_config, global_config)
+        if backend == "host-ssh"
+        else None
+    )
 
     if options["accelerator_set"]:
-        return backend, options["accelerator"], True
+        return backend, options["accelerator"], True, ssh_host
     if "CLOUDMAKE_GPU" in os.environ:
-        return backend, os.environ["CLOUDMAKE_GPU"], True
+        return backend, os.environ["CLOUDMAKE_GPU"], True, ssh_host
     for config in (project_config, shared_config, global_config):
         if "accelerator" in config:
             value = config["accelerator"]
             if not isinstance(value, str):
                 raise UsageError("configured accelerator must be a string")
-            return backend, value, True
-    return backend, None, False
+            return backend, value, True, ssh_host
+    return backend, None, False, ssh_host
 
 
 def validate_project(project: Path) -> Path:
@@ -452,6 +488,7 @@ def engine_command(
     backend: str,
     accelerator: str | None,
     accelerator_set: bool,
+    ssh_host: str | None,
     jobs: str | None,
     verbose: bool,
     state_home: Path,
@@ -488,6 +525,8 @@ def engine_command(
         variables.append(f"JOBS={jobs}")
     if verbose:
         variables.append("CLOUDMAKE_VERBOSE=1")
+    if backend == "host-ssh" and ssh_host is not None:
+        variables.append(f"SSH_HOST={ssh_host}")
     if accelerator_set:
         variable = {
             "colab-notebook": "COLAB_GPU",
@@ -543,15 +582,28 @@ def run(arguments: list[str]) -> int:
             raise UsageError("invalid accelerator name")
         if accelerator and backend not in GPU_BACKENDS:
             raise UsageError(f"backend {backend!r} does not support accelerator requests")
+        if options["host"] is not None and backend != "host-ssh":
+            raise UsageError("--host is valid only with the ssh backend")
         path = (
             config_home / "config.json"
             if options["global"]
             else config_home / "projects" / f"{key}.json"
         )
         saved = load_json(path)
+        global_config = load_json(config_home / "config.json")
+        project_config = saved if not options["global"] else {}
+        ssh_host = (
+            resolve_ssh_host(options, project_config, global_config)
+            if backend == "host-ssh"
+            else None
+        )
+        if backend == "host-ssh" and ssh_host is None:
+            raise UsageError("the ssh backend requires --host HOST")
         saved["backend"] = backend
         if accelerator_set:
             saved["accelerator"] = accelerator or ""
+        if backend == "host-ssh":
+            saved["host"] = ssh_host
         if not options["global"]:
             saved["project"] = os.fspath(project)
         atomic_json(path, saved)
@@ -559,14 +611,17 @@ def run(arguments: list[str]) -> int:
         accelerator_note = (
             f", accelerator={accelerator or 'cpu'}" if accelerator_set else ""
         )
-        print(f"Saved {scope} backend={backend}{accelerator_note}")
+        host_note = f", host={ssh_host}" if backend == "host-ssh" else ""
+        print(f"Saved {scope} backend={backend}{host_note}{accelerator_note}")
         return 0
     if options["global"]:
         raise UsageError("--global is valid only with --use")
 
-    backend, accelerator, accelerator_set = resolve_preferences(
+    backend, accelerator, accelerator_set, ssh_host = resolve_preferences(
         project, options, config_home, key
     )
+    if options["host"] is not None and backend != "host-ssh":
+        raise UsageError("--host is valid only with the ssh backend")
     if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
         raise UsageError("accelerator names may contain only letters, numbers, dot, dash, and underscore")
     if accelerator and backend not in GPU_BACKENDS:
@@ -574,8 +629,10 @@ def run(arguments: list[str]) -> int:
     if action == "help" or (action is None and not positional):
         if positional:
             raise UsageError("--help does not accept arguments")
-        print(help_text(project, backend), end="")
+        print(help_text(project, backend, ssh_host), end="")
         return 0
+    if backend == "host-ssh" and ssh_host is None:
+        raise UsageError("the ssh backend requires --host HOST")
 
     if action is None:
         remote_target, assignments = positional[0], positional[1:]
@@ -609,6 +666,7 @@ def run(arguments: list[str]) -> int:
             backend=backend,
             accelerator=accelerator,
             accelerator_set=accelerator_set,
+            ssh_host=ssh_host,
             jobs=options["jobs"],
             verbose=options["verbose"],
             state_home=state_home,
@@ -638,6 +696,8 @@ def run(arguments: list[str]) -> int:
         "started_at": utc_timestamp(),
         "status": "running",
     }
+    if ssh_host is not None:
+        record["host"] = ssh_host
     atomic_json(record_path, record)
     try:
         exit_code = engine_command(
@@ -645,6 +705,7 @@ def run(arguments: list[str]) -> int:
             backend=backend,
             accelerator=accelerator,
             accelerator_set=accelerator_set,
+            ssh_host=ssh_host,
             jobs=options["jobs"],
             verbose=options["verbose"],
             state_home=state_home,

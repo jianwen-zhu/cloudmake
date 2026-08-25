@@ -35,7 +35,7 @@ User aliases are short; canonical names identify transport explicitly:
 | `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
 | `codespaces` | `codespaces-ssh` | SSH and rsync |
 | `colab-ssh` | `colab-ssh` | SSH and rsync |
-| `lab` | `lab-ssh` | User-managed SSH and rsync |
+| `ssh` | `host-ssh` | User-managed SSH and rsync |
 | `lightning` | `lightning-studio-ssh` | SSH and rsync |
 
 An alias must not silently change transport. In particular, `colab` always
@@ -67,7 +67,7 @@ not advertise a shell merely because its provider has a browser terminal.
 
 A `session` backend may start or reuse a named VM. It must reconcile cached
 identity with live provider state before use and expose a meaningful `stop`
-operation. For an externally managed host such as `lab-ssh`, `start` means
+operation. For an externally managed host such as `host-ssh`, `start` means
 validate the existing execution surface and `stop` must explicitly preserve the
 machine rather than claiming lifecycle authority Cloudmake does not have.
 

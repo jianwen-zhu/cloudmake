@@ -35,7 +35,7 @@ endif
 help:
 	@echo 'Usage: make BACKEND=<name> <target>'
 	@echo 'Notebook backends: colab-notebook (default), kaggle-notebook'
-	@echo 'SSH backends: colab-ssh, codespaces-ssh, lab-ssh, lightning-studio-ssh'
+	@echo 'SSH backends: colab-ssh, codespaces-ssh, host-ssh, lightning-studio-ssh'
 	@echo
 	@echo 'Engine operations: start status stop sync collect fetch shell'
 	@echo '                   sync-dry-run prerequisites doctor backend-info'

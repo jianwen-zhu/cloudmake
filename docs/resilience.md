@@ -116,10 +116,10 @@ the boundary where the problem can be explained clearly.
 
 Saved local state is not treated as proof that compute still exists. Colab
 sessions are reconciled through `colab sessions`; Codespaces is probed through
-`gh`; user-managed lab hosts are probed through the configured OpenSSH alias;
+`gh`; user-managed hosts are probed through the selected OpenSSH alias;
 and Lightning Studios are reconciled through the authenticated Studio list. If
 provider-generated SSH configuration has expired, cloudmake refreshes it once
-after a failed connection. Lab SSH configuration is user-managed, so Cloudmake
+after a failed connection. Host SSH configuration is user-managed, so Cloudmake
 never rewrites or regenerates it.
 
 Colab retries its non-mutating remote-readiness probe once. If the named kernel

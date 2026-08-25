@@ -155,24 +155,140 @@ def test_use_persists_canonical_backend_outside_project(
     assert "dispatch" in call
 
 
+def test_use_ssh_persists_the_host_alias_outside_the_project(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    before = {path.relative_to(project) for path in project.rglob("*")}
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    saved = invoke(project, environment, "--use", "ssh", "--host", "lab-gpu")
+    invoke(project, environment, "benchmark")
+
+    assert "backend=host-ssh, host=lab-gpu" in saved.stdout
+    call = engine_calls(log)[0]
+    assert_assignment(call, "BACKEND", "host-ssh")
+    assert_assignment(call, "SSH_HOST", "lab-gpu")
+    assert_remote_target(call, "benchmark")
+    assert {path.relative_to(project) for path in project.rglob("*")} == before
+    preference = next((tmp_path / "config" / "projects").glob("*.json"))
+    assert json.loads(preference.read_text(encoding="utf-8"))["host"] == "lab-gpu"
+
+
+def test_one_off_ssh_host_does_not_replace_the_saved_host(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "--use", "ssh", "--host", "lab-gpu")
+
+    invoke(project, environment, "--host", "oci-free", "build")
+    invoke(project, environment, "test")
+
+    first, second = engine_calls(log)
+    assert_assignment(first, "SSH_HOST", "oci-free")
+    assert_assignment(second, "SSH_HOST", "lab-gpu")
+
+
 @pytest.mark.parametrize(
-    ("alias", "canonical"),
+    "arguments",
     [
-        ("colab", "colab-notebook"),
-        ("kaggle", "kaggle-notebook"),
-        ("codespaces", "codespaces-ssh"),
-        ("colab-ssh", "colab-ssh"),
-        ("lab", "lab-ssh"),
-        ("lightning", "lightning-studio-ssh"),
+        ("--use", "ssh"),
+        ("-b", "ssh", "build"),
     ],
 )
-def test_backend_aliases_have_unambiguous_canonical_names(
-    tmp_path: Path, fake_bin: Path, alias: str, canonical: str
+def test_ssh_backend_requires_an_explicit_or_saved_host(
+    tmp_path: Path, fake_bin: Path, arguments: tuple[str, ...]
 ) -> None:
     project = make_project(tmp_path / "project")
     environment, log = contract_environment(tmp_path, fake_bin)
 
-    invoke(project, environment, "-b", alias, "test")
+    result = invoke(project, environment, *arguments, check=False)
+
+    assert result.returncode == 2
+    assert "requires --host HOST" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_host_option_is_rejected_for_provider_owned_backends(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(
+        project, environment, "-b", "codespaces", "--host", "lab-gpu", "build", check=False
+    )
+
+    assert result.returncode == 2
+    assert "valid only with the ssh backend" in result.stdout
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize(
+    "host", ["researcher@lab.example --bad-option", "-V"]
+)
+def test_ssh_host_alias_must_be_safe_before_engine_dispatch(
+    tmp_path: Path, fake_bin: Path, host: str
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(
+        project,
+        environment,
+        "-b",
+        "ssh",
+        "--host",
+        host,
+        "build",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "SSH host aliases must begin with" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_repository_configuration_cannot_choose_a_local_ssh_host(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    (project / ".cloudmake.json").write_text(
+        json.dumps({"backend": "ssh", "host": "repo-controlled-host"}),
+        encoding="utf-8",
+    )
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, "build", check=False)
+
+    assert result.returncode == 2
+    assert "requires --host HOST" in result.stdout
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical", "extra"),
+    [
+        ("colab", "colab-notebook", ()),
+        ("kaggle", "kaggle-notebook", ()),
+        ("codespaces", "codespaces-ssh", ()),
+        ("colab-ssh", "colab-ssh", ()),
+        ("ssh", "host-ssh", ("--host", "lab-gpu")),
+        ("lightning", "lightning-studio-ssh", ()),
+    ],
+)
+def test_backend_aliases_have_unambiguous_canonical_names(
+    tmp_path: Path,
+    fake_bin: Path,
+    alias: str,
+    canonical: str,
+    extra: tuple[str, ...],
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    invoke(project, environment, "-b", alias, *extra, "test")
 
     assert_assignment(engine_calls(log)[0], "BACKEND", canonical)
 
@@ -406,8 +522,8 @@ def test_cloud_operations_reject_trailing_project_arguments(
     [
         ("-b", "codespaces", "--gpu=T4", "build"),
         ("--use", "codespaces", "--gpu=T4"),
-        ("-b", "lab", "--gpu=T4", "build"),
-        ("--use", "lab", "--gpu=T4"),
+        ("-b", "ssh", "--host", "lab-gpu", "--gpu=T4", "build"),
+        ("--use", "ssh", "--host", "lab-gpu", "--gpu=T4"),
     ],
 )
 def test_accelerator_request_is_rejected_when_backend_cannot_select_hardware(

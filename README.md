@@ -87,7 +87,7 @@ cloudmake: accelerator-cloud adapter for arbitrary project targets
     |
     +-- native notebook API --> Colab or Kaggle
     |
-    `-- SSH + rsync ----------> Codespaces, paid Colab, Lightning, or a lab host
+    `-- SSH + rsync ----------> provider sessions or an existing SSH host
                                   |
                                   v
                          evolving GPU/accelerator hardware
@@ -280,10 +280,14 @@ command line
   > backend defaults
 ```
 
+The `--host` selection is deliberately local-only: command line and environment
+values precede per-project and global user preferences, while repository-shared
+configuration cannot select a user's OpenSSH alias.
+
 Cloudmake does not store provider passwords, OAuth tokens, personal access tokens,
 or SSH private keys. Authentication remains owned by the `colab`, `kaggle`,
 `gh`, and `lightning` clients or by the user's existing OpenSSH configuration
-for a lab host. Source archives and private notebook versions must not be
+for a selected host. Source archives and private notebook versions must not be
 treated as secret storage. See the
 [security model](docs/security.md) for the complete trust boundary.
 
@@ -297,7 +301,7 @@ Short names are for people; canonical names describe the transport unambiguously
 | `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
 | `codespaces` | `codespaces-ssh` | SSH and rsync |
 | `colab-ssh` | `colab-ssh` | SSH and rsync |
-| `lab` | `lab-ssh` | User-managed SSH and rsync |
+| `ssh` | `host-ssh` | User-managed SSH and rsync |
 | `lightning` | `lightning-studio-ssh` | SSH and rsync |
 
 `colab` always means native notebook access. It never silently changes to SSH.
@@ -381,6 +385,7 @@ Other examples:
 ```sh
 cloudmake --use kaggle
 cloudmake --use codespaces
+cloudmake --use ssh --host lab-gpu
 cloudmake --use colab --global
 ```
 
@@ -429,6 +434,7 @@ Common options:
 | `-b`, `--backend NAME` | Use one backend for this invocation. |
 | `-C DIR` | Treat `DIR` as the local project directory. |
 | `-j N` | Pass the parallel job count to Make. |
+| `--host HOST` | Select a user-managed OpenSSH alias for the `ssh` backend. |
 | `--gpu`, `--gpu=TYPE` | Request the default or a named GPU where supported. |
 | `--cpu` | Explicitly request a CPU runtime. |
 | `--verbose` | Show provider and transfer commands. |
@@ -437,7 +443,7 @@ Cloud operation options:
 
 | Option | Behavior |
 | --- | --- |
-| `--use BACKEND` | Save the backend and accelerator preference. |
+| `--use BACKEND` | Save the backend and applicable host or accelerator preference. |
 | `--start` | Allocate or wake a reusable backend when applicable. |
 | `--sync` | Synchronize source without running a project target. |
 | `--sync-dry-run` | Preview source changes without contacting the provider. |
@@ -465,8 +471,8 @@ cloudmake benchmark DATASET=small DEBUG=1
 # Open a real remote terminal where the backend permits SSH.
 cloudmake -b codespaces --shell
 
-# Run a project-provided benchmark target on an existing lab host.
-LAB_HOST=lab-gpu cloudmake -b lab benchmark
+# Run a project-provided benchmark target on any existing SSH host.
+cloudmake -b ssh --host lab-gpu benchmark
 
 # Explicitly release a reusable Colab session.
 cloudmake -b colab --stop
@@ -682,13 +688,13 @@ but it cannot prove paid SSH entitlement or positive compute balance without
 attempting a runtime connection. That final check therefore occurs only when an
 operational SSH command is requested.
 
-### User-managed lab SSH backend
+### User-managed SSH host backend
 
-Use `lab` when the remote machine already exists and you can reach it through
-OpenSSH—for example, a university lab server, an organization workstation, or a
-shared GPU machine. Cloudmake treats that machine as an execution surface only.
-It never provisions, configures, starts, stops, or changes the hardware or
-software capabilities of the host.
+Use `ssh` when the remote machine already exists and you can reach it through
+OpenSSH—for example, a university lab server, an organization workstation, an
+Oracle or Google free-tier VM, or a rented CPU or GPU machine. Cloudmake treats
+that machine as an execution surface only. It never provisions, configures,
+starts, stops, or changes the hardware or software capabilities of the host.
 
 Prerequisites:
 
@@ -710,12 +716,22 @@ Verify that alias independently, then select it for Cloudmake:
 
 ```sh
 ssh lab-gpu true
-export LAB_HOST=lab-gpu
-cloudmake -b lab --doctor
-cloudmake --use lab
+cloudmake -b ssh --host lab-gpu --doctor
+cloudmake --use ssh --host lab-gpu
 # PROJECT_TARGET must be provided by the project's Makefile.
 cloudmake PROJECT_TARGET
 ```
+
+The saved host is a local per-project preference outside the project tree. A
+one-off `--host` switches machines without replacing it:
+
+```sh
+cloudmake --host oci-free PROJECT_TARGET
+```
+
+`SSH_HOST=lab-gpu` is also accepted as an environment override, but `--host` is
+the clearer interactive surface. A repository's `.cloudmake.json` cannot choose
+an SSH host because aliases and trust decisions belong to the local user.
 
 Source is synchronized incrementally under `.cloudmake/` in the configured
 remote user's login home. `--start` validates the existing connection,
@@ -723,10 +739,11 @@ remote user's login home. `--start` validates the existing connection,
 the machine is user-managed. `--gpu` is not accepted: Cloudmake uses whatever
 hardware the selected host already provides and does not alter it.
 
-Cloudmake passes only the `LAB_HOST` alias to `ssh` and `rsync`. It neither reads
-nor copies SSH keys, agents, certificates, or configuration into project or tool
-state. Authentication, host verification, jump-host policy, and key management
-remain entirely under OpenSSH and the lab administrator.
+Cloudmake passes only the selected `SSH_HOST` alias to `ssh` and `rsync`. It
+neither reads nor copies SSH keys, agents, certificates, or configuration into
+project or tool state. Authentication, host verification, jump-host policy, and
+key management remain entirely under OpenSSH and the host administrator or cloud
+provider.
 
 ### Lightning Studio SSH backend
 
@@ -806,7 +823,7 @@ project target requests a machine.
 | `kaggle-notebook` | Fresh batch VM per target | Source embedded in private notebook | Kaggle kernel version | No |
 | `codespaces-ssh` | Reusable quota-backed VM | Incremental rsync over SSH | Remote Make | Yes |
 | `colab-ssh` | Reusable paid Colab VM | Incremental rsync over SSH | Remote Make | Yes |
-| `lab-ssh` | Existing user-managed host | Incremental rsync over SSH | Remote Make | Yes |
+| `host-ssh` | Existing user-managed host | Incremental rsync over SSH | Remote Make | Yes |
 | `lightning-studio-ssh` | Persistent quota/credit-backed Studio | Incremental rsync over SSH | Remote Make | Yes |
 
 The backends intentionally converge at the project Makefile, not at their
@@ -927,7 +944,7 @@ commands.
 ## Project status
 
 The existing Colab notebook, Kaggle notebook, Codespaces SSH, paid Colab SSH,
-user-managed lab SSH, and Lightning Studio SSH backends implement the documented
+user-managed host SSH, and Lightning Studio SSH backends implement the documented
 launcher, external-project, arbitrary-target,
 incremental synchronization, artifact retrieval, prerequisite, ownership,
 locking, and recovery contracts. `--collect DIR TARGET` performs target-agnostic

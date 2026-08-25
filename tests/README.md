@@ -92,7 +92,7 @@ internals:
 - backend lifecycle and command construction through fake provider clients;
 - Lightning Studio start/reuse/machine-switch/stop behavior, persistent paths,
   exact key references, and the absence of Git-based project transfer;
-- user-managed lab SSH synchronization, lifecycle preservation, alias
+- user-managed host SSH synchronization, lifecycle preservation, local alias
   validation, and absence of provider or credential configuration;
 - per-backend commands, settings, Python version, authentication probes, and
   installation guidance;
