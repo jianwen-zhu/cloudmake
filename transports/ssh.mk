@@ -23,12 +23,17 @@ CLOUDMAKE_RSYNC_IGNORE := $(if $(wildcard $(PROJECT_DIR)/.cloudmakeignore),--exc
 SSH_ARTIFACT_ARCHIVE := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/artifacts.tar.gz
 
 .PHONY: help start status stop sync build test run collect dispatch fetch shell open \
-	_ssh-start _ssh-sync _ssh-sync-unlocked _ssh-execute _ssh-fetch _ssh-shell _ssh-stop
+	_ssh-backend-start _ssh-start _ssh-sync _ssh-sync-unlocked _ssh-execute \
+	_ssh-fetch _ssh-shell _ssh-stop
+
+ifneq ($(strip $(BACKEND_PREREQUISITE)),)
+$(BACKEND_PREREQUISITE): | _ssh-backend-start
+endif
 
 help:
 	@echo 'Usage: make BACKEND=<name> <target>'
 	@echo 'Notebook backends: colab-notebook (default), kaggle-notebook'
-	@echo 'SSH backends: colab-ssh, codespaces-ssh'
+	@echo 'SSH backends: colab-ssh, codespaces-ssh, lightning-studio-ssh'
 	@echo
 	@echo 'Targets: start status stop sync build test run collect fetch shell'
 	@echo '         sync-dry-run prerequisites doctor backend-info'
@@ -72,8 +77,10 @@ shell: doctor
 open:
 	@echo 'The $(BACKEND) backend uses SSH; run: make BACKEND=$(BACKEND) shell'
 
-_ssh-start: ensure-owner $(BACKEND_PREREQUISITE)
+_ssh-backend-start: ensure-owner
 	@$(BACKEND_START)
+
+_ssh-start: ensure-owner $(BACKEND_PREREQUISITE)
 	@if ! $(SSH) true; then \
 		echo '[cloudmake] SSH connection failed; refreshing generated configuration once.' >&2; \
 		$(MAKE) --no-print-directory refresh-ssh-config; \

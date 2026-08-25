@@ -69,9 +69,12 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
         "Makefile",
         "VERSION",
         "backends/colab-notebook.mk",
+        "backends/lightning-studio-ssh.mk",
         "core/resilience.mk",
         "notebooks/colab.ipynb",
         "tools/source_fingerprint.py",
+        "tools/lightning_studio_status.py",
+        "tools/lightning_ensure_studio.py",
         "transports/ssh.mk",
     ):
         assert (runtime / relative).is_file()

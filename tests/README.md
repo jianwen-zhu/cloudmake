@@ -1,8 +1,8 @@
 # Test suite
 
 The default suite is deliberately offline. Provider integration tests put fake
-`colab`, `kaggle`, `gh`, `ssh`, and `rsync` executables at the front of `PATH`;
-they never allocate cloud compute or use account credentials.
+`colab`, `kaggle`, `gh`, `lightning`, `ssh`, and `rsync` executables at the front
+of `PATH`; they never allocate cloud compute or use account credentials.
 
 Run everything that is implemented today:
 
@@ -54,6 +54,19 @@ CLOUDMAKE_TEST_LIVE_COLAB=1 python3 -m pytest \
 ```
 
 Do not copy Colab configuration or tokens into GitHub Actions. The repository
+also provides a local-only Lightning T4 gate over the same two pinned projects.
+It uses the Lightning client's existing login and provider-owned SSH key, then
+stops the Studio without deleting its persistent filesystem:
+
+```sh
+export LIGHTNING_TEAMSPACE=OWNER/TEAMSPACE
+export LIGHTNING_STUDIO=cloudmake-dev
+CLOUDMAKE_TEST_LIVE_LIGHTNING=1 python3 -m pytest \
+  tests/test_real_github_projects.py -m live_cloud
+```
+
+Do not copy Lightning configuration, login tokens, or SSH keys into GitHub
+Actions. The repository
 provides two credential-free hosted automation layers:
 
 - `CI` runs the offline suite on supported macOS/Linux and Python combinations;
@@ -77,6 +90,8 @@ internals:
 - portable Make build, test, run, package, clean, and incremental behavior;
 - reproducible Makefile overlays for pinned NVIDIA and GPU MODE CUDA lessons;
 - backend lifecycle and command construction through fake provider clients;
+- Lightning Studio start/reuse/machine-switch/stop behavior, persistent paths,
+  exact key references, and the absence of Git-based project transfer;
 - per-backend commands, settings, Python version, authentication probes, and
   installation guidance;
 - project ownership, atomic state, local and remote locks, stale recovery, and

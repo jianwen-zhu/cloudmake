@@ -162,6 +162,7 @@ def test_use_persists_canonical_backend_outside_project(
         ("kaggle", "kaggle-notebook"),
         ("codespaces", "codespaces-ssh"),
         ("colab-ssh", "colab-ssh"),
+        ("lightning", "lightning-studio-ssh"),
     ],
 )
 def test_backend_aliases_have_unambiguous_canonical_names(
@@ -417,6 +418,19 @@ def test_gpu_request_is_rejected_for_cpu_only_backend(
     assert result.returncode == 2
     assert "does not support accelerator requests" in result.stdout
     assert engine_calls(log) == []
+
+
+def test_lightning_gpu_request_selects_studio_machine(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    invoke(project, environment, "-b", "lightning", "--gpu=T4", "build")
+
+    call = engine_calls(log)[0]
+    assert_assignment(call, "BACKEND", "lightning-studio-ssh")
+    assert_assignment(call, "LIGHTNING_MACHINE", "T4")
 
 
 def test_unknown_backend_fails_without_invoking_engine(

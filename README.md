@@ -25,7 +25,7 @@ Provider notebooks, transfer logic, session metadata, and generated control file
 belong to the cloudmake tool, not to the project.
 
 > [!IMPORTANT]
-> The four documented backends and the external-project `cloudmake` launcher are
+> The five documented backends and the external-project `cloudmake` launcher are
 > implemented. The regression suite uses offline provider doubles; configure and
 > verify your own account with `cloudmake --doctor` before allocating compute.
 
@@ -75,7 +75,7 @@ cloudmake: arbitrary project targets
     |
     +-- native notebook API --> Colab or Kaggle
     |
-    `-- SSH + rsync ----------> Codespaces or paid Colab
+    `-- SSH + rsync ----------> Codespaces, paid Colab, or Lightning Studios
                                   |
                                   v
                          evolving CPU/GPU hardware
@@ -223,10 +223,10 @@ command line
 ```
 
 Cloudmake does not store provider passwords, OAuth tokens, personal access tokens,
-or SSH private keys. Authentication remains owned by the `colab`, `kaggle`, and
-`gh` clients. Source archives and private notebook versions must not be treated as
-secret storage. See the [security model](docs/security.md) for the complete trust
-boundary.
+or SSH private keys. Authentication remains owned by the `colab`, `kaggle`,
+`gh`, and `lightning` clients. Source archives and private notebook versions
+must not be treated as secret storage. See the
+[security model](docs/security.md) for the complete trust boundary.
 
 ### Backend naming
 
@@ -238,6 +238,7 @@ Short names are for people; canonical names describe the transport unambiguously
 | `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
 | `codespaces` | `codespaces-ssh` | SSH and rsync |
 | `colab-ssh` | `colab-ssh` | SSH and rsync |
+| `lightning` | `lightning-studio-ssh` | SSH and rsync |
 
 `colab` always means native notebook access. It never silently changes to SSH.
 
@@ -577,6 +578,75 @@ but it cannot prove paid SSH entitlement or positive compute balance without
 attempting a runtime connection. That final check therefore occurs only when an
 operational SSH command is requested.
 
+### Lightning Studio SSH backend
+
+Lightning Studios provide a persistent development filesystem with CPU and GPU
+machine switching. Cloudmake uses the provider's normal SSH surface, so source
+updates remain incremental and build outputs survive stop/start cycles. The
+actual project still comes from the local working tree; cloudmake does not clone
+it from GitHub. Remote project state lives under the provider-documented
+persistent Studio home at `/teamspace/studios/this_studio/.cloudmake/`.
+
+Prerequisites:
+
+1. A [Lightning AI account](https://lightning.ai/docs/overview/ai-studio/)
+   with Studio access and available credits or quota.
+   New accounts may need to finish provider onboarding or verification before
+   Studio creation is authorized.
+2. The official Lightning SDK/CLI:
+
+   ```sh
+   uv tool install lightning-sdk
+   lightning login
+   lightning auth whoami
+   ```
+
+3. A teamspace slug in `OWNER/TEAMSPACE` form and a stable Studio name:
+
+   ```sh
+   export LIGHTNING_TEAMSPACE=your-owner/general
+   export LIGHTNING_STUDIO=cloudmake-dev
+   ```
+
+4. Provider-managed SSH setup. Create or start the Studio once, then let the
+   Lightning client establish its own key and SSH entry:
+
+   ```sh
+   lightning studio start --name "$LIGHTNING_STUDIO" \
+     --teamspace "$LIGHTNING_TEAMSPACE" --machine CPU --create
+   lightning ssh configure --name "$LIGHTNING_STUDIO" \
+     --teamspace "$LIGHTNING_TEAMSPACE"
+   ```
+
+   This creates the provider-owned key at `~/.ssh/lightning_rsa`. Cloudmake
+   references that key but never copies it into project, tool, or generated
+   source state. Set `LIGHTNING_IDENTITY` only if the provider key is at another
+   readable path.
+
+Verify the read-only gate and select the backend:
+
+```sh
+cloudmake -b lightning --doctor
+cloudmake --use lightning --gpu=T4
+cloudmake build
+```
+
+With no `--gpu`, the backend uses Lightning's 4-CPU `CPU` machine. Accelerator
+values are Lightning machine names such as `T4`, `L4`, or `A100`; availability
+and cost remain provider-controlled. Each operation starts or reuses the named
+Studio on the selected machine. `--stop` releases compute while retaining the
+[Studio filesystem and environment](https://lightning.ai/docs/overview/ai-studio/environment-persistence)
+and incremental build cache:
+
+```sh
+cloudmake -b lightning --stop
+```
+
+`--doctor` verifies the installed client, local login, teamspace visibility,
+settings, and readable provider SSH key without allocating compute. A provider
+eligibility, credit, or capacity failure can only be proven when `--start` or a
+project target requests a machine.
+
 ## Backend behavior summary
 
 | Backend | VM lifecycle | Source transfer | Execution | Interactive shell |
@@ -585,6 +655,7 @@ operational SSH command is requested.
 | `kaggle-notebook` | Fresh batch VM per target | Source embedded in private notebook | Kaggle kernel version | No |
 | `codespaces-ssh` | Reusable quota-backed VM | Incremental rsync over SSH | Remote Make | Yes |
 | `colab-ssh` | Reusable paid Colab VM | Incremental rsync over SSH | Remote Make | Yes |
+| `lightning-studio-ssh` | Persistent quota/credit-backed Studio | Incremental rsync over SSH | Remote Make | Yes |
 
 The backends intentionally converge at the project Makefile, not at their
 transport or lifecycle layer. Project developers should use the
@@ -638,9 +709,18 @@ make BACKEND=colab-ssh REMOTE_TARGET=package \
 make BACKEND=colab-ssh stop
 ```
 
+Lightning Studio SSH backend:
+
+```sh
+make BACKEND=lightning-studio-ssh \
+  LIGHTNING_TEAMSPACE=OWNER/TEAMSPACE LIGHTNING_STUDIO=cloudmake-dev build
+make BACKEND=lightning-studio-ssh \
+  LIGHTNING_TEAMSPACE=OWNER/TEAMSPACE LIGHTNING_STUDIO=cloudmake-dev stop
+```
+
 The Colab backend reuses a live session and skips source upload when the
 fingerprint is unchanged. The Kaggle backend reuses its local compressed snapshot
-when unchanged but still submits a fresh VM for every target. Both SSH backends
+when unchanged but still submits a fresh VM for every target. All SSH backends
 share the same rsync and remote-Make transport.
 
 Cloudmake protects reusable workspaces with ownership checks, serializes
@@ -722,7 +802,7 @@ python3 -m pip install -r requirements-test.txt
 python3 -m pytest
 ```
 
-The suite covers portable Make behavior, all four transports, source selection,
+The suite covers portable Make behavior, all five backends, source selection,
 provider lifecycle and failures, prerequisites, ownership, locks, status
 normalization, and transactional source and artifact handling. Fake-provider
 tests also assert architecture boundaries such as no SSH in the native Colab
@@ -730,9 +810,9 @@ flow and no Git clone or push in the Codespaces flow.
 
 An opt-in real-project gate sparse-clones pinned NVIDIA CUDA C++ and GPU MODE
 lessons, installs regression-only Makefile overlays, and exercises them without
-vendoring either repository. A second, explicitly enabled gate runs both
-overlays on temporary Colab T4 sessions. See [`tests/README.md`](tests/README.md)
-for the commands and allocation warning.
+vendoring either repository. Explicitly enabled live gates run both overlays on
+Colab or Lightning T4 sessions. See [`tests/README.md`](tests/README.md) for the
+commands and allocation warning.
 
 GitHub Actions runs only credential-free automation: the offline suite on Linux
 and macOS, syntax and notebook checks, and weekly pinned-upstream CUDA project
@@ -748,8 +828,9 @@ commands.
 
 ## Project status
 
-The existing Colab notebook, Kaggle notebook, Codespaces SSH, and paid Colab SSH
-backends implement the documented launcher, external-project, arbitrary-target,
+The existing Colab notebook, Kaggle notebook, Codespaces SSH, paid Colab SSH,
+and Lightning Studio SSH backends implement the documented launcher,
+external-project, arbitrary-target,
 incremental synchronization, artifact retrieval, prerequisite, ownership,
 locking, and recovery contracts. `--collect DIR TARGET` performs target-agnostic
 remote export and safe artifact retrieval as one operation; `--fetch` can

@@ -24,6 +24,7 @@ Authentication remains owned by the official provider clients:
 - the Colab CLI owns Google authorization and session credentials;
 - the Kaggle CLI owns Kaggle authentication;
 - the GitHub CLI and OpenSSH own Codespaces authentication and keys.
+- the Lightning CLI and OpenSSH own Studio authentication and keys.
 
 Cloudmake does not store provider passwords, OAuth tokens, personal access
 tokens, or SSH private keys. It does not forward GitHub credentials merely to

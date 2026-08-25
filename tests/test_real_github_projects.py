@@ -156,3 +156,46 @@ def test_pinned_github_projects_run_on_colab_t4(tmp_path: Path) -> None:
                 check=False,
                 timeout=120,
             )
+
+
+@pytest.mark.real_github
+@pytest.mark.live_cloud
+@pytest.mark.skipif(
+    os.environ.get("CLOUDMAKE_TEST_LIVE_LIGHTNING") != "1",
+    reason=(
+        "set CLOUDMAKE_TEST_LIVE_LIGHTNING=1 to allocate a real Lightning T4 Studio"
+    ),
+)
+def test_pinned_github_projects_run_on_lightning_t4(tmp_path: Path) -> None:
+    required = ["LIGHTNING_STUDIO", "LIGHTNING_TEAMSPACE"]
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        pytest.fail("missing live Lightning settings: " + ", ".join(missing))
+
+    prepared = tmp_path / "real-projects"
+    result = run_command([PREPARE, prepared], cwd=PROJECT_ROOT, timeout=180)
+    projects = list(map(Path, result.stdout.splitlines()))
+    environment = {
+        "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
+        "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+        "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+        # These two fixed regression paths may belong to a prior local gate run.
+        "CLOUDMAKE_ADOPT": "1",
+    }
+
+    try:
+        for project in projects:
+            run_command(
+                [LAUNCHER, "-b", "lightning", "--gpu=T4", "run"],
+                cwd=project,
+                env=environment,
+                timeout=1200,
+            )
+    finally:
+        run_command(
+            [LAUNCHER, "-b", "lightning", "--stop"],
+            cwd=projects[0],
+            env=environment,
+            check=False,
+            timeout=180,
+        )

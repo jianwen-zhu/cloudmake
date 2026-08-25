@@ -26,7 +26,7 @@ def directives(path: Path) -> tuple[list[str], list[Path]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate generated Codespaces SSH configuration")
+    parser = argparse.ArgumentParser(description="Validate generated provider SSH configuration")
     parser.add_argument("config", type=Path)
     arguments = parser.parse_args()
 
@@ -37,10 +37,10 @@ def main() -> int:
         return 2
 
     if not hosts:
-        print("[cloudmake] generated Codespaces SSH configuration has no Host alias", file=sys.stderr)
+        print("[cloudmake] generated SSH configuration has no Host alias", file=sys.stderr)
         return 2
     if not identities:
-        print("[cloudmake] generated Codespaces SSH configuration has no IdentityFile", file=sys.stderr)
+        print("[cloudmake] generated SSH configuration has no IdentityFile", file=sys.stderr)
         return 2
 
     missing = [
@@ -52,7 +52,7 @@ def main() -> int:
     if missing:
         identity = identities[0]
         print(
-            "[cloudmake] generated Codespaces SSH configuration references "
+            "[cloudmake] generated SSH configuration references "
             "missing or unreadable key files: " + ", ".join(map(str, missing)),
             file=sys.stderr,
         )

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import PROJECT_ROOT, run_command
+from conftest import PROJECT_ROOT, run_command, write_executable
 
 
 IDENTITY = PROJECT_ROOT / "tools" / "project_identity.py"
@@ -27,6 +27,8 @@ NORMALIZE_STATUS = PROJECT_ROOT / "tools" / "normalize_status.py"
 REMOTE_MAKE_COMMAND = PROJECT_ROOT / "tools" / "remote_make_command.py"
 REMOTE_COLLECT_COMMAND = PROJECT_ROOT / "tools" / "remote_collect_command.py"
 VALIDATE_SSH_CONFIG = PROJECT_ROOT / "tools" / "validate_ssh_config.py"
+REWRITE_SSH_IDENTITY = PROJECT_ROOT / "tools" / "rewrite_ssh_identity.py"
+LIGHTNING_STATUS = PROJECT_ROOT / "tools" / "lightning_studio_status.py"
 
 
 def ensure_identity(project: Path, state: Path, name: str = "sample") -> Path:
@@ -503,6 +505,66 @@ def test_codespaces_ssh_config_requires_complete_key_pair(tmp_path: Path) -> Non
     assert ready.returncode == 0
 
 
+def test_provider_ssh_identity_rewrite_is_exact_and_handles_spaces(tmp_path: Path) -> None:
+    source = tmp_path / "provider_config"
+    output = tmp_path / "cloudmake_config"
+    identity = tmp_path / "provider keys" / "lightning_rsa"
+    source.write_text(
+        "# provider comment\n"
+        "Host studio\n"
+        "  Hostname ssh.example.invalid\n"
+        "  IdentityFile ~/.ssh/provider_key\n",
+        encoding="utf-8",
+    )
+
+    run_command(
+        [
+            sys.executable,
+            REWRITE_SSH_IDENTITY,
+            "--input",
+            source,
+            "--output",
+            output,
+            "--identity",
+            identity,
+        ],
+        cwd=tmp_path,
+    )
+
+    fields = [shlex.split(line, comments=True) for line in output.read_text().splitlines()]
+    assert ["IdentityFile", str(identity)] in fields
+    assert "~/.ssh/provider_key" not in output.read_text(encoding="utf-8")
+
+
+def test_lightning_status_selects_only_the_named_studio(tmp_path: Path) -> None:
+    client = write_executable(
+        tmp_path / "lightning",
+        "#!/bin/sh\n"
+        "printf '%s\\n' '[{\"name\":\"other\",\"status\":\"Stopped\"},"
+        "{\"name\":\"wanted\",\"status\":\"Running\",\"machine\":\"T4\"}]'\n",
+    )
+
+    result = run_command(
+        [
+            sys.executable,
+            LIGHTNING_STATUS,
+            "--client",
+            client,
+            "--teamspace",
+            "tester/general",
+            "--name",
+            "wanted",
+        ],
+        cwd=tmp_path,
+    )
+
+    assert json.loads(result.stdout) == {
+        "machine": "T4",
+        "name": "wanted",
+        "status": "Running",
+    }
+
+
 def test_remote_make_command_preserves_an_encoded_target_as_one_argument(
     tmp_path: Path,
 ) -> None:
@@ -582,6 +644,7 @@ def test_remote_collect_command_rejects_path_traversal(tmp_path: Path) -> None:
         ("colab-notebook", "Status: IDLE", "ready"),
         ("kaggle-notebook", "complete", "succeeded"),
         ("codespaces-ssh", "Available", "ready"),
+        ("lightning-studio-ssh", '{"status":"Running"}', "ready"),
         ("colab-notebook", "not found", "absent"),
         ("kaggle-notebook", "ERROR", "failed"),
     ],

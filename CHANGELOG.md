@@ -3,6 +3,16 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## Unreleased
+
+- Add the `lightning` / `lightning-studio-ssh` backend for persistent CPU and
+  GPU Studios through the shared SSH, rsync, remote-Make, and artifact surface.
+- Reconcile running Studios onto the requested machine with Lightning's explicit
+  switch operation and keep remote state in the documented persistent Studio
+  home.
+- Keep Lightning login and SSH keys provider-owned, with read-only doctor checks,
+  exact SSH-identity references, and offline lifecycle/security regressions.
+
 ## 0.5.1 - 2026-08-25
 
 - Remove the hosted live-Colab workflow and its GitHub-secret credential-copy

@@ -35,6 +35,7 @@ User aliases are short; canonical names identify transport explicitly:
 | `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
 | `codespaces` | `codespaces-ssh` | SSH and rsync |
 | `colab-ssh` | `colab-ssh` | SSH and rsync |
+| `lightning` | `lightning-studio-ssh` | SSH and rsync |
 
 An alias must not silently change transport. In particular, `colab` always
 means native notebook access and never falls back to SSH.

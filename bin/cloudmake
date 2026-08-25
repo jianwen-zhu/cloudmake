@@ -41,14 +41,22 @@ ALIASES = {
     "codespaces": "codespaces-ssh",
     "codespaces-ssh": "codespaces-ssh",
     "colab-ssh": "colab-ssh",
+    "lightning": "lightning-studio-ssh",
+    "lightning-studio-ssh": "lightning-studio-ssh",
 }
 BACKENDS = {
     "colab-notebook": ("session", "native notebook API", "colab"),
     "kaggle-notebook": ("batch", "private notebook job", "kaggle"),
     "codespaces-ssh": ("session", "SSH and rsync", "gh"),
     "colab-ssh": ("session", "paid-tier SSH and rsync", "colab"),
+    "lightning-studio-ssh": ("session", "persistent Studio SSH and rsync", "lightning"),
 }
-GPU_BACKENDS = {"colab-notebook", "kaggle-notebook", "colab-ssh"}
+GPU_BACKENDS = {
+    "colab-notebook",
+    "kaggle-notebook",
+    "colab-ssh",
+    "lightning-studio-ssh",
+}
 ACTION_OPTIONS = {
     "--backends": "backends",
     "--collect": "collect",
@@ -482,6 +490,7 @@ def engine_command(
             "colab-notebook": "COLAB_GPU",
             "colab-ssh": "COLAB_GPU",
             "kaggle-notebook": "KAGGLE_ACCELERATOR",
+            "lightning-studio-ssh": "LIGHTNING_MACHINE",
         }.get(backend, "CLOUDMAKE_GPU")
         variables.append(f"{variable}={accelerator or ''}")
     if remote_target is not None:

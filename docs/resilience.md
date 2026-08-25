@@ -115,7 +115,8 @@ the boundary where the problem can be explained clearly.
 
 Saved local state is not treated as proof that compute still exists. Colab
 sessions are reconciled through `colab sessions`; Codespaces is probed through
-`gh`. If generated SSH configuration has expired, cloudmake refreshes it once
+`gh`; and Lightning Studios are reconciled through the authenticated Studio
+list. If generated SSH configuration has expired, cloudmake refreshes it once
 after a failed connection.
 
 Colab retries its non-mutating remote-readiness probe once. If the named kernel

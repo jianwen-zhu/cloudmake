@@ -212,6 +212,76 @@ else:
     )
 
 
+def install_fake_lightning(fake_bin: Path) -> Path:
+    return write_executable(
+        fake_bin / "lightning",
+        r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+log = Path(os.environ["FAKE_LOG"])
+log.parent.mkdir(parents=True, exist_ok=True)
+with log.open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(["lightning", *arguments]) + "\n")
+remote = Path(os.environ["FAKE_REMOTE"])
+remote.mkdir(parents=True, exist_ok=True)
+marker = remote / "lightning-studio"
+
+def option(name, default=""):
+    return arguments[arguments.index(name) + 1] if name in arguments else default
+
+if arguments == ["--version"]:
+    print("Lightning CLI version 2026.8.18")
+elif arguments[:2] == ["auth", "whoami"]:
+    if os.environ.get("FAKE_LIGHTNING_AUTH_FAIL"):
+        print("No Lightning credentials are available")
+        raise SystemExit(1)
+    print(json.dumps({"auth_type": "user", "username": "tester"}))
+elif arguments[:2] == ["studio", "list"]:
+    if os.environ.get("FAKE_LIGHTNING_ACCESS_FAIL"):
+        print("Lightning Studio access denied")
+        raise SystemExit(1)
+    if marker.exists():
+        print(json.dumps([json.loads(marker.read_text(encoding="utf-8"))]))
+    else:
+        print("[]")
+elif arguments[:2] == ["studio", "start"]:
+    if os.environ.get("FAKE_LIGHTNING_START_FAIL"):
+        print("unauthorized")
+        raise SystemExit(1)
+    marker.write_text(
+        json.dumps(
+            {"name": option("--name"), "status": "Running", "machine": option("--machine")}
+        ),
+        encoding="utf-8",
+    )
+    print(f"Started {option('--name')}")
+elif arguments[:2] == ["studio", "switch"]:
+    current = json.loads(marker.read_text(encoding="utf-8"))
+    current["machine"] = option("--machine")
+    marker.write_text(json.dumps(current), encoding="utf-8")
+    print(f"Switched {option('--name')} to {option('--machine')}")
+elif arguments[:2] == ["studio", "stop"]:
+    current = json.loads(marker.read_text(encoding="utf-8"))
+    current["status"] = "Stopped"
+    marker.write_text(json.dumps(current), encoding="utf-8")
+    print(f"Stopped {option('--name')}")
+elif arguments[:2] == ["ssh", "generate"]:
+    print(f"# ssh s_fake@ssh.lightning.ai")
+    print(f"Host {option('--name')}")
+    print("  User s_fake")
+    print("  Hostname ssh.lightning.ai")
+    print("  IdentityFile ~/.ssh/lightning_rsa")
+    print("  IdentitiesOnly yes")
+else:
+    raise SystemExit(f"unsupported fake lightning command: {arguments}")
+''',
+    )
+
+
 def install_fake_ssh_tools(fake_bin: Path) -> None:
     write_executable(
         fake_bin / "gh",
@@ -835,6 +905,94 @@ def test_colab_ssh_builds_proxy_configuration_and_uses_common_transport(
     assert any(call[0] == "rsync" for call in all_calls)
 
 
+@pytest.mark.integration
+def test_lightning_studio_uses_persistent_ssh_transport_without_git(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_lightning(fake_bin)
+    install_fake_ssh_tools(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    identity = tmp_path / "lightning_rsa"
+    identity.write_text("fake provider-owned private key", encoding="utf-8")
+    Path(f"{identity}.pub").write_text("fake public key", encoding="utf-8")
+    common = [
+        "make",
+        "BACKEND=lightning-studio-ssh",
+        "LIGHTNING_STUDIO=test-studio",
+        "LIGHTNING_TEAMSPACE=tester/general",
+        "LIGHTNING_MACHINE=T4",
+        f"LIGHTNING_IDENTITY={identity}",
+    ]
+
+    run_command([*common, "build"], cwd=prototype, env=env)
+    switched = [
+        value if value != "LIGHTNING_MACHINE=T4" else "LIGHTNING_MACHINE=L4"
+        for value in common
+    ]
+    run_command([*switched, "build"], cwd=prototype, env=env)
+    run_command([*common, "stop"], cwd=prototype, env=env)
+
+    config = (
+        prototype
+        / ".cloud-state"
+        / "lightning-studio-ssh"
+        / "tester--general--test-studio"
+        / "ssh_config"
+    )
+    contents = config.read_text(encoding="utf-8")
+    assert "Host test-studio" in contents
+    assert "Hostname ssh.lightning.ai" in contents
+    assert str(identity) in contents
+    assert "~/.ssh/lightning_rsa" not in contents
+    generated_state = config.parent
+    assert "fake provider-owned private key" not in "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in generated_state.rglob("*")
+        if path.is_file()
+    )
+
+    all_calls = calls(Path(env["FAKE_LOG"]))
+    serialized = json.dumps(all_calls)
+    assert [
+        "lightning",
+        "studio",
+        "start",
+        "--name",
+        "test-studio",
+        "--teamspace",
+        "tester/general",
+        "--machine",
+        "T4",
+        "--create",
+    ] in all_calls
+    assert [
+        "lightning",
+        "studio",
+        "switch",
+        "--name",
+        "test-studio",
+        "--teamspace",
+        "tester/general",
+        "--machine",
+        "L4",
+    ] in all_calls
+    assert [
+        "lightning",
+        "studio",
+        "stop",
+        "--name",
+        "test-studio",
+        "--teamspace",
+        "tester/general",
+    ] in all_calls
+    assert (
+        "/teamspace/studios/this_studio/.cloudmake/cloud-build-prototype/src"
+        in serialized
+    )
+    assert "git clone" not in serialized
+    assert "git push" not in serialized
+
+
 def test_unknown_backend_fails_before_provider_execution(prototype: Path) -> None:
     result = run_command(
         ["make", "BACKEND=does-not-exist", "build"], cwd=prototype, check=False
@@ -849,6 +1007,7 @@ def test_help_keeps_notebook_and_ssh_names_distinct(prototype: Path) -> None:
     assert "kaggle-notebook" in result.stdout
     assert "colab-ssh" in result.stdout
     assert "codespaces-ssh" in result.stdout
+    assert "lightning-studio-ssh" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -858,6 +1017,7 @@ def test_help_keeps_notebook_and_ssh_names_distinct(prototype: Path) -> None:
         ("kaggle-notebook", "batch", "batch"),
         ("codespaces-ssh", "session", "shell"),
         ("colab-ssh", "session", "gpu"),
+        ("lightning-studio-ssh", "session", "persistent-storage"),
     ],
 )
 def test_backend_contract_declares_lifecycle_and_capabilities(
@@ -895,6 +1055,7 @@ def test_ssh_remote_prerequisite_failure_blocks_sync(
         ("kaggle-notebook", "KAGGLE_BIN=missing-kaggle-for-test", "missing-kaggle-for-test"),
         ("codespaces-ssh", "GH_BIN=missing-gh-for-test", "missing-gh-for-test"),
         ("colab-ssh", "COLAB_BIN=missing-colab-for-test", "missing-colab-for-test"),
+        ("lightning-studio-ssh", "LIGHTNING_BIN=missing-lightning-for-test", "missing-lightning-for-test"),
     ],
 )
 def test_prerequisites_reports_missing_backend_command(
@@ -917,6 +1078,15 @@ def test_prerequisites_reports_missing_backend_command(
         ("kaggle-notebook", [], "KAGGLE_USERNAME"),
         ("codespaces-ssh", [], "CODESPACE"),
         ("colab-ssh", ["COLAB_IDENTITY=/does/not/exist"], "COLAB_IDENTITY"),
+        (
+            "lightning-studio-ssh",
+            [
+                "LIGHTNING_STUDIO=test-studio",
+                "LIGHTNING_TEAMSPACE=tester/general",
+                "LIGHTNING_IDENTITY=/does/not/exist",
+            ],
+            "LIGHTNING_IDENTITY",
+        ),
     ],
 )
 def test_prerequisites_reports_missing_backend_setting(
@@ -929,6 +1099,7 @@ def test_prerequisites_reports_missing_backend_setting(
 ) -> None:
     install_fake_colab(fake_bin)
     install_fake_kaggle(fake_bin)
+    install_fake_lightning(fake_bin)
     install_fake_ssh_tools(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
 
@@ -1040,6 +1211,78 @@ def test_colab_ssh_doctor_checks_client_and_key_without_opening_ssh(
     assert calls(Path(env["FAKE_LOG"]), "colab")
     assert calls(Path(env["FAKE_LOG"]), "ssh") == []
     assert not (prototype / ".cloud-state" / "colab-ssh").exists()
+
+
+@pytest.mark.integration
+def test_lightning_doctor_is_read_only_and_keeps_credentials_provider_owned(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_lightning(fake_bin)
+    install_fake_ssh_tools(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    identity = tmp_path / "lightning_rsa"
+    identity.write_text("test-only provider key path", encoding="utf-8")
+
+    result = run_command(
+        [
+            "make",
+            "BACKEND=lightning-studio-ssh",
+            "LIGHTNING_STUDIO=test-studio",
+            "LIGHTNING_TEAMSPACE=tester/general",
+            f"LIGHTNING_IDENTITY={identity}",
+            "doctor",
+        ],
+        cwd=prototype,
+        env=env,
+    )
+
+    assert "Backend lightning-studio-ssh is ready" in result.stdout
+    provider_calls = calls(Path(env["FAKE_LOG"]), "lightning")
+    assert ["lightning", "auth", "whoami", "--json"] in provider_calls
+    assert [
+        "lightning",
+        "studio",
+        "list",
+        "--teamspace",
+        "tester/general",
+        "--json",
+    ] in provider_calls
+    serialized = json.dumps(provider_calls)
+    assert '"start"' not in serialized
+    assert '"ssh", "generate"' not in serialized
+    assert not (prototype / ".cloud-state" / "lightning-studio-ssh").exists()
+
+
+@pytest.mark.integration
+def test_lightning_allocation_failure_stops_before_ssh_or_sync(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_lightning(fake_bin)
+    install_fake_ssh_tools(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_LIGHTNING_START_FAIL"] = "1"
+    identity = tmp_path / "lightning_rsa"
+    identity.write_text("test-only provider key path", encoding="utf-8")
+
+    result = run_command(
+        [
+            "make",
+            "BACKEND=lightning-studio-ssh",
+            "LIGHTNING_STUDIO=test-studio",
+            "LIGHTNING_TEAMSPACE=tester/general",
+            f"LIGHTNING_IDENTITY={identity}",
+            "build",
+        ],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "unauthorized" in result.stdout
+    all_calls = calls(Path(env["FAKE_LOG"]))
+    assert not any(call[:3] == ["lightning", "ssh", "generate"] for call in all_calls)
+    assert calls(Path(env["FAKE_LOG"]), "rsync") == []
 
 
 def test_help_is_available_when_backend_dependency_is_missing(prototype: Path) -> None:

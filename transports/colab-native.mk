@@ -26,7 +26,7 @@ help:
 	@echo 'Usage: make BACKEND=colab-notebook <target>'
 	@echo 'Transport: native Colab contents/kernel APIs (no SSH or Git remote)'
 	@echo 'Notebook backends: colab-notebook, kaggle-notebook'
-	@echo 'SSH backends: colab-ssh, codespaces-ssh'
+	@echo 'SSH backends: colab-ssh, codespaces-ssh, lightning-studio-ssh'
 	@echo
 	@echo 'Targets:'
 	@echo '  prerequisites  Check required local commands and settings'
