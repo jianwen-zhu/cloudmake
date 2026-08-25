@@ -165,6 +165,7 @@ cloudmake/
 |-- VERSION
 |-- core/
 |-- backends/
+|-- host-templates/
 |-- transports/
 |-- notebooks/
 |-- tools/
@@ -455,6 +456,8 @@ Cloud operation options:
 | `--stop` | Stop or release reusable compute. |
 | `--doctor` | Check local tools and authentication without allocation. |
 | `--backends` | List backends and local client availability. |
+| `--host-templates` | List bundled OpenSSH alias templates. |
+| `--host-template NAME` | Print one bundled alias template without modifying SSH configuration. |
 
 Examples:
 
@@ -732,6 +735,22 @@ cloudmake --host oci-free PROJECT_TARGET
 `SSH_HOST=lab-gpu` is also accepted as an environment override, but `--host` is
 the clearer interactive surface. A repository's `.cloudmake.json` cannot choose
 an SSH host because aliases and trust decisions belong to the local user.
+
+Cloudmake installs editable alias templates for a generic Linux host, OCI Always
+Free, and a Google Compute Engine free-tier `e2-micro`. List or render them from
+either the source checkout or an installed launcher:
+
+```sh
+cloudmake --host-templates
+cloudmake --host-template generic
+cloudmake --host-template oci-always-free
+cloudmake --host-template gcp-e2-micro
+```
+
+Rendering writes only to standard output. Cloudmake never edits `~/.ssh/config`
+or creates a key; the user reviews, edits, and installs a fragment explicitly.
+See the bundled [SSH host template guide](host-templates/README.md) for the safe
+copy, `Include`, permission, and first-connection workflow.
 
 Source is synchronized incrementally under `.cloudmake/` in the configured
 remote user's login home. `--start` validates the existing connection,

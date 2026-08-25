@@ -49,6 +49,11 @@ lifecycle remain with the user and host administrator or cloud provider. The
 host alias may be saved in local user preferences, but repository-shared
 configuration cannot select it.
 
+Bundled host templates are inert examples. Cloudmake can list or print them, but
+does not install a fragment into `~/.ssh`, replace existing configuration, set
+host-key policy, or generate a key. Users must review and install a fragment
+themselves.
+
 ## Source hygiene
 
 Never put credentials, private keys, API tokens, build secrets, or sensitive

@@ -33,6 +33,7 @@ def locate_tool_root() -> Path:
 TOOL_ROOT = locate_tool_root()
 VERSION = (TOOL_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ENGINE = TOOL_ROOT / "Makefile"
+HOST_TEMPLATE_DIR = TOOL_ROOT / "host-templates"
 ALIASES = {
     "colab": "colab-notebook",
     "colab-notebook": "colab-notebook",
@@ -67,6 +68,7 @@ ACTION_OPTIONS = {
     "--fetch": "fetch",
     "--help": "help",
     "--history": "history",
+    "--host-templates": "host-templates",
     "--open": "open",
     "--shell": "shell",
     "--start": "start",
@@ -81,6 +83,7 @@ ACTION_OPTIONS = {
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.DOTALL)
 ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
 SSH_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+HOST_TEMPLATE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 RESERVED_ASSIGNMENTS = {
     "ARTIFACT_DIR",
     "BACKEND",
@@ -277,6 +280,7 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         "accelerator": None,
         "accelerator_set": False,
         "host": None,
+        "host_template": None,
         "global": False,
         "use_backend": None,
         "verbose": False,
@@ -304,6 +308,13 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
             options["host"], index = take_value(arguments, index, argument)
         elif argument.startswith("--host="):
             options["host"] = argument.split("=", 1)[1]
+            index += 1
+        elif argument == "--host-template":
+            set_action(options, "host-template")
+            options["host_template"], index = take_value(arguments, index, argument)
+        elif argument.startswith("--host-template="):
+            set_action(options, "host-template")
+            options["host_template"] = argument.split("=", 1)[1]
             index += 1
         elif argument == "--gpu":
             options["accelerator_set"] = True
@@ -357,7 +368,8 @@ Project options: -b BACKEND, -C DIR, -j N, --host HOST, --gpu[=TYPE], --cpu,
 Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
                   --sync-dry-run, --status, --fetch, --open, --shell, --stop
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
-Information: --help, --version, --history
+Information: --help, --version, --history, --host-templates,
+             --host-template NAME
 """
 
 
@@ -366,6 +378,41 @@ def show_backends() -> None:
     for name, (lifecycle, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
         print(f"{name:19} {lifecycle:10} {transport:27} {client} ({installed})")
+
+
+def host_templates() -> dict[str, Path]:
+    return {
+        path.stem: path
+        for path in sorted(HOST_TEMPLATE_DIR.glob("*.conf"))
+        if path.is_file()
+    }
+
+
+def show_host_templates() -> None:
+    templates = host_templates()
+    if not templates:
+        raise UsageError("installed SSH host templates were not found")
+    print("Available SSH host templates:")
+    for name in templates:
+        print(f"  {name}")
+    print("Render one with: cloudmake --host-template NAME")
+    print("Cloudmake prints templates but never modifies ~/.ssh or creates keys.")
+    guide = HOST_TEMPLATE_DIR / "README.md"
+    if guide.is_file():
+        print(f"Installed guide: {guide}")
+
+
+def show_host_template(name: str) -> None:
+    if not HOST_TEMPLATE_NAME.fullmatch(name):
+        raise UsageError("invalid SSH host template name")
+    try:
+        path = host_templates()[name]
+    except KeyError as error:
+        choices = ", ".join(host_templates())
+        raise UsageError(
+            f"unknown SSH host template {name!r}; choose one of: {choices}"
+        ) from error
+    sys.stdout.write(path.read_text(encoding="utf-8"))
 
 
 def show_history(state_home: Path, key: str) -> None:
@@ -569,6 +616,16 @@ def run(arguments: list[str]) -> int:
         if positional:
             raise UsageError("--history does not accept arguments")
         show_history(state_home, key)
+        return 0
+    if action == "host-templates":
+        if positional:
+            raise UsageError("--host-templates does not accept arguments")
+        show_host_templates()
+        return 0
+    if action == "host-template":
+        if positional:
+            raise UsageError("--host-template accepts its name as an option value only")
+        show_host_template(options["host_template"])
         return 0
     if action == "use":
         if positional:

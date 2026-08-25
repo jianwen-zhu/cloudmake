@@ -106,7 +106,10 @@ def test_no_arguments_is_read_only_and_does_not_invoke_engine(
     assert engine_calls(log) == []
 
 
-@pytest.mark.parametrize("arguments", [("--version",), ("--backends",), ("--history",)])
+@pytest.mark.parametrize(
+    "arguments",
+    [("--version",), ("--backends",), ("--history",), ("--host-templates",)],
+)
 def test_information_commands_do_not_invoke_build_engine(
     tmp_path: Path, fake_bin: Path, arguments: tuple[str, ...]
 ) -> None:
@@ -116,6 +119,41 @@ def test_information_commands_do_not_invoke_build_engine(
     result = invoke(project, environment, *arguments)
 
     assert result.stdout.strip()
+    assert engine_calls(log) == []
+
+
+def test_installed_host_templates_are_listed_and_rendered_without_engine_use(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    listed = invoke(project, environment, "--host-templates")
+    rendered = invoke(
+        project, environment, "--host-template", "oci-always-free"
+    )
+
+    assert "generic" in listed.stdout
+    assert "oci-always-free" in listed.stdout
+    assert "gcp-e2-micro" in listed.stdout
+    assert "Host oci-free" in rendered.stdout
+    assert "StrictHostKeyChecking no" not in rendered.stdout
+    assert "PRIVATE KEY-----" not in rendered.stdout
+    assert engine_calls(log) == []
+
+
+def test_unknown_host_template_fails_without_engine_use(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(
+        project, environment, "--host-template", "unknown", check=False
+    )
+
+    assert result.returncode == 2
+    assert "unknown SSH host template" in result.stdout
     assert engine_calls(log) == []
 
 

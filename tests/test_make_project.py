@@ -72,6 +72,10 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
         "backends/host-ssh.mk",
         "backends/lightning-studio-ssh.mk",
         "core/resilience.mk",
+        "host-templates/README.md",
+        "host-templates/generic.conf",
+        "host-templates/oci-always-free.conf",
+        "host-templates/gcp-e2-micro.conf",
         "notebooks/colab.ipynb",
         "tools/source_fingerprint.py",
         "tools/lightning_studio_status.py",
@@ -83,6 +87,12 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
 
     version = run_command([launcher, "--version"], cwd=tmp_path)
     assert version.stdout.strip() == f"cloudmake {(PROJECT_ROOT / 'VERSION').read_text().strip()}"
+
+    template = run_command(
+        [launcher, "--host-template", "generic"], cwd=tmp_path
+    )
+    assert "Host cloudmake-host" in template.stdout
+    assert "StrictHostKeyChecking no" not in template.stdout
 
     project = sample_project(tmp_path)
     dry_run = run_command([launcher, "-C", project, "--sync-dry-run"], cwd=tmp_path)

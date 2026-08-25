@@ -15,10 +15,11 @@ VERSION := $(strip $(shell sed -n '1p' '$(CLOUDMAKE_TOOL_ROOT)/VERSION'))
 CLOUDMAKE_RUNTIME_DIR ?= $(PREFIX)/libexec/cloudmake
 DIST_DIR ?= $(CLOUDMAKE_TOOL_ROOT)/dist
 
-CLOUDMAKE_RUNTIME_DIRS := backends core notebooks tools transports
+CLOUDMAKE_RUNTIME_DIRS := backends core host-templates notebooks tools transports
 CLOUDMAKE_RUNTIME_FILES := $(CLOUDMAKE_TOOL_ROOT)/Makefile $(CLOUDMAKE_TOOL_ROOT)/VERSION \
 	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/backends/*.mk) \
 	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/core/*.mk) \
+	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/host-templates/*) \
 	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/notebooks/*.ipynb) \
 	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/tools/*.py) \
 	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/tools/*.sh) \

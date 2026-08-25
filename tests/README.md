@@ -94,6 +94,7 @@ internals:
   exact key references, and the absence of Git-based project transfer;
 - user-managed host SSH synchronization, lifecycle preservation, local alias
   validation, and absence of provider or credential configuration;
+- installed generic, OCI, and GCP host-template discovery and safe rendering;
 - per-backend commands, settings, Python version, authentication probes, and
   installation guidance;
 - project ownership, atomic state, local and remote locks, stale recovery, and

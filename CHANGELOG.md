@@ -8,6 +8,8 @@ once a version is published as a GitHub release.
 - Add the `ssh` / `host-ssh` backend and locally persisted `--host` selector for
   incremental execution on any existing user-managed OpenSSH host without
   provisioning, lifecycle control, credential handling, or Git-based transfer.
+- Bundle read-only generic, OCI Always Free, and GCP `e2-micro` SSH alias
+  templates with installed-runtime listing and rendering commands.
 - Document Kaggle's current preinstalled GPU framework/JIT surfaces and clarify
   that its image does not guarantee the standalone `nvcc` compiler.
 - Sharpen the project narrative around fragmented accelerator-cloud access and
