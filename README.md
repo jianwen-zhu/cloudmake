@@ -516,6 +516,41 @@ Although the generated notebook is private, its versions retain uploaded source
 in the Kaggle account's version history. Do not include credentials, private keys,
 or other secrets in the source tree. Internet access is disabled by default.
 
+#### Preinstalled Kaggle GPU stack
+
+As of 2026-08-25, Kaggle's official GPU image is built from a pinned Colab GPU
+runtime. Its image definition preserves the base image's `torch`, `tensorflow`,
+`keras`, and `jax` packages, then installs Kaggle's additional environment and
+GPU-specific PyCUDA package. The official image tests exercise the following
+GPU surfaces:
+
+| Preinstalled surface | Official GPU-image coverage | Natural batch use |
+| --- | --- | --- |
+| PyTorch and its Lightning, Ignite, vision, audio, metrics, and tuning ecosystem | CUDA tensors, linear algebra, and recurrent neural-network modules | Training, inference, and framework-managed compilation |
+| TensorFlow and Keras | CUDA build, GPU discovery, matrix operations, and model execution | Training and inference |
+| JAX and Flax | JAX selects its GPU backend | XLA/JIT workloads |
+| CuPy | A custom `ElementwiseKernel` executes on the GPU | NumPy-like GPU code and runtime-compiled kernels |
+| Numba | A `numba.cuda.jit` kernel executes on the GPU | Python-authored CUDA JIT kernels |
+| PyCUDA | CUDA driver initialization and device discovery | Driver-level Python integration; source compilation is not guaranteed |
+| RAPIDS cuDF and cuML | GPU dataframe operations and PCA | Batch dataframe and machine-learning workloads |
+
+Some official tests, including the current cuDF and cuML checks, are exempted on
+P100 machines. Package presence therefore does not guarantee that every surface
+works on every accelerator Kaggle may offer.
+
+Sources: Kaggle's official
+[`Dockerfile.tmpl`](https://github.com/Kaggle/docker-python/blob/main/Dockerfile.tmpl),
+[`kaggle_requirements.txt`](https://github.com/Kaggle/docker-python/blob/main/kaggle_requirements.txt),
+and [GPU image tests](https://github.com/Kaggle/docker-python/tree/main/tests).
+
+This is an image snapshot, not a permanent Cloudmake guarantee. Kaggle rebuilds
+and updates the environment independently. In particular, its image definition
+does not install or test `nvcc`, so native CUDA C++ compilation must not assume
+that the standalone CUDA compiler is present. Kaggle is therefore best treated
+as a framework/JIT or compatible-prebuilt-binary execution backend. The project
+should expose its own target for that work; Cloudmake defines no Kaggle-specific
+project target.
+
 Kaggle accelerator names are provider-specific. Use the exact identifier exposed
 by the installed CLI, for example:
 

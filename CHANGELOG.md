@@ -3,6 +3,11 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## Unreleased
+
+- Document Kaggle's current preinstalled GPU framework/JIT surfaces and clarify
+  that its image does not guarantee the standalone `nvcc` compiler.
+
 ## 0.7.0 - 2026-08-25
 
 - Remove legacy direct-engine `build`, `test`, and `run` shortcuts so every
