@@ -7,6 +7,8 @@ once a version is published as a GitHub release.
 
 - Document Kaggle's current preinstalled GPU framework/JIT surfaces and clarify
   that its image does not guarantee the standalone `nvcc` compiler.
+- Sharpen the project narrative around fragmented accelerator-cloud access and
+  distinguish that problem from mature general-purpose CPU cloud tooling.
 
 ## 0.7.0 - 2026-08-25
 

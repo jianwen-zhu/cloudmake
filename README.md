@@ -2,12 +2,13 @@
 
 **License:** [Apache License 2.0](LICENSE)
 
-`cloudmake` makes modern cloud hardware feel like a familiar local build target.
-Its primary objective is to make a locally executable, Make-based project work
-on accessible cloud hardware—including free-tier services—unmodified. The
-developer continues to edit and control the source locally while cloudmake
-adapts provider-specific execution around it. Adopting cloudmake must not require
-the project to become a cloudmake project.
+`cloudmake` brings the familiar local Make workflow to the accelerator cloud.
+Modern GPUs and other accelerators are expensive and fast-moving, while their
+most accessible cloud services are fragmented across notebooks, batch jobs, and
+quota-backed development environments. Cloudmake makes a locally executable,
+Make-based project work on that hardware—including free-tier services—without
+modifying the project. The developer keeps editing and controlling the source
+locally while Cloudmake adapts each provider around it.
 
 The intended daily interface is deliberately close to Make:
 
@@ -37,13 +38,22 @@ outside the practical reach of individual developers. Buying hardware also means
 committing to one generation while compilers, drivers, architectures, and
 performance characteristics continue to change.
 
-At the same time, services such as Colab and Kaggle make some CPU, GPU, and other
-accelerated compute available free of charge or within limited quotas. Additional
-services such as Codespaces provide useful quota-backed development VMs. The
-opportunity is real, but their usage models are fragmented: one provider executes
-notebooks in a reusable session, another submits immutable batch versions, and
-another exposes a conventional SSH machine. These workflows differ from the
-edit-build-test-run loop that developers already understand locally.
+General-purpose CPU cloud has largely converged on familiar Linux VMs,
+containers, SSH, and mature infrastructure tooling. The accelerator cloud has
+not. GPU type and availability vary; drivers, runtimes, compilers, and hardware
+generations are tightly coupled; and the affordable entry points are often
+provider-specific notebook sessions, immutable batch jobs, or quota-backed
+studios rather than ordinary long-lived machines.
+
+Services such as Colab, Kaggle, and Lightning make accelerator hardware
+available free of charge or within limited quotas, but each exposes a different
+development lifecycle. One executes notebooks in a reusable session, another
+submits fresh batch versions, and another offers a persistent filesystem over
+SSH while switching machines. These interfaces break the local
+edit-build-test-run loop precisely where developers need to compare and adopt
+rapidly changing hardware. CPU services such as Codespaces remain useful as a
+portable SSH reference and cross-build surface, but generic CPU cloud is not the
+primary problem Cloudmake is designed to solve.
 
 Access to compute should not require moving the source of truth into a provider's
 Git service. Cloud development tools often assume that the remote machine will
@@ -53,11 +63,12 @@ files, prescribed directory layouts, and cloud-specific Make targets move even
 more provider machinery into the project. The cost is not merely setup time: it
 fragments the project's normal local workflow.
 
-Cloudmake's desired behavior is therefore simple: make a locally executable,
-Make-based project work on accessible cloud hardware—including free-tier
-services—unmodified. Cloudmake treats the local working tree, including
-uncommitted changes and local-only projects, as the source of truth and adapts
-each provider around it.
+Cloudmake is therefore not another general cloud provisioning layer. Its focus
+is the awkward boundary between an ordinary local Make project and accessible
+accelerator hardware. The desired behavior is simple: make that project work on
+the accelerator cloud unmodified. Cloudmake treats the local working tree,
+including uncommitted changes and local-only projects, as the source of truth
+and adapts each provider around it.
 
 Intrusion-free is a product boundary, not merely a convenience. Cloudmake does
 not require provider files, provider-specific Makefiles, fixed target names, a
@@ -72,19 +83,20 @@ the toolchain and runtime dependencies that the project itself requires.
 local Make project, unmodified
     |
     v
-cloudmake: arbitrary project targets
+cloudmake: accelerator-cloud adapter for arbitrary project targets
     |
     +-- native notebook API --> Colab or Kaggle
     |
     `-- SSH + rsync ----------> Codespaces, paid Colab, or Lightning Studios
                                   |
                                   v
-                         evolving CPU/GPU hardware
+                         evolving GPU/accelerator hardware
 ```
 
 The design has seven goals:
 
-1. Broaden practical access to modern, rapidly changing compute hardware.
+1. Broaden practical access to modern, rapidly changing accelerators rather
+   than duplicate generic cloud infrastructure tooling.
 2. Keep adoption intrusion-free: an existing Make project should run unchanged.
 3. Preserve the familiar local edit-and-Make workflow; keep the common cloud
    invocation as small as `cloudmake TARGET`.
@@ -105,6 +117,7 @@ responsibilities outside that boundary:
 
 | Cloudmake does not | Responsibility remains with |
 | --- | --- |
+| Provision generic cloud infrastructure, networks, storage systems, or clusters | Cloud providers and established infrastructure tools. |
 | Define `build`, `test`, `run`, or any other project target | The project's Makefile. Every positional target is project-provided. |
 | Replace Make or interpret the project's recipes and variables | The project and its chosen build tools. |
 | Prescribe source, build, output, or dependency directory layouts | The project. Cloudmake preserves relative paths. |
