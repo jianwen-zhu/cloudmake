@@ -22,7 +22,7 @@ SSH_REMOTE_OWNER_COPY := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_I
 CLOUDMAKE_RSYNC_IGNORE := $(if $(wildcard $(PROJECT_DIR)/.cloudmakeignore),--exclude-from='$(PROJECT_DIR)/.cloudmakeignore',)
 SSH_ARTIFACT_ARCHIVE := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/artifacts.tar.gz
 
-.PHONY: help start status stop sync build test run collect dispatch fetch shell open \
+.PHONY: help start status stop sync collect dispatch fetch shell open \
 	_ssh-backend-start _ssh-start _ssh-sync _ssh-sync-unlocked _ssh-execute \
 	_ssh-fetch _ssh-shell _ssh-stop
 
@@ -35,8 +35,9 @@ help:
 	@echo 'Notebook backends: colab-notebook (default), kaggle-notebook'
 	@echo 'SSH backends: colab-ssh, codespaces-ssh, lightning-studio-ssh'
 	@echo
-	@echo 'Targets: start status stop sync build test run collect fetch shell'
-	@echo '         sync-dry-run prerequisites doctor backend-info'
+	@echo 'Engine operations: start status stop sync collect fetch shell'
+	@echo '                   sync-dry-run prerequisites doctor backend-info'
+	@echo 'Internal project-target entry point: dispatch (launcher managed)'
 
 start: doctor
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _ssh-start
@@ -55,9 +56,6 @@ stop: doctor
 
 sync: doctor
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _ssh-sync
-
-build test run: doctor
-	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _ssh-execute REMOTE_TARGET='$@'
 
 dispatch: doctor
 	@if test -z '$(REMOTE_TARGET_B64)'; then echo 'REMOTE_TARGET_B64 is required for dispatch' >&2; exit 2; fi

@@ -3,6 +3,14 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## Unreleased
+
+- Remove legacy direct-engine `build`, `test`, and `run` shortcuts so every
+  project target enters through the single generic dispatch path.
+- Make user documentation explicit that example target names are supplied by
+  the project's Makefile, and move the internal engine contract to maintainer
+  documentation.
+
 ## 0.6.0 - 2026-08-25
 
 - Add the `lightning` / `lightning-studio-ssh` backend for persistent CPU and

@@ -14,6 +14,7 @@ The intended daily interface is deliberately close to Make:
 ```sh
 cd my-project
 cloudmake --use colab --gpu=T4  # once for this project
+# These three target names are defined by my-project/Makefile, not cloudmake.
 cloudmake compile
 cloudmake verify
 cloudmake --collect dist export-release
@@ -164,7 +165,7 @@ target plus only user-supplied `NAME=value` assignments. For
 populates it through its normal rules. After success, cloudmake creates or
 transactionally replaces the local `artifacts/` directory with those contents.
 
-### Launcher, engine, and escape hatch
+### Launcher and engine boundary
 
 The `cloudmake` executable is a thin launcher. It discovers the project, resolves
 the selected backend, loads local preferences, and delegates to cloudmake's own
@@ -173,6 +174,7 @@ Make-based engine. It does not become a second build system.
 Every positional name is passed through to the project:
 
 ```sh
+# clean, benchmark, and test are targets defined by the project's Makefile.
 cloudmake clean
 cloudmake benchmark SIZE=large
 cloudmake -j 8 test
@@ -182,6 +184,7 @@ Cloudmake reserves no project target names. Even names that resemble its own
 operations are unconditionally project targets:
 
 ```sh
+# These invoke hypothetical project-provided targets named fetch and status.
 cloudmake fetch
 cloudmake status
 ```
@@ -195,9 +198,13 @@ Backend settings remain available through Cloudmake options or the host
 environment. They never share the trailing project-assignment namespace:
 
 ```sh
-KAGGLE_TIMEOUT=7200 cloudmake -b kaggle build
+KAGGLE_TIMEOUT=7200 cloudmake -b kaggle PROJECT_TARGET
 COLAB_IDENTITY=/path/to/key cloudmake -b colab-ssh --shell
 ```
+
+Here and throughout this README, `PROJECT_TARGET` is a placeholder for a target
+provided by the selected project's Makefile. It is not a target supplied by
+Cloudmake.
 
 ### State and credentials
 
@@ -327,12 +334,14 @@ cloudmake --use colab --global
 Use `-b` for a one-off override without changing the saved preference:
 
 ```sh
-cloudmake -b kaggle test
+# verify is a target defined by this project's Makefile.
+cloudmake -b kaggle verify
 ```
 
 ### 5. Run the project
 
 ```sh
+# compile, verify, and export-release are project-provided Make targets.
 cloudmake compile
 cloudmake verify
 cloudmake --collect dist export-release
@@ -356,7 +365,9 @@ cloudmake [options] TARGET [NAME=value ...]
 ```
 
 There are no reserved positional commands: `TARGET` always belongs to the
-project. Cloudmake operations are option-only.
+project. Cloudmake operations are option-only. In examples, `PROJECT_TARGET`
+means “replace this with a target provided by your project's Makefile”; Cloudmake
+does not define a target with that name.
 
 Common options:
 
@@ -389,14 +400,14 @@ Cloud operation options:
 Examples:
 
 ```sh
-# Work on a project without changing directory.
-cloudmake -C ../solver build
+# Work on a project without changing directory; compile is defined by ../solver/Makefile.
+cloudmake -C ../solver compile
 
-# Temporarily use Kaggle and request its exact accelerator identifier.
-cloudmake -b kaggle --gpu=NvidiaL4 test
+# Use Kaggle for a project-provided verify target and request its exact accelerator.
+cloudmake -b kaggle --gpu=NvidiaL4 verify
 
-# Pass ordinary project settings through to Make.
-cloudmake run DATASET=small DEBUG=1
+# Pass settings to the project-provided benchmark target.
+cloudmake benchmark DATASET=small DEBUG=1
 
 # Open a real remote terminal where the backend permits SSH.
 cloudmake -b codespaces --shell
@@ -437,7 +448,8 @@ remote source and persistent build directory in the named session.
 
 Colab kernel execution defaults to a 3600-second cloudmake timeout rather than
 the CLI's short interactive default. Override it for longer workloads with, for
-example, `COLAB_TIMEOUT=7200 cloudmake build`.
+example, `COLAB_TIMEOUT=7200 cloudmake PROJECT_TARGET`, replacing
+`PROJECT_TARGET` with a target from the project's Makefile.
 
 Accelerator availability, runtime duration, and usage limits are dynamic and are
 not guaranteed. Omitting the GPU requests a CPU runtime. Always stop an unused
@@ -488,7 +500,8 @@ Kaggle accelerator names are provider-specific. Use the exact identifier exposed
 by the installed CLI, for example:
 
 ```sh
-cloudmake -b kaggle --gpu=NvidiaTeslaT4 build
+# PROJECT_TARGET must be provided by the project's Makefile.
+cloudmake -b kaggle --gpu=NvidiaTeslaT4 PROJECT_TARGET
 ```
 
 `start` only verifies authentication, and `stop` is a no-op because Kaggle ends
@@ -628,7 +641,8 @@ Verify the read-only gate and select the backend:
 ```sh
 cloudmake -b lightning --doctor
 cloudmake --use lightning --gpu=T4
-cloudmake build
+# Replace PROJECT_TARGET with a target provided by the project's Makefile.
+cloudmake PROJECT_TARGET
 ```
 
 With no `--gpu`, the backend uses Lightning's 4-CPU `CPU` machine. Accelerator
@@ -663,65 +677,12 @@ transport or lifecycle layer. Project developers should use the
 find the adapter interface and extension checklist in the
 [backend contract](docs/backend-contract.md).
 
-## Direct engine use
-
-The launcher is the normal project interface. Maintainers can also exercise the
-Make engine directly from this tool checkout against the included sample project,
-whose portable rules are in `Makefile.build`.
-
-Colab native notebook backend, which is currently the default:
-
-```sh
-make prerequisites
-make doctor
-make sync-dry-run
-make build
-make test
-make run
-make REMOTE_TARGET=package REMOTE_COLLECT_DIR_B64=b3V0cHV0 collect
-make open
-make stop
-```
-
-Kaggle batch notebook backend:
-
-```sh
-make BACKEND=kaggle-notebook KAGGLE_USERNAME=your-account-slug build
-make BACKEND=kaggle-notebook KAGGLE_USERNAME=your-account-slug \
-  REMOTE_TARGET=package REMOTE_COLLECT_DIR_B64=b3V0cHV0 collect
-```
-
-Codespaces SSH backend:
-
-```sh
-make BACKEND=codespaces-ssh CODESPACE=CODESPACE-NAME build
-make BACKEND=codespaces-ssh CODESPACE=CODESPACE-NAME \
-  REMOTE_TARGET=package REMOTE_COLLECT_DIR_B64=b3V0cHV0 collect
-make BACKEND=codespaces-ssh CODESPACE=CODESPACE-NAME stop
-```
-
-Colab paid SSH backend:
-
-```sh
-make BACKEND=colab-ssh build
-make BACKEND=colab-ssh REMOTE_TARGET=package \
-  REMOTE_COLLECT_DIR_B64=b3V0cHV0 collect
-make BACKEND=colab-ssh stop
-```
-
-Lightning Studio SSH backend:
-
-```sh
-make BACKEND=lightning-studio-ssh \
-  LIGHTNING_TEAMSPACE=OWNER/TEAMSPACE LIGHTNING_STUDIO=cloudmake-dev build
-make BACKEND=lightning-studio-ssh \
-  LIGHTNING_TEAMSPACE=OWNER/TEAMSPACE LIGHTNING_STUDIO=cloudmake-dev stop
-```
-
 The Colab backend reuses a live session and skips source upload when the
 fingerprint is unchanged. The Kaggle backend reuses its local compressed snapshot
 when unchanged but still submits a fresh VM for every target. All SSH backends
 share the same rsync and remote-Make transport.
+
+## Reliability and security
 
 Cloudmake protects reusable workspaces with ownership checks, serializes
 concurrent operations, validates remote prerequisites, and updates source and
@@ -729,7 +690,8 @@ artifacts transactionally. Intentional reassignment of a remote workspace
 requires the conspicuous one-time override:
 
 ```sh
-CLOUDMAKE_ADOPT=1 cloudmake build
+# PROJECT_TARGET is a target provided by the project's Makefile.
+CLOUDMAKE_ADOPT=1 cloudmake PROJECT_TARGET
 ```
 
 Use `.cloudmakeignore` for source that should never be transferred:
@@ -750,23 +712,21 @@ access-token forms. Credential-like filenames produce a warning. Exclude such
 files with `.cloudmakeignore`; for a deliberate test fixture, the conspicuous
 one-command override is `CLOUDMAKE_ALLOW_SECRETS=1 cloudmake TARGET`.
 
-`make sync-dry-run` reports added, modified, and deleted paths without
+`cloudmake --sync-dry-run` reports added, modified, and deleted paths without
 authenticating, allocating compute, or contacting the provider. Read
 [Resilience and recovery](docs/resilience.md) before adopting a workspace,
 adjusting source limits, or recovering an interrupted operation.
 
-Direct engine state lives under `.cloud-state/`. The launcher instead keeps state
-and cache data in user directories outside both repositories. Downloaded project
-output is extracted under the actual project's `artifacts/` directory. Artifact
-archives are bounded by configurable member-count, total-size, per-file-size,
-compressed-size, and expansion-ratio limits before extraction.
+The launcher keeps state and cache data in user directories outside both
+repositories. Downloaded project output is extracted under the actual project's
+`artifacts/` directory. Artifact archives are bounded by configurable
+member-count, total-size, per-file-size, compressed-size, and expansion-ratio
+limits before extraction.
 
 Every project execution creates a private local provenance record containing the
 backend, remote resource, target, source fingerprint, result, and—when collected—
 an artifact fingerprint. Make-assignment names are recorded, but their values are
 stored only as hashes. `cloudmake --history` shows the ten latest runs.
-
-## Reliability and security
 
 Cloudmake verifies workspace ownership before destructive synchronization,
 serializes concurrent mutations, reconciles saved sessions with live provider

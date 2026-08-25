@@ -77,6 +77,21 @@ The engine's common lifecycle operations are `start`, `sync`, `status`, `fetch`,
 positional name with the same spelling remains a project target. Unsupported
 operation options fail clearly rather than changing meaning per backend.
 
+## Internal engine dispatch
+
+The `cloudmake` launcher is the only supported project-facing command surface.
+The tool's Make engine is an internal backend-maintenance interface. It exposes
+provider lifecycle operations and one generic `dispatch` entry point; the
+launcher supplies the encoded project target to that entry point.
+
+Transports must not add convenience rules for project-like names such as
+`build`, `test`, or `run`. Those names have no Cloudmake meaning and may be used
+only when they are supplied by the selected project's Makefile. Maintainer tests
+that exercise the engine directly must also enter project execution through
+`dispatch`, so the internal test surface cannot accidentally reintroduce a
+predefined project-target contract. `Makefile.build` is only Cloudmake's bundled
+sample project and does not define the public interface.
+
 ## Transport responsibilities
 
 Every transport must:

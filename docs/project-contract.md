@@ -39,6 +39,7 @@ not attach meaning to any target spelling.
 Arbitrary project-specific names work without an escape hatch:
 
 ```sh
+# Every target below is an example supplied by the project's own Makefile.
 cloudmake train
 cloudmake benchmark SIZE=large
 cloudmake firmware.bin BOARD=rev2
@@ -51,6 +52,7 @@ Cloudmake injects no Make variables. The remote invocation consists of the
 requested target plus only the `NAME=value` arguments supplied by the user:
 
 ```sh
+# benchmark is a target supplied by the project's Makefile.
 cloudmake benchmark MODE=release ITERATIONS=100
 ```
 

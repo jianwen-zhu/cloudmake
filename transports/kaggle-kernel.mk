@@ -10,7 +10,7 @@ KAGGLE_ARTIFACT_ARCHIVE := $(KAGGLE_OUTPUT_DIR)/artifacts.tar.gz
 
 KAGGLE_ACCELERATOR_OPTION := $(if $(strip $(KAGGLE_ACCELERATOR)),--accelerator $(KAGGLE_ACCELERATOR),)
 
-.PHONY: help start status stop sync build test run collect dispatch fetch shell open \
+.PHONY: help start status stop sync collect dispatch fetch shell open \
 	_kaggle-start _kaggle-sync _kaggle-execute _kaggle-collect _kaggle-fetch _kaggle-open
 
 help:
@@ -23,9 +23,7 @@ help:
 	@echo '  start    Verify Kaggle CLI authentication; allocates no compute'
 	@echo '  sync     Refresh the cached source archive when local content changes'
 	@echo '  sync-dry-run  Show selected source changes without contacting Kaggle'
-	@echo '  build    Submit and wait for a private notebook build'
-	@echo '  test     Submit and wait for a private notebook test'
-	@echo '  run      Submit and wait for a private notebook run'
+	@echo '  dispatch  Internal arbitrary project-target execution (launcher managed)'
 	@echo '  collect  Run REMOTE_TARGET, collect REMOTE_COLLECT_DIR_B64, and fetch it'
 	@echo '  fetch    Safely replace artifacts from the latest completed version'
 	@echo '  status   Show the latest submitted notebook version status'
@@ -53,9 +51,6 @@ stop:
 
 sync: prerequisites
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _kaggle-sync
-
-build test run: doctor
-	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _kaggle-execute REMOTE_TARGET='$@'
 
 dispatch: doctor
 	@if test -z '$(REMOTE_TARGET_B64)'; then echo 'REMOTE_TARGET_B64 is required for dispatch' >&2; exit 2; fi

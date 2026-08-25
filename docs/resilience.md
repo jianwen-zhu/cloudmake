@@ -15,7 +15,8 @@ cloudmake stops before replacing source or running `rsync --delete`.
 An intentional reassignment requires a conspicuous one-time override:
 
 ```sh
-CLOUDMAKE_ADOPT=1 cloudmake build
+# PROJECT_TARGET is supplied by the project's Makefile.
+CLOUDMAKE_ADOPT=1 cloudmake PROJECT_TARGET
 ```
 
 Do not use adoption merely to bypass an unexpected error. First inspect the old

@@ -18,7 +18,7 @@ COLAB_REMOTE_ARTIFACTS := /content/.cloud-build/artifacts.tar.gz
 
 COLAB_ACCELERATOR := $(if $(strip $(COLAB_GPU)),--gpu $(COLAB_GPU),)
 
-.PHONY: help start status stop sync build test run collect dispatch fetch shell open \
+.PHONY: help start status stop sync collect dispatch fetch shell open \
 	_colab-start _colab-sync _colab-execute _colab-collect _colab-fetch \
 	_colab-fetch-ready _colab-open _colab-stop
 
@@ -34,9 +34,7 @@ help:
 	@echo '  start    Create or reuse the named Colab session'
 	@echo '  sync     Upload the current working tree through colab upload'
 	@echo '  sync-dry-run  Show selected source changes without contacting Colab'
-	@echo '  build    Sync, then execute the build notebook'
-	@echo '  test     Sync, then execute the test notebook'
-	@echo '  run      Sync, then execute the run notebook'
+	@echo '  dispatch  Internal arbitrary project-target execution (launcher managed)'
 	@echo '  collect  Run REMOTE_TARGET, collect REMOTE_COLLECT_DIR_B64, and fetch it'
 	@echo '  fetch    Download and safely extract prepared artifacts'
 	@echo '  open     Open the same CLI-owned runtime in Colab'
@@ -59,9 +57,6 @@ stop: doctor
 
 sync: doctor
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-sync
-
-build test run: doctor
-	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-execute REMOTE_TARGET='$@'
 
 dispatch: doctor
 	@if test -z '$(REMOTE_TARGET_B64)'; then echo 'REMOTE_TARGET_B64 is required for dispatch' >&2; exit 2; fi

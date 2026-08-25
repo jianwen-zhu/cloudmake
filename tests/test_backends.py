@@ -14,6 +14,11 @@ from conftest import PROJECT_ROOT, run_command, write_executable
 LAUNCHER = PROJECT_ROOT / "bin" / "cloudmake"
 
 
+def engine_dispatch(target: str) -> list[str]:
+    encoded = base64.urlsafe_b64encode(target.encode("utf-8")).decode("ascii")
+    return [f"REMOTE_TARGET_B64={encoded}", "dispatch"]
+
+
 def fake_environment(fake_bin: Path, tmp_path: Path) -> dict[str, str]:
     return {
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
@@ -585,7 +590,7 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     env = fake_environment(fake_bin, tmp_path)
     log = Path(env["FAKE_LOG"])
 
-    first = run_command(["make", "build"], cwd=prototype, env=env)
+    first = run_command(["make", *engine_dispatch("build")], cwd=prototype, env=env)
     assert "Source unchanged" not in first.stdout
     first_calls = calls(log, "colab")
     assert any(call[1] == "new" for call in first_calls)
@@ -606,7 +611,7 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     assert not any(call[1] == "ssh" for call in first_calls)
 
     log.write_text("", encoding="utf-8")
-    second = run_command(["make", "run"], cwd=prototype, env=env)
+    second = run_command(["make", *engine_dispatch("run")], cwd=prototype, env=env)
     second_calls = calls(log, "colab")
     assert "Source unchanged; skipping archive upload" in second.stdout
     assert not any(call[1] == "new" for call in second_calls)
@@ -683,14 +688,14 @@ def test_colab_native_reconciles_a_disappeared_session(
 ) -> None:
     install_fake_colab(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
-    run_command(["make", "build"], cwd=prototype, env=env)
+    run_command(["make", *engine_dispatch("build")], cwd=prototype, env=env)
     remote = Path(env["FAKE_REMOTE"])
     (remote / "session-cuda-build").unlink()
     (remote / "source.sha256").unlink()
     (remote / ".cloudmake-owner.json").unlink()
     Path(env["FAKE_LOG"]).write_text("", encoding="utf-8")
 
-    run_command(["make", "test"], cwd=prototype, env=env)
+    run_command(["make", *engine_dispatch("test")], cwd=prototype, env=env)
 
     colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
     assert any(call[1] == "new" for call in colab_calls)
@@ -705,7 +710,7 @@ def test_colab_native_retries_only_the_non_mutating_readiness_probe(
     env = fake_environment(fake_bin, tmp_path)
     env["FAKE_COLAB_READINESS_FAIL_ONCE"] = "1"
 
-    result = run_command(["make", "build"], cwd=prototype, env=env)
+    result = run_command(["make", *engine_dispatch("build")], cwd=prototype, env=env)
 
     assert "Readiness connection failed" in result.stdout
     colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
@@ -731,7 +736,9 @@ def test_colab_native_refuses_to_destroy_an_unreachable_named_session(
     env = fake_environment(fake_bin, tmp_path)
     env["FAKE_COLAB_READINESS_FAIL_ALWAYS"] = "1"
 
-    result = run_command(["make", "build"], cwd=prototype, env=env, check=False)
+    result = run_command(
+        ["make", *engine_dispatch("build")], cwd=prototype, env=env, check=False
+    )
 
     assert result.returncode != 0
     assert "refusing automatic recreation" in result.stdout
@@ -765,7 +772,9 @@ def test_colab_native_refuses_foreign_workspace_without_explicit_adoption(
         encoding="utf-8",
     )
 
-    refused = run_command(["make", "build"], cwd=prototype, env=env, check=False)
+    refused = run_command(
+        ["make", *engine_dispatch("build")], cwd=prototype, env=env, check=False
+    )
     assert refused.returncode != 0
     assert "refusing to replace Colab session" in refused.stdout
     assert not any(
@@ -774,7 +783,9 @@ def test_colab_native_refuses_foreign_workspace_without_explicit_adoption(
     )
 
     adopted = run_command(
-        ["make", "CLOUDMAKE_ADOPT=1", "build"], cwd=prototype, env=env
+        ["make", "CLOUDMAKE_ADOPT=1", *engine_dispatch("build")],
+        cwd=prototype,
+        env=env,
     )
     assert "Adopting Colab session" in adopted.stdout
 
@@ -815,9 +826,9 @@ def test_kaggle_submits_every_target_but_reuses_local_snapshot(
     env = fake_environment(fake_bin, tmp_path)
     common = ["make", "BACKEND=kaggle-notebook", "KAGGLE_USERNAME=tester", "KAGGLE_POLL_SECONDS=0.01"]
 
-    first = run_command([*common, "build"], cwd=prototype, env=env)
+    first = run_command([*common, *engine_dispatch("build")], cwd=prototype, env=env)
     assert "Refreshed cached source archive" in first.stdout
-    second = run_command([*common, "test"], cwd=prototype, env=env)
+    second = run_command([*common, *engine_dispatch("test")], cwd=prototype, env=env)
     assert "Source unchanged; reusing cached source archive" in second.stdout
 
     kaggle_calls = calls(Path(env["FAKE_LOG"]), "kaggle")
@@ -858,7 +869,12 @@ def test_codespaces_uses_anchor_only_for_ssh_and_never_clones_project(
     env = fake_environment(fake_bin, tmp_path)
 
     run_command(
-        ["make", "BACKEND=codespaces-ssh", "CODESPACE=test-space", "build"],
+        [
+            "make",
+            "BACKEND=codespaces-ssh",
+            "CODESPACE=test-space",
+            *engine_dispatch("build"),
+        ],
         cwd=prototype,
         env=env,
     )
@@ -889,7 +905,12 @@ def test_colab_ssh_builds_proxy_configuration_and_uses_common_transport(
     identity.write_text("fake private key used only as a path", encoding="utf-8")
 
     run_command(
-        ["make", "BACKEND=colab-ssh", f"COLAB_IDENTITY={identity}", "build"],
+        [
+            "make",
+            "BACKEND=colab-ssh",
+            f"COLAB_IDENTITY={identity}",
+            *engine_dispatch("build"),
+        ],
         cwd=prototype,
         env=env,
     )
@@ -924,12 +945,12 @@ def test_lightning_studio_uses_persistent_ssh_transport_without_git(
         f"LIGHTNING_IDENTITY={identity}",
     ]
 
-    run_command([*common, "build"], cwd=prototype, env=env)
+    run_command([*common, *engine_dispatch("build")], cwd=prototype, env=env)
     switched = [
         value if value != "LIGHTNING_MACHINE=T4" else "LIGHTNING_MACHINE=L4"
         for value in common
     ]
-    run_command([*switched, "build"], cwd=prototype, env=env)
+    run_command([*switched, *engine_dispatch("build")], cwd=prototype, env=env)
     run_command([*common, "stop"], cwd=prototype, env=env)
 
     config = (
@@ -995,7 +1016,9 @@ def test_lightning_studio_uses_persistent_ssh_transport_without_git(
 
 def test_unknown_backend_fails_before_provider_execution(prototype: Path) -> None:
     result = run_command(
-        ["make", "BACKEND=does-not-exist", "build"], cwd=prototype, check=False
+        ["make", "BACKEND=does-not-exist", *engine_dispatch("build")],
+        cwd=prototype,
+        check=False,
     )
     assert result.returncode != 0
     assert 'Unknown backend "does-not-exist"' in result.stdout
@@ -1008,6 +1031,31 @@ def test_help_keeps_notebook_and_ssh_names_distinct(prototype: Path) -> None:
     assert "colab-ssh" in result.stdout
     assert "codespaces-ssh" in result.stdout
     assert "lightning-studio-ssh" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "backend",
+    [
+        "colab-notebook",
+        "kaggle-notebook",
+        "codespaces-ssh",
+        "colab-ssh",
+        "lightning-studio-ssh",
+    ],
+)
+@pytest.mark.parametrize("project_target", ["build", "test", "run"])
+def test_engine_defines_no_project_target_shortcuts(
+    prototype: Path, backend: str, project_target: str
+) -> None:
+    result = run_command(
+        ["make", f"BACKEND={backend}", project_target],
+        cwd=prototype,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "No rule to make target" in result.stdout
+    assert project_target in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -1038,7 +1086,12 @@ def test_ssh_remote_prerequisite_failure_blocks_sync(
     env["FAKE_REMOTE_MISSING"] = "make"
 
     result = run_command(
-        ["make", "BACKEND=codespaces-ssh", "CODESPACE=test-space", "build"],
+        [
+            "make",
+            "BACKEND=codespaces-ssh",
+            "CODESPACE=test-space",
+            *engine_dispatch("build"),
+        ],
         cwd=prototype,
         env=env,
         check=False,
@@ -1271,7 +1324,7 @@ def test_lightning_allocation_failure_stops_before_ssh_or_sync(
             "LIGHTNING_STUDIO=test-studio",
             "LIGHTNING_TEAMSPACE=tester/general",
             f"LIGHTNING_IDENTITY={identity}",
-            "build",
+            *engine_dispatch("build"),
         ],
         cwd=prototype,
         env=env,
@@ -1298,7 +1351,12 @@ def test_operational_target_is_gated_before_missing_provider_is_executed(
     prototype: Path,
 ) -> None:
     result = run_command(
-        ["make", "BACKEND=colab-notebook", "COLAB_BIN=missing-colab-for-test", "build"],
+        [
+            "make",
+            "BACKEND=colab-notebook",
+            "COLAB_BIN=missing-colab-for-test",
+            *engine_dispatch("build"),
+        ],
         cwd=prototype,
         check=False,
     )
@@ -1332,7 +1390,7 @@ def test_authentication_failure_blocks_provider_operation(
     env[failure_variable] = "1"
 
     result = run_command(
-        ["make", f"BACKEND={backend}", *arguments, "build"],
+        ["make", f"BACKEND={backend}", *arguments, *engine_dispatch("build")],
         cwd=prototype,
         env=env,
         check=False,

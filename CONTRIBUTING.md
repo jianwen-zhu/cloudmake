@@ -16,6 +16,9 @@ without changing the project layout or reserving target names.
 
 The default suite must remain offline. Provider clients in ordinary integration
 tests are fakes and must not allocate compute or inspect a developer's account.
+Direct engine tests must use its generic `dispatch` entry point rather than add
+or depend on convenience rules named after sample project targets. See the
+[backend contract](docs/backend-contract.md#internal-engine-dispatch).
 
 ## Design boundaries
 
