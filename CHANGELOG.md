@@ -3,7 +3,7 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
-## Unreleased
+## 0.7.0 - 2026-08-25
 
 - Remove legacy direct-engine `build`, `test`, and `run` shortcuts so every
   project target enters through the single generic dispatch path.
@@ -12,6 +12,8 @@ once a version is published as a GitHub release.
   documentation.
 - Document Cloudmake's deliberate non-goals and the responsibilities retained
   by projects, provider clients, developers, and cloud services.
+- Replace the externally hosted SVG license badge with a portable Apache-2.0
+  license link.
 
 ## 0.6.0 - 2026-08-25
 
