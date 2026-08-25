@@ -3,7 +3,7 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
-## Unreleased
+## 0.8.0 - 2026-08-25
 
 - Add the `ssh` / `host-ssh` backend and locally persisted `--host` selector for
   incremental execution on any existing user-managed OpenSSH host without
@@ -16,6 +16,8 @@ once a version is published as a GitHub release.
   distinguish that problem from mature general-purpose CPU cloud tooling.
 - State the non-goal principles explicitly, including that Cloudmake preserves
   rather than changes the intended capabilities of backend VMs and runtimes.
+- Document transport-aware incremental source synchronization and the separate
+  incremental Make behavior available in reusable remote workspaces.
 
 ## 0.7.0 - 2026-08-25
 
