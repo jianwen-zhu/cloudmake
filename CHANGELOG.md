@@ -3,7 +3,7 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
-## Unreleased
+## 0.6.0 - 2026-08-25
 
 - Add the `lightning` / `lightning-studio-ssh` backend for persistent CPU and
   GPU Studios through the shared SSH, rsync, remote-Make, and artifact surface.
