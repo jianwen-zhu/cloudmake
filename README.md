@@ -197,6 +197,41 @@ Codespace checks out the tool repository only to provision a suitable VM. The
 actual project is uploaded from the local computer to a separate workspace and
 is never cloned from GitHub by cloudmake.
 
+### Incremental source synchronization
+
+Cloudmake treats transfer time and bandwidth as part of the development loop,
+not as an unavoidable full upload before every Make invocation. A common source
+manifest gives every backend the same selected tree, exclusions, fingerprint,
+and change preview. Run `cloudmake --sync-dry-run` to see added, modified, and
+deleted paths without authenticating to or contacting a provider.
+
+The transport then uses the strongest incremental behavior its provider surface
+can support:
+
+- SSH backends use `rsync`, transferring changed source while deleting stale
+  synchronized paths from the remote project workspace.
+- A reusable Colab session compares the source fingerprint and skips the source
+  archive upload entirely when the selected tree is unchanged. When it changes,
+  Colab receives a complete validated snapshot because its native file API does
+  not expose an rsync-like delta transport.
+- Kaggle starts a fresh batch VM for every submitted target, so remote
+  incremental synchronization is impossible. Cloudmake still reuses the local
+  compressed snapshot when the source is unchanged, then submits that snapshot
+  with the new job.
+
+Source transfer is only the first layer of incrementality. On a reusable
+session, Cloudmake invokes successive project-provided targets in the same
+remote workspace. Prior outputs that remain in that workspace are therefore
+visible to the project's Make dependency graph, which—not Cloudmake—decides
+which recipes are already up to date and which must run again. A fresh batch VM
+has no previous remote outputs and cannot provide this incremental Make
+behavior.
+
+This is deliberately transport-aware: Cloudmake optimizes repeated operations
+without pretending that notebook APIs, batch jobs, and SSH offer identical
+persistence. Source selection, safety checks, and recovery behavior are
+described in [Resilience and recovery](docs/resilience.md).
+
 ### Intrusion-free Make contract
 
 Cloudmake invokes an arbitrary target from the project's Makefile. It has no
