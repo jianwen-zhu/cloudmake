@@ -1,0 +1,500 @@
+#!/usr/bin/env python3
+"""Small host-side launcher for cloudmake's Make engine."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+
+VERSION = "0.4.3"
+TOOL_ROOT = Path(__file__).resolve().parents[1]
+ENGINE = TOOL_ROOT / "Makefile"
+ALIASES = {
+    "colab": "colab-notebook",
+    "colab-notebook": "colab-notebook",
+    "kaggle": "kaggle-notebook",
+    "kaggle-notebook": "kaggle-notebook",
+    "codespaces": "codespaces-ssh",
+    "codespaces-ssh": "codespaces-ssh",
+    "colab-ssh": "colab-ssh",
+}
+BACKENDS = {
+    "colab-notebook": ("session", "native notebook API", "colab"),
+    "kaggle-notebook": ("batch", "private notebook job", "kaggle"),
+    "codespaces-ssh": ("session", "SSH and rsync", "gh"),
+    "colab-ssh": ("session", "paid-tier SSH and rsync", "colab"),
+}
+GPU_BACKENDS = {"colab-notebook", "kaggle-notebook", "colab-ssh"}
+ACTION_OPTIONS = {
+    "--backends": "backends",
+    "--collect": "collect",
+    "--doctor": "doctor",
+    "--fetch": "fetch",
+    "--help": "help",
+    "--open": "open",
+    "--shell": "shell",
+    "--start": "start",
+    "--status": "status",
+    "--stop": "stop",
+    "--sync": "sync",
+    "--sync-dry-run": "sync-dry-run",
+    "--version": "version",
+    "-V": "version",
+    "-h": "help",
+}
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.DOTALL)
+ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
+RESERVED_ASSIGNMENTS = {
+    "ARTIFACT_DIR",
+    "BACKEND",
+    "CLOUDMAKE_CACHE_ROOT",
+    "CLOUDMAKE_PROJECT_ARGS_B64",
+    "CLOUDMAKE_PROJECT_ROOT",
+    "CLOUDMAKE_STATE_ROOT",
+    "CLOUDMAKE_TOOL_ROOT",
+    "JOBS",
+    "PROJECT",
+    "PROJECT_DIR",
+    "PROJECT_MAKEFILE",
+    "PROJECT_SLUG",
+    "PYTHON_BIN",
+    "REMOTE_TARGET",
+    "REMOTE_TARGET_B64",
+    "REMOTE_COLLECT_DIR_B64",
+}
+
+
+class UsageError(RuntimeError):
+    pass
+
+
+def default_home(variable: str, xdg_variable: str, fallback: Path) -> Path:
+    if os.environ.get(variable):
+        return Path(os.environ[variable]).expanduser()
+    if os.environ.get(xdg_variable):
+        return Path(os.environ[xdg_variable]).expanduser() / "cloudmake"
+    return fallback.expanduser()
+
+
+def homes() -> tuple[Path, Path, Path]:
+    home = Path.home()
+    return (
+        default_home("CLOUDMAKE_CONFIG_HOME", "XDG_CONFIG_HOME", home / ".config/cloudmake"),
+        default_home(
+            "CLOUDMAKE_STATE_HOME", "XDG_STATE_HOME", home / ".local/state/cloudmake"
+        ),
+        default_home("CLOUDMAKE_CACHE_HOME", "XDG_CACHE_HOME", home / ".cache/cloudmake"),
+    )
+
+
+def project_key(project: Path) -> str:
+    material = f"{socket.gethostname()}\0{project}".encode(
+        "utf-8", errors="surrogateescape"
+    )
+    return hashlib.sha256(material).hexdigest()[:24]
+
+
+def project_slug(project: Path, key: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", project.name).strip("-.")
+    return f"{stem or 'project'}-{key[:8]}"
+
+
+def load_json(path: Path, *, optional: bool = True) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        if optional:
+            return {}
+        raise
+    except Exception as error:
+        raise UsageError(f"cloudmake configuration is corrupt: {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise UsageError(f"cloudmake configuration must be a JSON object: {path}")
+    return value
+
+
+def atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def canonical_backend(value: str) -> str:
+    try:
+        return ALIASES[value]
+    except KeyError as error:
+        choices = ", ".join(sorted(ALIASES))
+        raise UsageError(f"unknown backend {value!r}; choose one of: {choices}") from error
+
+
+def take_value(arguments: list[str], index: int, option: str) -> tuple[str, int]:
+    if index + 1 >= len(arguments):
+        raise UsageError(f"{option} requires a value")
+    return arguments[index + 1], index + 2
+
+
+def set_action(options: dict[str, Any], action: str) -> None:
+    current = options["action"]
+    if current is not None and current != action:
+        raise UsageError(f"cloud operation --{current} cannot be combined with --{action}")
+    options["action"] = action
+
+
+def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
+    options: dict[str, Any] = {
+        "action": None,
+        "backend": None,
+        "project": Path.cwd(),
+        "jobs": None,
+        "accelerator": None,
+        "accelerator_set": False,
+        "global": False,
+        "use_backend": None,
+        "verbose": False,
+    }
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            index += 1
+            break
+        if argument in ("-b", "--backend"):
+            options["backend"], index = take_value(arguments, index, argument)
+        elif argument.startswith("--backend="):
+            options["backend"] = argument.split("=", 1)[1]
+            index += 1
+        elif argument == "-C":
+            value, index = take_value(arguments, index, argument)
+            options["project"] = Path(value)
+        elif argument == "-j":
+            options["jobs"], index = take_value(arguments, index, argument)
+        elif argument.startswith("-j") and len(argument) > 2:
+            options["jobs"] = argument[2:]
+            index += 1
+        elif argument == "--gpu":
+            options["accelerator_set"] = True
+            options["accelerator"] = "T4"
+            index += 1
+        elif argument.startswith("--gpu="):
+            options["accelerator"] = argument.split("=", 1)[1] or "T4"
+            options["accelerator_set"] = True
+            index += 1
+        elif argument == "--cpu":
+            options["accelerator"] = ""
+            options["accelerator_set"] = True
+            index += 1
+        elif argument == "--verbose":
+            options["verbose"] = True
+            index += 1
+        elif argument == "--global":
+            options["global"] = True
+            index += 1
+        elif argument == "--use":
+            set_action(options, "use")
+            value, index = take_value(arguments, index, argument)
+            options["use_backend"] = canonical_backend(value)
+        elif argument in ACTION_OPTIONS:
+            set_action(options, ACTION_OPTIONS[argument])
+            index += 1
+        elif argument.startswith("-"):
+            raise UsageError(f"unknown cloudmake option: {argument}")
+        else:
+            break
+    return options, arguments[index:]
+
+
+def help_text(project: Path, backend: str) -> str:
+    return f"""cloudmake {VERSION}
+Project: {project}
+Backend: {backend}
+
+Usage: cloudmake [options] TARGET [NAME=value ...]
+
+Every positional name is passed unchanged to the project Makefile. Cloudmake
+reserves no project target names.
+
+Project options: -b BACKEND, -C DIR, -j N, --gpu[=TYPE], --cpu, --verbose
+Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
+                  --sync-dry-run, --status, --fetch, --open, --shell, --stop
+Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
+Information: --help, --version
+"""
+
+
+def show_backends() -> None:
+    print("BACKEND             LIFECYCLE  TRANSPORT                   HOST CLIENT")
+    for name, (lifecycle, transport, client) in BACKENDS.items():
+        installed = "found" if shutil.which(client) else "missing"
+        print(f"{name:19} {lifecycle:10} {transport:27} {client} ({installed})")
+
+
+def resolve_preferences(
+    project: Path, options: dict[str, Any], config_home: Path, key: str
+) -> tuple[str, str | None, bool]:
+    global_config = load_json(config_home / "config.json")
+    shared_config = load_json(project / ".cloudmake.json")
+    project_config = load_json(config_home / "projects" / f"{key}.json")
+
+    backend_value = (
+        options["backend"]
+        or os.environ.get("CLOUDMAKE_BACKEND")
+        or project_config.get("backend")
+        or shared_config.get("backend")
+        or global_config.get("backend")
+        or "colab-notebook"
+    )
+    backend = canonical_backend(str(backend_value))
+
+    if options["accelerator_set"]:
+        return backend, options["accelerator"], True
+    if "CLOUDMAKE_GPU" in os.environ:
+        return backend, os.environ["CLOUDMAKE_GPU"], True
+    for config in (project_config, shared_config, global_config):
+        if "accelerator" in config:
+            value = config["accelerator"]
+            if not isinstance(value, str):
+                raise UsageError("configured accelerator must be a string")
+            return backend, value, True
+    return backend, None, False
+
+
+def validate_project(project: Path) -> Path:
+    resolved = project.expanduser().resolve()
+    if not resolved.is_dir():
+        raise UsageError(f"project directory does not exist: {resolved}")
+    return resolved
+
+
+def validate_assignments(arguments: list[str]) -> None:
+    for argument in arguments:
+        if not ASSIGNMENT.match(argument):
+            raise UsageError(
+                f"unexpected argument {argument!r}; trailing arguments must be NAME=value"
+            )
+        name = argument.split("=", 1)[0]
+        if name in RESERVED_ASSIGNMENTS:
+            raise UsageError(f"{name} is managed by cloudmake and cannot be overridden here")
+
+
+def encoded_arguments(arguments: list[str]) -> str:
+    payload = json.dumps(arguments, ensure_ascii=False, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode("ascii")
+
+
+def encoded_value(value: str) -> str:
+    return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii")
+
+
+def collect_directory(value: str) -> str:
+    path = PurePosixPath(value)
+    if (
+        not value
+        or "\n" in value
+        or path.is_absolute()
+        or ".." in path.parts
+        or (not path.parts and value != ".")
+    ):
+        raise UsageError("collection directory must be a safe project-relative path")
+    return path.as_posix()
+
+
+def engine_command(
+    *,
+    project: Path,
+    backend: str,
+    accelerator: str | None,
+    accelerator_set: bool,
+    jobs: str | None,
+    verbose: bool,
+    state_home: Path,
+    cache_home: Path,
+    key: str,
+    target: str,
+    assignments: list[str],
+    remote_target: str | None = None,
+    remote_collect_dir: str | None = None,
+) -> int:
+    make = shutil.which("make")
+    if make is None:
+        raise UsageError("make was not found on PATH")
+    variables = [
+        f"CLOUDMAKE_TOOL_ROOT={TOOL_ROOT}",
+        f"PROJECT_DIR={project}",
+        f"CLOUDMAKE_PROJECT_ROOT={project}",
+        f"PROJECT={project.name}",
+        f"PROJECT_SLUG={project_slug(project, key)}",
+        "PROJECT_MAKEFILE=Makefile",
+        f"ARTIFACT_DIR={project / 'artifacts'}",
+        f"CLOUDMAKE_STATE_ROOT={state_home / 'projects' / key}",
+        f"CLOUDMAKE_CACHE_ROOT={cache_home / 'projects' / key}",
+        f"CLOUDMAKE_PROJECT_ARGS_B64={encoded_arguments(assignments)}",
+        f"BACKEND={backend}",
+        f"PYTHON_BIN={sys.executable}",
+    ]
+    if jobs is not None:
+        if not jobs.isdigit() or int(jobs) < 1:
+            raise UsageError("-j requires a positive integer")
+        variables.append(f"JOBS={jobs}")
+    if verbose:
+        variables.append("CLOUDMAKE_VERBOSE=1")
+    if accelerator_set:
+        variable = {
+            "colab-notebook": "COLAB_GPU",
+            "colab-ssh": "COLAB_GPU",
+            "kaggle-notebook": "KAGGLE_ACCELERATOR",
+        }.get(backend, "CLOUDMAKE_GPU")
+        variables.append(f"{variable}={accelerator or ''}")
+    if remote_target is not None:
+        variables.append(f"REMOTE_TARGET_B64={encoded_value(remote_target)}")
+    if remote_collect_dir is not None:
+        variables.append(
+            f"REMOTE_COLLECT_DIR_B64={encoded_value(remote_collect_dir)}"
+        )
+    command = [make, "--no-print-directory", "-f", os.fspath(ENGINE), *variables]
+    command.append(target)
+    if verbose:
+        print("+", " ".join(command), file=sys.stderr)
+    return subprocess.run(command, cwd=TOOL_ROOT, check=False).returncode
+
+
+def run(arguments: list[str]) -> int:
+    options, positional = parse_invocation(arguments)
+    project = validate_project(options["project"])
+    config_home, state_home, cache_home = homes()
+    key = project_key(project)
+    action = options["action"]
+
+    if action == "version":
+        if positional:
+            raise UsageError("--version does not accept arguments")
+        print(f"cloudmake {VERSION}")
+        return 0
+    if action == "backends":
+        if positional:
+            raise UsageError("--backends does not accept arguments")
+        show_backends()
+        return 0
+    if action == "use":
+        if positional:
+            raise UsageError("--use accepts its backend as an option value only")
+        if options["backend"] is not None:
+            raise UsageError("-b/--backend cannot be combined with --use")
+        backend = options["use_backend"]
+        accelerator_set = options["accelerator_set"]
+        accelerator = options["accelerator"]
+        if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
+            raise UsageError("invalid accelerator name")
+        if accelerator and backend not in GPU_BACKENDS:
+            raise UsageError(f"backend {backend!r} does not support accelerator requests")
+        path = (
+            config_home / "config.json"
+            if options["global"]
+            else config_home / "projects" / f"{key}.json"
+        )
+        saved = load_json(path)
+        saved["backend"] = backend
+        if accelerator_set:
+            saved["accelerator"] = accelerator or ""
+        if not options["global"]:
+            saved["project"] = os.fspath(project)
+        atomic_json(path, saved)
+        scope = "global" if options["global"] else project.name
+        accelerator_note = (
+            f", accelerator={accelerator or 'cpu'}" if accelerator_set else ""
+        )
+        print(f"Saved {scope} backend={backend}{accelerator_note}")
+        return 0
+    if options["global"]:
+        raise UsageError("--global is valid only with --use")
+
+    backend, accelerator, accelerator_set = resolve_preferences(
+        project, options, config_home, key
+    )
+    if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
+        raise UsageError("accelerator names may contain only letters, numbers, dot, dash, and underscore")
+    if accelerator and backend not in GPU_BACKENDS:
+        raise UsageError(f"backend {backend!r} does not support accelerator requests")
+    if action == "help" or (action is None and not positional):
+        if positional:
+            raise UsageError("--help does not accept arguments")
+        print(help_text(project, backend), end="")
+        return 0
+
+    if action is None:
+        remote_target, assignments = positional[0], positional[1:]
+        remote_collect_dir = None
+        engine_target = "dispatch"
+    elif action == "collect":
+        if len(positional) < 2:
+            raise UsageError("--collect requires a directory and project target")
+        remote_collect_dir = collect_directory(positional[0])
+        remote_target, assignments = positional[1], positional[2:]
+        engine_target = "collect"
+    else:
+        if positional:
+            raise UsageError(f"--{action} does not accept positional arguments")
+        remote_target = None
+        remote_collect_dir = None
+        assignments = []
+        engine_target = action
+
+    validate_assignments(assignments)
+    if remote_target is not None and (not remote_target or "\n" in remote_target):
+        raise UsageError("project targets must be non-empty and contain no newline")
+    if engine_target in {"dispatch", "collect"}:
+        if not (project / "Makefile").is_file():
+            raise UsageError(f"project Makefile was not found: {project / 'Makefile'}")
+
+    return engine_command(
+        project=project,
+        backend=backend,
+        accelerator=accelerator,
+        accelerator_set=accelerator_set,
+        jobs=options["jobs"],
+        verbose=options["verbose"],
+        state_home=state_home,
+        cache_home=cache_home,
+        key=key,
+        target=engine_target,
+        assignments=assignments,
+        remote_target=remote_target,
+        remote_collect_dir=remote_collect_dir,
+    )
+
+
+def main() -> int:
+    try:
+        return run(sys.argv[1:])
+    except UsageError as error:
+        print(f"cloudmake: {error}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("cloudmake: interrupted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

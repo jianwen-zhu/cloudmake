@@ -1,0 +1,102 @@
+# Security model
+
+Cloudmake is a source-transfer and remote-execution tool. It reduces accidental
+credential coupling, but it does not turn a cloud VM, private notebook, or
+unlisted URL into trusted secret storage.
+
+## Trust boundaries
+
+The selected local source is uploaded to a third-party provider and executed in
+that provider's environment. Review its retention, privacy, billing, and abuse
+policies before using non-public source or data. Stopping compute does not
+necessarily delete notebook history, VM storage, logs, output, or account
+metadata.
+
+Provider output is untrusted input when it returns to the host. Cloudmake
+validates artifact archive members and replaces the local artifact directory
+transactionally, but users must still treat produced executables and data as
+code and content generated in a remote environment.
+
+## Credentials
+
+Authentication remains owned by the official provider clients:
+
+- the Colab CLI owns Google authorization and session credentials;
+- the Kaggle CLI owns Kaggle authentication;
+- the GitHub CLI and OpenSSH own Codespaces authentication and keys.
+
+Cloudmake does not store provider passwords, OAuth tokens, personal access
+tokens, or SSH private keys. It does not forward GitHub credentials merely to
+build a project.
+
+The Codespaces anchor checkout and uploaded project are separate. The anchor
+repository provisions a VM; cloudmake does not use its repository token to
+clone, commit, or push the actual project.
+
+## Source hygiene
+
+Never put credentials, private keys, API tokens, build secrets, or sensitive
+datasets in synchronized source. Use `.cloudmakeignore` to exclude local files
+that never belong on a provider:
+
+```text
+.env
+keys/
+private-data/
+```
+
+This is a convenience boundary, not a secrets manager. Review the effective
+selection with `cloudmake --sync-dry-run` before the first upload and after changing
+exclusions.
+
+A private provider notebook, unlisted Gist, archive URL, or hard-to-guess
+identifier still grants access through an account or possession of a link. None
+should be used as a credential store.
+
+If a remote build legitimately requires a secret, inject it through a
+provider-supported secret facility at execution time. Do not place it in the
+source tree, Make command line, generated notebook, project configuration, or
+downloaded logs.
+
+## Workspace provenance
+
+Reusable workspaces contain an owner record derived from the canonical local
+project path and host. This is diagnostic provenance used to prevent accidental
+workspace reuse before destructive synchronization. It contains no provider
+credential, but it reveals that local path and hostname to the selected remote
+workspace or private notebook.
+
+Intentional ownership changes require `CLOUDMAKE_ADOPT=1`. Verify the old owner
+before adoption; the control protects against mistakes, not against a malicious
+user who already controls the same cloud account and workspace.
+
+## Archive and filesystem safety
+
+Source and artifact archives reject absolute paths, traversal outside the
+destination, unsafe symbolic or hard links, and special files. Source replacement
+and artifact retrieval use staging directories so failed validation preserves
+the prior valid tree.
+
+Source symbolic links may not escape the local project. SSH synchronization
+checks remote ownership before allowing `rsync --delete`. These controls protect
+filesystem boundaries during normal operation; they do not sandbox arbitrary
+commands in a project's Makefile.
+
+## Execution and supply chain
+
+Cloudmake invokes the project's Makefile and therefore grants its recipes the
+permissions of the selected cloud account and remote VM. Review an unfamiliar
+project before running it. The same applies to compilers, package managers,
+downloaded dependencies, container images, and provider base images used by a
+build.
+
+Pin important dependencies where reproducibility matters. Do not assume that a
+free notebook runtime, accelerator driver, or preinstalled package set remains
+stable between sessions.
+
+## Reporting a security issue
+
+Do not include live credentials, private source, or provider tokens in an issue
+or test fixture. A useful report includes the backend, lifecycle step, sanitized
+provider response, expected boundary, and a minimal reproduction using dummy
+files or fake-provider tests.
