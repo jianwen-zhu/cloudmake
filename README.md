@@ -1,5 +1,7 @@
 # cloudmake
 
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 `cloudmake` makes modern cloud hardware feel like a familiar local build target.
 Its primary objective is to make a locally executable, Make-based project work
 on accessible cloud hardware—including free-tier services—unmodified. The
@@ -732,3 +734,7 @@ Provider quotas, accelerator availability, images, authentication policies, and
 billing remain external constraints. Future providers should be added as new
 backends against the [backend contract](docs/backend-contract.md), without
 changing the project Make surface.
+
+## License
+
+Cloudmake is licensed under the [Apache License 2.0](LICENSE).
