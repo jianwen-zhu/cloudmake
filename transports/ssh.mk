@@ -11,8 +11,10 @@ BACKEND_PREREQUISITE ?=
 BACKEND_START ?= :
 BACKEND_STATUS ?= :
 BACKEND_STOP ?= :
+BACKEND_STOP_PREREQUISITE ?= doctor
 BACKEND_REMOTE_REQUIRED_COMMANDS ?= make rsync tar
 REMOTE_MAKEFILE ?= $(PROJECT_MAKEFILE)
+SSH_REFRESH_MESSAGE ?= SSH connection failed; refreshing generated configuration once.
 
 # SSH_HOST may be discovered from a configuration file generated as a target
 # prerequisite. Keep this recursive so it is resolved after that file exists.
@@ -33,7 +35,7 @@ endif
 help:
 	@echo 'Usage: make BACKEND=<name> <target>'
 	@echo 'Notebook backends: colab-notebook (default), kaggle-notebook'
-	@echo 'SSH backends: colab-ssh, codespaces-ssh, lightning-studio-ssh'
+	@echo 'SSH backends: colab-ssh, codespaces-ssh, lab-ssh, lightning-studio-ssh'
 	@echo
 	@echo 'Engine operations: start status stop sync collect fetch shell'
 	@echo '                   sync-dry-run prerequisites doctor backend-info'
@@ -51,7 +53,7 @@ status: doctor
 			rm -f "$$temporary"; \
 		else code=$$?; cat "$$temporary"; rm -f "$$temporary"; exit $$code; fi
 
-stop: doctor
+stop: $(BACKEND_STOP_PREREQUISITE)
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _ssh-stop
 
 sync: doctor
@@ -80,7 +82,7 @@ _ssh-backend-start: ensure-owner
 
 _ssh-start: ensure-owner $(BACKEND_PREREQUISITE)
 	@if ! $(SSH) true; then \
-		echo '[cloudmake] SSH connection failed; refreshing generated configuration once.' >&2; \
+		echo '[cloudmake] $(SSH_REFRESH_MESSAGE)' >&2; \
 		$(MAKE) --no-print-directory refresh-ssh-config; \
 		$(SSH) true; \
 	fi

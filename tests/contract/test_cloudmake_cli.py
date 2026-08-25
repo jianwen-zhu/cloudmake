@@ -162,6 +162,7 @@ def test_use_persists_canonical_backend_outside_project(
         ("kaggle", "kaggle-notebook"),
         ("codespaces", "codespaces-ssh"),
         ("colab-ssh", "colab-ssh"),
+        ("lab", "lab-ssh"),
         ("lightning", "lightning-studio-ssh"),
     ],
 )
@@ -405,9 +406,11 @@ def test_cloud_operations_reject_trailing_project_arguments(
     [
         ("-b", "codespaces", "--gpu=T4", "build"),
         ("--use", "codespaces", "--gpu=T4"),
+        ("-b", "lab", "--gpu=T4", "build"),
+        ("--use", "lab", "--gpu=T4"),
     ],
 )
-def test_gpu_request_is_rejected_for_cpu_only_backend(
+def test_accelerator_request_is_rejected_when_backend_cannot_select_hardware(
     tmp_path: Path, fake_bin: Path, arguments: tuple[str, ...]
 ) -> None:
     project = make_project(tmp_path / "project")

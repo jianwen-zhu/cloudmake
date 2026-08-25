@@ -27,7 +27,7 @@ Provider notebooks, transfer logic, session metadata, and generated control file
 belong to the cloudmake tool, not to the project.
 
 > [!IMPORTANT]
-> The five documented backends and the external-project `cloudmake` launcher are
+> The six documented backends and the external-project `cloudmake` launcher are
 > implemented. The regression suite uses offline provider doubles; configure and
 > verify your own account with `cloudmake --doctor` before allocating compute.
 
@@ -87,7 +87,7 @@ cloudmake: accelerator-cloud adapter for arbitrary project targets
     |
     +-- native notebook API --> Colab or Kaggle
     |
-    `-- SSH + rsync ----------> Codespaces, paid Colab, or Lightning Studios
+    `-- SSH + rsync ----------> Codespaces, paid Colab, Lightning, or a lab host
                                   |
                                   v
                          evolving GPU/accelerator hardware
@@ -282,8 +282,9 @@ command line
 
 Cloudmake does not store provider passwords, OAuth tokens, personal access tokens,
 or SSH private keys. Authentication remains owned by the `colab`, `kaggle`,
-`gh`, and `lightning` clients. Source archives and private notebook versions
-must not be treated as secret storage. See the
+`gh`, and `lightning` clients or by the user's existing OpenSSH configuration
+for a lab host. Source archives and private notebook versions must not be
+treated as secret storage. See the
 [security model](docs/security.md) for the complete trust boundary.
 
 ### Backend naming
@@ -296,6 +297,7 @@ Short names are for people; canonical names describe the transport unambiguously
 | `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
 | `codespaces` | `codespaces-ssh` | SSH and rsync |
 | `colab-ssh` | `colab-ssh` | SSH and rsync |
+| `lab` | `lab-ssh` | User-managed SSH and rsync |
 | `lightning` | `lightning-studio-ssh` | SSH and rsync |
 
 `colab` always means native notebook access. It never silently changes to SSH.
@@ -310,7 +312,7 @@ Cloudmake targets macOS and Linux. The common host needs:
 - GNU Make or a compatible Make implementation
 - `tar`
 - Python 3 for the current notebook helpers
-- One provider CLI from the backend sections below
+- One provider CLI where the selected backend requires one
 - OpenSSH and `rsync` only for SSH backends
 
 The remote environment needs Make and whatever compiler, runtime, libraries, and
@@ -462,6 +464,9 @@ cloudmake benchmark DATASET=small DEBUG=1
 
 # Open a real remote terminal where the backend permits SSH.
 cloudmake -b codespaces --shell
+
+# Run a project-provided benchmark target on an existing lab host.
+LAB_HOST=lab-gpu cloudmake -b lab benchmark
 
 # Explicitly release a reusable Colab session.
 cloudmake -b colab --stop
@@ -677,6 +682,52 @@ but it cannot prove paid SSH entitlement or positive compute balance without
 attempting a runtime connection. That final check therefore occurs only when an
 operational SSH command is requested.
 
+### User-managed lab SSH backend
+
+Use `lab` when the remote machine already exists and you can reach it through
+OpenSSH—for example, a university lab server, an organization workstation, or a
+shared GPU machine. Cloudmake treats that machine as an execution surface only.
+It never provisions, configures, starts, stops, or changes the hardware or
+software capabilities of the host.
+
+Prerequisites:
+
+1. Local OpenSSH, `rsync`, and Python 3.
+2. Remote Make, `rsync`, and `tar`, plus the compiler, runtime, libraries, and
+   drivers required by the project.
+3. A simple OpenSSH `Host` alias in `~/.ssh/config`. Put the username, key,
+   jump host, port, and other connection details there rather than in Cloudmake:
+
+   ```sshconfig
+   Host lab-gpu
+       HostName gpu42.example.edu
+       User researcher
+       IdentityFile ~/.ssh/id_ed25519
+       ProxyJump lab-gateway
+   ```
+
+Verify that alias independently, then select it for Cloudmake:
+
+```sh
+ssh lab-gpu true
+export LAB_HOST=lab-gpu
+cloudmake -b lab --doctor
+cloudmake --use lab
+# PROJECT_TARGET must be provided by the project's Makefile.
+cloudmake PROJECT_TARGET
+```
+
+Source is synchronized incrementally under `.cloudmake/` in the configured
+remote user's login home. `--start` validates the existing connection,
+`--status` checks reachability, and `--stop` deliberately reports a no-op because
+the machine is user-managed. `--gpu` is not accepted: Cloudmake uses whatever
+hardware the selected host already provides and does not alter it.
+
+Cloudmake passes only the `LAB_HOST` alias to `ssh` and `rsync`. It neither reads
+nor copies SSH keys, agents, certificates, or configuration into project or tool
+state. Authentication, host verification, jump-host policy, and key management
+remain entirely under OpenSSH and the lab administrator.
+
 ### Lightning Studio SSH backend
 
 Lightning Studios provide a persistent development filesystem with CPU and GPU
@@ -755,6 +806,7 @@ project target requests a machine.
 | `kaggle-notebook` | Fresh batch VM per target | Source embedded in private notebook | Kaggle kernel version | No |
 | `codespaces-ssh` | Reusable quota-backed VM | Incremental rsync over SSH | Remote Make | Yes |
 | `colab-ssh` | Reusable paid Colab VM | Incremental rsync over SSH | Remote Make | Yes |
+| `lab-ssh` | Existing user-managed host | Incremental rsync over SSH | Remote Make | Yes |
 | `lightning-studio-ssh` | Persistent quota/credit-backed Studio | Incremental rsync over SSH | Remote Make | Yes |
 
 The backends intentionally converge at the project Makefile, not at their
@@ -837,9 +889,9 @@ documents before using private source or diagnosing a failure:
 
 The default test suite is offline by design. It never connects to a cloud
 account or allocates compute. Integration tests place fake `colab`, `kaggle`,
-`gh`, `ssh`, and `rsync` executables at the front of `PATH`, then exercise the
-real Makefiles, transports, notebooks, and Python helpers against temporary
-projects.
+`gh`, `lightning`, `ssh`, and `rsync` executables at the front of `PATH`, then
+exercise the real Makefiles, transports, notebooks, and Python helpers against
+temporary projects.
 
 Install the test dependency and run the suite:
 
@@ -848,7 +900,7 @@ python3 -m pip install -r requirements-test.txt
 python3 -m pytest
 ```
 
-The suite covers portable Make behavior, all five backends, source selection,
+The suite covers portable Make behavior, all six backends, source selection,
 provider lifecycle and failures, prerequisites, ownership, locks, status
 normalization, and transactional source and artifact handling. Fake-provider
 tests also assert architecture boundaries such as no SSH in the native Colab
@@ -875,8 +927,8 @@ commands.
 ## Project status
 
 The existing Colab notebook, Kaggle notebook, Codespaces SSH, paid Colab SSH,
-and Lightning Studio SSH backends implement the documented launcher,
-external-project, arbitrary-target,
+user-managed lab SSH, and Lightning Studio SSH backends implement the documented
+launcher, external-project, arbitrary-target,
 incremental synchronization, artifact retrieval, prerequisite, ownership,
 locking, and recovery contracts. `--collect DIR TARGET` performs target-agnostic
 remote export and safe artifact retrieval as one operation; `--fetch` can

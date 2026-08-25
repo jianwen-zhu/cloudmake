@@ -41,6 +41,8 @@ ALIASES = {
     "codespaces": "codespaces-ssh",
     "codespaces-ssh": "codespaces-ssh",
     "colab-ssh": "colab-ssh",
+    "lab": "lab-ssh",
+    "lab-ssh": "lab-ssh",
     "lightning": "lightning-studio-ssh",
     "lightning-studio-ssh": "lightning-studio-ssh",
 }
@@ -49,6 +51,7 @@ BACKENDS = {
     "kaggle-notebook": ("batch", "private notebook job", "kaggle"),
     "codespaces-ssh": ("session", "SSH and rsync", "gh"),
     "colab-ssh": ("session", "paid-tier SSH and rsync", "colab"),
+    "lab-ssh": ("session", "user-managed SSH and rsync", "ssh"),
     "lightning-studio-ssh": ("session", "persistent Studio SSH and rsync", "lightning"),
 }
 GPU_BACKENDS = {

@@ -335,6 +335,11 @@ from pathlib import Path
 with Path(os.environ["FAKE_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(["ssh", *sys.argv[1:]]) + "\n")
 joined = " ".join(sys.argv[1:])
+if sys.argv[1:] == ["-V"]:
+    print("OpenSSH_9.9 test")
+if os.environ.get("FAKE_SSH_AUTH_FAIL") and "BatchMode=yes" in joined:
+    print("Permission denied")
+    raise SystemExit(1)
 if os.environ.get("FAKE_REMOTE_MISSING"):
     if "command -v" in joined and os.environ["FAKE_REMOTE_MISSING"] in joined:
         raise SystemExit(1)
@@ -351,6 +356,8 @@ if "tar -C" in joined and ".cloudmake-artifacts.tar.gz" in joined:
             member = tarfile.TarInfo("hello")
             member.size = len(payload)
             archive.addfile(member, io.BytesIO(payload))
+if "printf 'running" in joined:
+    print("running")
 ''',
     )
     write_executable(
@@ -517,6 +524,70 @@ def test_launcher_runs_external_project_through_codespaces_ssh(
     assert "'MESSAGE=hello world'" in remote_commands
     assert "git clone" not in json.dumps(all_calls)
     assert not (project / ".cloud-state").exists()
+
+
+@pytest.mark.integration
+def test_launcher_runs_external_project_through_user_managed_lab_ssh(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    project = external_project(tmp_path / "external-lab")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["LAB_HOST"] = "lab-gpu"
+
+    run_command(
+        [LAUNCHER, "-b", "lab", "benchmark", "MESSAGE=hello world"],
+        cwd=project,
+        env=env,
+    )
+
+    all_calls = calls(Path(env["FAKE_LOG"]))
+    assert any(
+        call[0] == "ssh"
+        and "-o" in call
+        and "BatchMode=yes" in call
+        and "lab-gpu" in call
+        and call[-1] == "true"
+        for call in all_calls
+    )
+    assert any(call[0] == "rsync" and f"{project}/" in call for call in all_calls)
+    assert any(
+        call[0] == "rsync"
+        and any(
+            argument.startswith("lab-gpu:.cloudmake/")
+            and argument.endswith("/src/")
+            for argument in call[1:]
+        )
+        for call in all_calls
+    )
+    assert not any(call[0] in {"colab", "gh", "kaggle", "lightning"} for call in all_calls)
+    assert "git clone" not in json.dumps(all_calls)
+    assert not list((tmp_path / "state").rglob("ssh_config"))
+    assert not (project / ".cloud-state").exists()
+
+
+@pytest.mark.integration
+def test_lab_status_and_stop_preserve_user_managed_lifecycle(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+
+    status = run_command(
+        ["make", "BACKEND=lab-ssh", "LAB_HOST=lab-gpu", "status"],
+        cwd=prototype,
+        env=env,
+    )
+    assert "[cloudmake] status=ready" in status.stdout
+
+    Path(env["FAKE_LOG"]).write_text("", encoding="utf-8")
+    stopped = run_command(
+        ["make", "BACKEND=lab-ssh", "LAB_HOST=lab-gpu", "stop"],
+        cwd=prototype,
+        env=env,
+    )
+    assert "user-managed" in stopped.stdout
+    assert calls(Path(env["FAKE_LOG"]), "ssh") == []
 
 
 @pytest.mark.integration
@@ -1030,6 +1101,7 @@ def test_help_keeps_notebook_and_ssh_names_distinct(prototype: Path) -> None:
     assert "kaggle-notebook" in result.stdout
     assert "colab-ssh" in result.stdout
     assert "codespaces-ssh" in result.stdout
+    assert "lab-ssh" in result.stdout
     assert "lightning-studio-ssh" in result.stdout
 
 
@@ -1040,6 +1112,7 @@ def test_help_keeps_notebook_and_ssh_names_distinct(prototype: Path) -> None:
         "kaggle-notebook",
         "codespaces-ssh",
         "colab-ssh",
+        "lab-ssh",
         "lightning-studio-ssh",
     ],
 )
@@ -1065,6 +1138,7 @@ def test_engine_defines_no_project_target_shortcuts(
         ("kaggle-notebook", "batch", "batch"),
         ("codespaces-ssh", "session", "shell"),
         ("colab-ssh", "session", "gpu"),
+        ("lab-ssh", "session", "incremental-sync"),
         ("lightning-studio-ssh", "session", "persistent-storage"),
     ],
 )
@@ -1108,6 +1182,7 @@ def test_ssh_remote_prerequisite_failure_blocks_sync(
         ("kaggle-notebook", "KAGGLE_BIN=missing-kaggle-for-test", "missing-kaggle-for-test"),
         ("codespaces-ssh", "GH_BIN=missing-gh-for-test", "missing-gh-for-test"),
         ("colab-ssh", "COLAB_BIN=missing-colab-for-test", "missing-colab-for-test"),
+        ("lab-ssh", "SSH_BIN=missing-ssh-for-test", "missing-ssh-for-test"),
         ("lightning-studio-ssh", "LIGHTNING_BIN=missing-lightning-for-test", "missing-lightning-for-test"),
     ],
 )
@@ -1131,6 +1206,7 @@ def test_prerequisites_reports_missing_backend_command(
         ("kaggle-notebook", [], "KAGGLE_USERNAME"),
         ("codespaces-ssh", [], "CODESPACE"),
         ("colab-ssh", ["COLAB_IDENTITY=/does/not/exist"], "COLAB_IDENTITY"),
+        ("lab-ssh", [], "LAB_HOST"),
         (
             "lightning-studio-ssh",
             [
@@ -1165,6 +1241,29 @@ def test_prerequisites_reports_missing_backend_setting(
 
     assert result.returncode == 2
     assert expected in result.stdout
+
+
+def test_lab_prerequisites_requires_a_simple_openssh_alias(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+
+    result = run_command(
+        [
+            "make",
+            "BACKEND=lab-ssh",
+            "LAB_HOST=researcher@lab.example --bad-option",
+            "prerequisites",
+        ],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "LAB_HOST must be a simple OpenSSH Host alias" in result.stdout
+    assert calls(Path(env["FAKE_LOG"]), "ssh") == []
 
 
 @pytest.mark.parametrize(
@@ -1208,6 +1307,7 @@ def test_kaggle_prerequisites_reject_invalid_timing_settings(
         ("colab-notebook", [], "colab"),
         ("kaggle-notebook", ["KAGGLE_USERNAME=tester"], "kaggle"),
         ("codespaces-ssh", ["CODESPACE=test-space"], "gh"),
+        ("lab-ssh", ["LAB_HOST=lab-gpu"], "ssh"),
     ],
 )
 def test_doctor_performs_read_only_provider_probe(
@@ -1372,6 +1472,7 @@ def test_operational_target_is_gated_before_missing_provider_is_executed(
         ("colab-notebook", [], "FAKE_COLAB_AUTH_FAIL", '"new"'),
         ("kaggle-notebook", ["KAGGLE_USERNAME=tester"], "FAKE_KAGGLE_AUTH_FAIL", '"push"'),
         ("codespaces-ssh", ["CODESPACE=test-space"], "FAKE_GH_AUTH_FAIL", '"ssh", "--config"'),
+        ("lab-ssh", ["LAB_HOST=lab-gpu"], "FAKE_SSH_AUTH_FAIL", '"rsync"'),
     ],
 )
 def test_authentication_failure_blocks_provider_operation(
