@@ -734,10 +734,11 @@ vendoring either repository. A second, explicitly enabled gate runs both
 overlays on temporary Colab T4 sessions. See [`tests/README.md`](tests/README.md)
 for the commands and allocation warning.
 
-GitHub Actions runs the offline suite on Linux and macOS, checks syntax and
-notebook structure, exercises pinned upstream CUDA projects weekly, and exposes
-an approval-gated live Colab workflow. Stable version tags produce checksummed
-source releases only after the offline suite passes again.
+GitHub Actions runs only credential-free automation: the offline suite on Linux
+and macOS, syntax and notebook checks, and weekly pinned-upstream CUDA project
+tests that do not allocate cloud compute. Live provider gates run only from a
+locally authenticated host. Stable version tags produce checksummed source
+releases only after the offline suite passes again.
 
 `tests/contract/` exercises the public launcher behavior. It specifies backend
 aliases, configuration precedence, external project state, `-C`, arbitrary

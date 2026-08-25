@@ -3,6 +3,15 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## 0.5.1 - 2026-08-25
+
+- Remove the hosted live-Colab workflow and its GitHub-secret credential-copy
+  path. Live provider gates now run only from a locally authenticated host.
+- Add a regression assertion that GitHub workflows never reference repository
+  or environment secrets.
+- Clarify that Cloudmake delegates authentication to local provider clients and
+  never exports, reconstructs, or stores their credentials in hosted CI.
+
 ## 0.5.0 - 2026-08-25
 
 - Install the complete Cloudmake runtime instead of only the launcher.

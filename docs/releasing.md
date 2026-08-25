@@ -21,11 +21,13 @@ The release workflow verifies that the tag matches `VERSION`, reruns the offline
 suite, creates a reproducible source archive with `make dist`, writes its SHA-256
 checksum, and publishes both files in a GitHub release.
 
-## Live Colab workflow
+## Live provider gates
 
-The GitHub `live-colab` environment should require maintainer approval. Its
-`COLAB_CONFIG_TAR_GZ_B64` secret is a base64-encoded tarball whose paths are
-relative to the maintainer's home directory and contain only the Colab CLI
-configuration needed by `colab sessions`. Rotate or remove the secret if account
-access changes. Running the live gate locally on an authenticated workstation is
-preferred when practical.
+Run live provider gates from a maintainer workstation using the provider CLI's
+existing local authentication. Cloudmake release automation must never export,
+upload, reconstruct, or store provider configuration, OAuth tokens, API tokens,
+or SSH keys in GitHub Actions secrets or hosted runners.
+
+Hosted CI remains credential-free and uses provider doubles or public,
+non-allocating compatibility checks. A live gate is therefore a documented local
+release step, not a GitHub Actions job.

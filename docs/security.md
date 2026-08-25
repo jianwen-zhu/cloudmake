@@ -29,6 +29,11 @@ Cloudmake does not store provider passwords, OAuth tokens, personal access
 tokens, or SSH private keys. It does not forward GitHub credentials merely to
 build a project.
 
+This boundary also applies to Cloudmake's own automation. Hosted CI must never
+receive a copy of a maintainer's provider configuration or credentials. Live
+provider regressions run only from an already authenticated local host; hosted
+CI uses credential-free provider doubles and public compatibility checks.
+
 The Codespaces anchor checkout and uploaded project are separate. The anchor
 repository provisions a VM; cloudmake does not use its repository token to
 clone, commit, or push the actual project.

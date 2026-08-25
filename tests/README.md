@@ -43,24 +43,22 @@ This invokes `tests/real_projects/prepare.sh`, which prints the two prepared
 project directories. The clones are revision-pinned so an upstream change cannot
 silently alter a regression run.
 
-The live Colab gate is intentionally more explicit because it allocates GPU
-compute and uses the current Colab credentials. It clones both projects, runs the
-overlaid `run` targets on separate T4 sessions, and stops each session in a
-`finally` block:
+The live Colab gate is intentionally local-only because it allocates GPU compute
+through the workstation's existing Colab CLI authentication. It clones both
+projects, runs the overlaid `run` targets on separate T4 sessions, and stops each
+session in a `finally` block:
 
 ```sh
 CLOUDMAKE_TEST_LIVE_COLAB=1 python3 -m pytest \
   tests/test_real_github_projects.py -m live_cloud
 ```
 
-The repository also provides three automation layers:
+Do not copy Colab configuration or tokens into GitHub Actions. The repository
+provides two credential-free hosted automation layers:
 
 - `CI` runs the offline suite on supported macOS/Linux and Python combinations;
 - `Upstream compatibility` runs the pinned public CUDA projects weekly or on
-  demand without allocating cloud compute;
-- `Live Colab regression` requires a typed confirmation, approval of the
-  `live-colab` GitHub environment, and the `COLAB_CONFIG_TAR_GZ_B64` secret
-  described in `docs/releasing.md`.
+  demand without allocating cloud compute.
 
 `tests/contract/` exercises the public `cloudmake` launcher interface, including
 configuration precedence, aliases, external project isolation, arbitrary target
