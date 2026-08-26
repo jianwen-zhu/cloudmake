@@ -34,6 +34,7 @@ endif
 
 help:
 	@echo 'Usage: make BACKEND=<name> <target>'
+	@echo 'Local backend: local (direct project Make invocation)'
 	@echo 'Notebook backends: colab-notebook (default), kaggle-notebook'
 	@echo 'SSH backends: colab-ssh, codespaces-ssh, host-ssh, lightning-studio-ssh'
 	@echo

@@ -16,6 +16,7 @@ KAGGLE_ACCELERATOR_OPTION := $(if $(strip $(KAGGLE_ACCELERATOR)),--accelerator $
 help:
 	@echo 'Usage: make BACKEND=kaggle-notebook KAGGLE_USERNAME=<name> <target>'
 	@echo 'Transport: private Kaggle notebook versions (fresh batch VM per run)'
+	@echo 'Local backend: local (direct project Make invocation)'
 	@echo
 	@echo 'Targets:'
 	@echo '  prerequisites  Check required local commands and settings'

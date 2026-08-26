@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ VERSION = (TOOL_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ENGINE = TOOL_ROOT / "Makefile"
 HOST_TEMPLATE_DIR = TOOL_ROOT / "host-templates"
 ALIASES = {
+    "local": "local",
     "colab": "colab-notebook",
     "colab-notebook": "colab-notebook",
     "kaggle": "kaggle-notebook",
@@ -48,6 +50,7 @@ ALIASES = {
     "lightning-studio-ssh": "lightning-studio-ssh",
 }
 BACKENDS = {
+    "local": ("local", "direct Make invocation", "make"),
     "colab-notebook": ("session", "native notebook API", "colab"),
     "kaggle-notebook": ("batch", "private notebook job", "kaggle"),
     "codespaces-ssh": ("session", "SSH and rsync", "gh"),
@@ -595,6 +598,80 @@ def engine_command(
     return subprocess.run(command, cwd=TOOL_ROOT, check=False).returncode
 
 
+def local_make_command(
+    *,
+    project: Path,
+    target: str,
+    assignments: list[str],
+    jobs: str | None,
+    verbose: bool,
+) -> int:
+    """Invoke the project Makefile directly, without the backend engine."""
+    make = shutil.which("make")
+    if make is None:
+        raise UsageError("make was not found on PATH")
+    command = [make, "-f", "Makefile"]
+    if jobs is not None:
+        if not jobs.isdigit() or int(jobs) < 1:
+            raise UsageError("-j requires a positive integer")
+        command.extend(["-j", jobs])
+    command.extend([target, *assignments])
+    if verbose:
+        print("+", " ".join(command), file=sys.stderr)
+    return subprocess.run(command, cwd=project, check=False).returncode
+
+
+def collect_local_artifacts(
+    *,
+    project: Path,
+    directory: str,
+    state_root: Path,
+    run_id: str,
+    verbose: bool,
+) -> int:
+    """Materialize a local project directory through the normal safe extractor."""
+    source = project / directory
+    if source.is_symlink() or not source.is_dir():
+        print(
+            f"cloudmake: collection directory was not produced as a directory: {source}",
+            file=sys.stderr,
+        )
+        return 2
+
+    archive_directory = state_root / "local" / "collections"
+    archive_directory.mkdir(parents=True, exist_ok=True)
+    archive = archive_directory / f"{run_id}.tar.gz"
+    temporary = archive_directory / f".{run_id}.tar.gz.tmp"
+    try:
+        with tarfile.open(temporary, "w:gz", dereference=False) as bundle:
+            bundle.add(source, arcname=".")
+        os.replace(temporary, archive)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    command = [
+        sys.executable,
+        os.fspath(TOOL_ROOT / "tools" / "safe_extract.py"),
+        "--archive",
+        os.fspath(archive),
+        "--destination",
+        os.fspath(project / "artifacts"),
+    ]
+    limits = {
+        "ARTIFACT_MAX_FILES": "--max-files",
+        "ARTIFACT_MAX_MB": "--max-total-mb",
+        "ARTIFACT_MAX_FILE_MB": "--max-file-mb",
+        "ARTIFACT_MAX_ARCHIVE_MB": "--max-archive-mb",
+        "ARTIFACT_MAX_RATIO": "--max-ratio",
+    }
+    for variable, option in limits.items():
+        if variable in os.environ:
+            command.extend([option, os.environ[variable]])
+    if verbose:
+        print("+", " ".join(command), file=sys.stderr)
+    return subprocess.run(command, cwd=project, check=False).returncode
+
+
 def run(arguments: list[str]) -> int:
     options, positional = parse_invocation(arguments)
     project = validate_project(options["project"])
@@ -757,30 +834,50 @@ def run(arguments: list[str]) -> int:
         record["host"] = ssh_host
     atomic_json(record_path, record)
     try:
-        exit_code = engine_command(
-            project=project,
-            backend=backend,
-            accelerator=accelerator,
-            accelerator_set=accelerator_set,
-            ssh_host=ssh_host,
-            jobs=options["jobs"],
-            verbose=options["verbose"],
-            state_home=state_home,
-            cache_home=cache_home,
-            key=key,
-            target=engine_target,
-            assignments=assignments,
-            remote_target=remote_target,
-            remote_collect_dir=remote_collect_dir,
-            run_id=run_id,
-        )
+        if backend == "local":
+            exit_code = local_make_command(
+                project=project,
+                target=remote_target,
+                assignments=assignments,
+                jobs=options["jobs"],
+                verbose=options["verbose"],
+            )
+            if exit_code == 0 and engine_target == "collect":
+                exit_code = collect_local_artifacts(
+                    project=project,
+                    directory=remote_collect_dir,
+                    state_root=state_root,
+                    run_id=run_id,
+                    verbose=options["verbose"],
+                )
+        else:
+            exit_code = engine_command(
+                project=project,
+                backend=backend,
+                accelerator=accelerator,
+                accelerator_set=accelerator_set,
+                ssh_host=ssh_host,
+                jobs=options["jobs"],
+                verbose=options["verbose"],
+                state_home=state_home,
+                cache_home=cache_home,
+                key=key,
+                target=engine_target,
+                assignments=assignments,
+                remote_target=remote_target,
+                remote_collect_dir=remote_collect_dir,
+                run_id=run_id,
+            )
     except BaseException:
         record.update(status="interrupted", finished_at=utc_timestamp())
         atomic_json(record_path, record)
         atomic_json(runs / "latest.json", record)
         raise
 
-    resource_id, source = newest_source_manifest(state_root, backend, manifest_before)
+    if backend == "local":
+        resource_id, source = os.fspath(project), {"mode": "local-working-tree"}
+    else:
+        resource_id, source = newest_source_manifest(state_root, backend, manifest_before)
     record.update(
         status="succeeded" if exit_code == 0 else "failed",
         exit_code=exit_code,

@@ -1,8 +1,9 @@
 # Backend contract
 
-Cloudmake backends adapt different provider lifecycles and transports to one
-execution model: synchronize a local working tree, invoke an ordinary Make
-target remotely, and retrieve output. This document is for cloudmake backend
+Cloudmake backends adapt local execution and different provider lifecycles and
+transports to one execution model: invoke an ordinary Make target against the
+selected working tree and optionally retrieve output. Remote backends synchronize
+the local tree first. This document is for cloudmake backend
 authors and maintainers. Project developers should instead read the
 [project contract](project-contract.md).
 
@@ -31,6 +32,7 @@ User aliases are short; canonical names identify transport explicitly:
 
 | User alias | Canonical backend | Transport |
 | --- | --- | --- |
+| `local` | `local` | Direct project Make invocation |
 | `colab` | `colab-notebook` | Native Colab contents and kernel APIs |
 | `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
 | `codespaces` | `codespaces-ssh` | SSH and rsync |
@@ -47,7 +49,7 @@ Each backend declares:
 
 - the supported backend API version;
 - a canonical backend name;
-- a lifecycle, either `session` or `batch`;
+- a lifecycle: `local`, `session`, or `batch`;
 - an ordered set of capabilities; and
 - a resource identifier suitable for local serialization.
 
@@ -64,6 +66,11 @@ interface, stopping reusable compute, and an interactive shell. A backend must
 not advertise a shell merely because its provider has a browser terminal.
 
 ## Lifecycle semantics
+
+A `local` backend has no compute lifecycle or synchronization boundary. Public
+project-target execution invokes the project Makefile directly; lifecycle and
+synchronization operations report explicit no-op or readiness semantics. It is
+the reference behavior that remote backends must preserve.
 
 A `session` backend may start or reuse a named VM. It must reconcile cached
 identity with live provider state before use and expose a meaningful `stop`
@@ -97,7 +104,7 @@ sample project and does not define the public interface.
 
 ## Transport responsibilities
 
-Every transport must:
+Every remote transport must:
 
 1. gate operations on host prerequisites and a read-only provider probe;
 2. use the common source scanner, manifest, exclusions, and size limits;
@@ -108,6 +115,11 @@ Every transport must:
 6. invoke the selected target through plain Make;
 7. retrieve artifacts with safe transactional extraction; and
 8. report both provider detail and a normalized cloudmake status.
+
+The local transport is the deliberate exception to remote synchronization,
+ownership, locking, and retrieval responsibilities: it operates on the source of
+truth itself. It must still preserve exact Make dispatch and apply the same safe,
+transactional `artifacts/` materialization when `--collect` is requested.
 
 Notebook transports package the selected source and execute provider control
 cells. The generated notebook and control code belong to cloudmake rather than
@@ -147,11 +159,13 @@ Provider authentication stays with the provider's own client. A backend should
 reference credentials or SSH identities when needed, never copy them into
 project state or a source archive.
 
-## Adding a backend
+## Adding a remote provider backend
 
-A new backend should first choose its honest lifecycle and transport. Reuse a
-shared transport when its synchronization and execution semantics match; add a
-new transport only when the provider surface genuinely differs.
+A new remote provider backend should first choose its honest lifecycle and
+transport. Reuse a shared transport when its synchronization and execution
+semantics match; add a new transport only when the provider surface genuinely
+differs. The built-in local backend is the reference adapter described above,
+not a template for provider lifecycle code.
 
 The implementation is complete when it has:
 

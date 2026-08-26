@@ -308,6 +308,7 @@ def test_repository_configuration_cannot_choose_a_local_ssh_host(
 @pytest.mark.parametrize(
     ("alias", "canonical", "extra"),
     [
+        ("local", "local", ()),
         ("colab", "colab-notebook", ()),
         ("kaggle", "kaggle-notebook", ()),
         ("codespaces", "codespaces-ssh", ()),
@@ -328,7 +329,89 @@ def test_backend_aliases_have_unambiguous_canonical_names(
 
     invoke(project, environment, "-b", alias, *extra, "test")
 
-    assert_assignment(engine_calls(log)[0], "BACKEND", canonical)
+    call = engine_calls(log)[0]
+    if canonical == "local":
+        assert call == ["-f", "Makefile", "test"]
+    else:
+        assert_assignment(call, "BACKEND", canonical)
+
+
+def test_local_backend_is_a_direct_make_passthrough_with_provenance(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    invoke(
+        project,
+        environment,
+        "-b",
+        "local",
+        "-j",
+        "3",
+        "benchmark",
+        "SIZE=large",
+        "DEBUG=1",
+    )
+
+    assert engine_calls(log) == [
+        ["-f", "Makefile", "-j", "3", "benchmark", "SIZE=large", "DEBUG=1"]
+    ]
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    record = json.loads(latest.read_text(encoding="utf-8"))
+    assert record["backend"] == "local"
+    assert record["resource_id"] == str(project.resolve())
+    assert record["source"] == {"mode": "local-working-tree"}
+    assert record["assignments"][0]["name"] == "SIZE"
+    assert "large" not in latest.read_text(encoding="utf-8")
+
+
+def test_local_collect_runs_target_and_transactionally_materializes_artifacts(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "Makefile").write_text(
+        ".PHONY: export-release fail\n"
+        "export-release:\n\t@mkdir -p dist\n\t@printf fresh > dist/result\n"
+        "fail:\n\t@false\n",
+        encoding="utf-8",
+    )
+    artifacts = project / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "previous").write_text("keep", encoding="utf-8")
+    environment = {
+        "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+        "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
+        "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+    }
+
+    invoke(
+        project,
+        environment,
+        "-b",
+        "local",
+        "--collect",
+        "dist",
+        "export-release",
+    )
+
+    assert (artifacts / "result").read_text(encoding="utf-8") == "fresh"
+    assert not (artifacts / "previous").exists()
+
+    (artifacts / "keep").write_text("keep", encoding="utf-8")
+    failed = invoke(
+        project,
+        environment,
+        "-b",
+        "local",
+        "--collect",
+        "dist",
+        "fail",
+        check=False,
+    )
+    assert failed.returncode != 0
+    assert (artifacts / "keep").read_text(encoding="utf-8") == "keep"
 
 
 def test_one_off_backend_does_not_replace_saved_preference(

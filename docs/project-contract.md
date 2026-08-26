@@ -61,6 +61,11 @@ Makefile. Cloudmake's host engine does not evaluate them, even when a project
 variable happens to share a name with a backend setting. Configure the backend
 through Cloudmake options or host environment variables instead.
 
+With `-b local`, Cloudmake invokes that same root Makefile directly in the
+project directory. It does not enter the backend engine, synchronize files, or
+inject variables. This direct invocation is the reference semantics remote
+backends are required to preserve.
+
 For `--collect DIR TARGET`, `DIR` is a nonempty project-relative directory with
 no `..` components. The project chooses its location and contents through its
 normal Make rules; cloudmake neither creates nor clears it. After the target

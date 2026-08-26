@@ -21,13 +21,14 @@ cloudmake verify
 cloudmake --collect dist export-release
 ```
 
-The project remains the source of truth. `cloudmake` transfers the local working
-tree, invokes targets from the project's normal `Makefile`, and retrieves output.
+The project remains the source of truth. `cloudmake` invokes targets from the
+project's normal `Makefile`; remote backends transfer the local working tree and
+retrieve selected output around that invocation.
 Provider notebooks, transfer logic, session metadata, and generated control files
 belong to the cloudmake tool, not to the project.
 
 > [!IMPORTANT]
-> The six documented backends and the external-project `cloudmake` launcher are
+> The seven documented backends and the external-project `cloudmake` launcher are
 > implemented. The regression suite uses offline provider doubles; configure and
 > verify your own account with `cloudmake --doctor` before allocating compute.
 
@@ -84,6 +85,8 @@ local Make project, unmodified
     |
     v
 cloudmake: accelerator-cloud adapter for arbitrary project targets
+    |
+    +-- direct Make ----------> local reference execution
     |
     +-- native notebook API --> Colab or Kaggle
     |
@@ -201,13 +204,17 @@ is never cloned from GitHub by cloudmake.
 
 Cloudmake treats transfer time and bandwidth as part of the development loop,
 not as an unavoidable full upload before every Make invocation. A common source
-manifest gives every backend the same selected tree, exclusions, fingerprint,
-and change preview. Run `cloudmake --sync-dry-run` to see added, modified, and
-deleted paths without authenticating to or contacting a provider.
+manifest gives every remote backend the same selected tree, exclusions,
+fingerprint, and change preview. Run `cloudmake --sync-dry-run` on a remote
+backend to see added, modified, and deleted paths without authenticating to or
+contacting a provider. The local backend reports that no transfer is selected.
 
 The transport then uses the strongest incremental behavior its provider surface
 can support:
 
+- The local backend transfers nothing. It invokes the working tree's Makefile
+  directly, so the project's existing dependency graph and outputs are already
+  available without a synchronization boundary.
 - SSH backends use `rsync`, transferring changed source while deleting stale
   synchronized paths from the remote project workspace.
 - A reusable Colab session compares the source fingerprint and skips the source
@@ -255,8 +262,25 @@ transactionally replaces the local `artifacts/` directory with those contents.
 ### Launcher and engine boundary
 
 The `cloudmake` executable is a thin launcher. It discovers the project, resolves
-the selected backend, loads local preferences, and delegates to cloudmake's own
-Make-based engine. It does not become a second build system.
+the selected backend, and loads local preferences. Remote operations delegate to
+cloudmake's Make-based engine; the local backend deliberately bypasses that
+engine and invokes the project Makefile directly. The launcher does not become a
+second build system.
+
+Local execution is the reference semantics:
+
+```sh
+cloudmake -b local benchmark SIZE=large
+# Equivalent project invocation:
+make -f Makefile benchmark SIZE=large
+```
+
+There is no source scan, archive, synchronization, session, remote workspace, or
+backend-variable injection on that path. A remote backend must preserve the same
+target and user-supplied assignments while adding only the transfer and lifecycle
+machinery its provider requires. Cloudmake still records local provenance, and
+`--collect DIR TARGET` still materializes the selected directory safely into the
+Cloudmake-owned `artifacts/` destination.
 
 Every positional name is passed through to the project:
 
@@ -333,6 +357,7 @@ Short names are for people; canonical names describe the transport unambiguously
 
 | User-facing name | Canonical backend | Transport |
 | --- | --- | --- |
+| `local` | `local` | Direct project Make invocation |
 | `colab` | `colab-notebook` | Native Colab contents and kernel APIs |
 | `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
 | `codespaces` | `codespaces-ssh` | SSH and rsync |
@@ -419,6 +444,7 @@ cloudmake --use colab --gpu=T4
 Other examples:
 
 ```sh
+cloudmake --use local
 cloudmake --use kaggle
 cloudmake --use codespaces
 cloudmake --use ssh --host lab-gpu
@@ -517,6 +543,25 @@ cloudmake -b colab --stop
 ```
 
 ## Backend prerequisites
+
+### Local backend
+
+Use `local` as the zero-transfer reference backend or as a persistent local
+preference while developing without cloud compute:
+
+```sh
+cloudmake --use local
+cloudmake --doctor
+# benchmark is supplied by the project's Makefile.
+cloudmake benchmark SIZE=small
+```
+
+It requires only a readable root `Makefile` and GNU Make or a compatible Make
+implementation. Project targets run directly in the selected project directory.
+`--start`, `--sync`, `--sync-dry-run`, `--status`, and `--stop` report their local
+no-op or readiness semantics; there is no provider interface, separate shell, or fetch operation.
+Use `--collect DIR TARGET` when a uniform `artifacts/` materialization is useful
+locally as well as remotely.
 
 ### Colab native notebook backend
 
@@ -873,6 +918,7 @@ project target requests a machine.
 
 | Backend | VM lifecycle | Source transfer | Execution | Interactive shell |
 | --- | --- | --- | --- | --- |
+| `local` | No VM or session | None | Direct project Make | Use the existing local shell |
 | `colab-notebook` | Reusable named session | Fingerprinted archive via Colab API | `colab exec` notebook | No |
 | `kaggle-notebook` | Fresh batch VM per target | Source embedded in private notebook | Kaggle kernel version | No |
 | `codespaces-ssh` | Reusable quota-backed VM | Incremental rsync over SSH | Remote Make | Yes |
@@ -886,10 +932,11 @@ transport or lifecycle layer. Project developers should use the
 find the adapter interface and extension checklist in the
 [backend contract](docs/backend-contract.md).
 
-The Colab backend reuses a live session and skips source upload when the
-fingerprint is unchanged. The Kaggle backend reuses its local compressed snapshot
-when unchanged but still submits a fresh VM for every target. All SSH backends
-share the same rsync and remote-Make transport.
+The local backend is the no-transfer reference path. The Colab backend reuses a
+live session and skips source upload when the fingerprint is unchanged. The
+Kaggle backend reuses its local compressed snapshot when unchanged but still
+submits a fresh VM for every target. All SSH backends share the same rsync and
+remote-Make transport.
 
 ## Reliability and security
 
@@ -971,7 +1018,7 @@ python3 -m pip install -r requirements-test.txt
 python3 -m pytest
 ```
 
-The suite covers portable Make behavior, all six backends, source selection,
+The suite covers portable Make behavior, all seven backends, source selection,
 provider lifecycle and failures, prerequisites, ownership, locks, status
 normalization, and transactional source and artifact handling. Fake-provider
 tests also assert architecture boundaries such as no SSH in the native Colab
@@ -997,8 +1044,8 @@ commands.
 
 ## Project status
 
-The existing Colab notebook, Kaggle notebook, Codespaces SSH, paid Colab SSH,
-user-managed host SSH, and Lightning Studio SSH backends implement the documented
+The existing local, Colab notebook, Kaggle notebook, Codespaces SSH, paid Colab
+SSH, user-managed host SSH, and Lightning Studio SSH backends implement the documented
 launcher, external-project, arbitrary-target,
 incremental synchronization, artifact retrieval, prerequisite, ownership,
 locking, and recovery contracts. `--collect DIR TARGET` performs target-agnostic

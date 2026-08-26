@@ -3,6 +3,15 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## Unreleased
+
+- Add the `local` reference backend. Project targets invoke the selected
+  project's `Makefile` directly, with no engine dispatch, source transfer,
+  session, or injected Make variables, while preserving Cloudmake selection,
+  provenance, and target-agnostic artifact collection.
+- Define local execution as the semantic baseline that remote backends must
+  preserve while adding only transport and provider lifecycle behavior.
+
 ## 0.8.0 - 2026-08-25
 
 - Add the `ssh` / `host-ssh` backend and locally persisted `--host` selector for

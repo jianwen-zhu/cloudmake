@@ -43,6 +43,8 @@ else ifeq ($(BACKEND_TRANSPORT),kaggle-kernel)
 include $(CLOUDMAKE_TOOL_ROOT)/transports/kaggle-kernel.mk
 else ifeq ($(BACKEND_TRANSPORT),ssh)
 include $(CLOUDMAKE_TOOL_ROOT)/transports/ssh.mk
+else ifeq ($(BACKEND_TRANSPORT),local)
+include $(CLOUDMAKE_TOOL_ROOT)/transports/local.mk
 else
 $(error Backend "$(BACKEND)" has unknown BACKEND_TRANSPORT "$(BACKEND_TRANSPORT)")
 endif

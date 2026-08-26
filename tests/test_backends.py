@@ -1104,6 +1104,7 @@ def test_unknown_backend_fails_before_provider_execution(prototype: Path) -> Non
 
 def test_help_keeps_notebook_and_ssh_names_distinct(prototype: Path) -> None:
     result = run_command(["make", "help"], cwd=prototype)
+    assert "local" in result.stdout
     assert "colab-notebook" in result.stdout
     assert "kaggle-notebook" in result.stdout
     assert "colab-ssh" in result.stdout
@@ -1115,6 +1116,7 @@ def test_help_keeps_notebook_and_ssh_names_distinct(prototype: Path) -> None:
 @pytest.mark.parametrize(
     "backend",
     [
+        "local",
         "colab-notebook",
         "kaggle-notebook",
         "codespaces-ssh",
@@ -1141,6 +1143,7 @@ def test_engine_defines_no_project_target_shortcuts(
 @pytest.mark.parametrize(
     ("backend", "lifecycle", "capability"),
     [
+        ("local", "local", "execute"),
         ("colab-notebook", "session", "incremental-sync"),
         ("kaggle-notebook", "batch", "batch"),
         ("codespaces-ssh", "session", "shell"),
@@ -1185,6 +1188,7 @@ def test_ssh_remote_prerequisite_failure_blocks_sync(
 @pytest.mark.parametrize(
     ("backend", "override", "missing"),
     [
+        ("local", "MAKE_BIN=missing-make-for-test", "missing-make-for-test"),
         ("colab-notebook", "COLAB_BIN=missing-colab-for-test", "missing-colab-for-test"),
         ("kaggle-notebook", "KAGGLE_BIN=missing-kaggle-for-test", "missing-kaggle-for-test"),
         ("codespaces-ssh", "GH_BIN=missing-gh-for-test", "missing-gh-for-test"),

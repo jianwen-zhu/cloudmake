@@ -68,6 +68,7 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
     for relative in (
         "Makefile",
         "VERSION",
+        "backends/local.mk",
         "backends/colab-notebook.mk",
         "backends/host-ssh.mk",
         "backends/lightning-studio-ssh.mk",
@@ -82,6 +83,7 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
         "tools/lightning_ensure_studio.py",
         "tools/validate_ssh_host.py",
         "transports/ssh.mk",
+        "transports/local.mk",
     ):
         assert (runtime / relative).is_file()
 

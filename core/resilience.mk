@@ -38,7 +38,7 @@ endif
 ifneq ($(BACKEND_API_VERSION),$(CLOUDMAKE_BACKEND_API_VERSION))
 $(error Backend "$(BACKEND)" uses API $(BACKEND_API_VERSION); cloudmake supports $(CLOUDMAKE_BACKEND_API_VERSION))
 endif
-ifeq ($(filter $(BACKEND_LIFECYCLE),session batch),)
+ifeq ($(filter $(BACKEND_LIFECYCLE),local session batch),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_LIFECYCLE "$(BACKEND_LIFECYCLE)")
 endif
 
@@ -69,6 +69,10 @@ backend-info: backend-contract
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'
 
+ifeq ($(BACKEND_TRANSPORT),local)
+sync-dry-run: backend-contract
+	@echo '[local] The working tree is already local; no source transfer is selected.'
+else
 sync-dry-run: backend-contract
 	@if ! command -v '$(PYTHON_BIN)' >/dev/null 2>&1; then \
 		echo 'Missing required command: $(PYTHON_BIN)' >&2; exit 2; fi
@@ -77,3 +81,4 @@ sync-dry-run: backend-contract
 		--compare '$(CLOUDMAKE_MANIFEST)' --dry-run \
 		$(CLOUDMAKE_SECRET_OPTION) \
 		--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)'
+endif

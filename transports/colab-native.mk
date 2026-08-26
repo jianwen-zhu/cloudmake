@@ -25,6 +25,7 @@ COLAB_ACCELERATOR := $(if $(strip $(COLAB_GPU)),--gpu $(COLAB_GPU),)
 help:
 	@echo 'Usage: make BACKEND=colab-notebook <target>'
 	@echo 'Transport: native Colab contents/kernel APIs (no SSH or Git remote)'
+	@echo 'Local backend: local (direct project Make invocation)'
 	@echo 'Notebook backends: colab-notebook, kaggle-notebook'
 	@echo 'SSH backends: colab-ssh, codespaces-ssh, host-ssh, lightning-studio-ssh'
 	@echo
