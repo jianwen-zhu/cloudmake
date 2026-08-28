@@ -5,8 +5,11 @@ COLAB_REMOTE_FINGERPRINT_COPY := $(COLAB_STATE_DIR)/remote-source.sha256
 COLAB_REMOTE_OWNER_COPY := $(COLAB_STATE_DIR)/remote-owner.json
 COLAB_TARGET_FILE := $(COLAB_STATE_DIR)/target
 COLAB_TARGET_RESULT := $(COLAB_STATE_DIR)/target-result.json
+COLAB_RESOURCE_STATE := $(COLAB_STATE_DIR)/resource-state
 COLAB_ARTIFACT_ARCHIVE := $(COLAB_STATE_DIR)/artifacts.tar.gz
 COLAB_RUN_NOTEBOOK := $(COLAB_STATE_DIR)/runner.ipynb
+CLOUDMAKE_ALLOCATION_RESULT ?= $(COLAB_STATE_DIR)/allocation-result.json
+CLOUDMAKE_RETRY_FOR_SECONDS ?= 0
 
 COLAB_REMOTE_ROOT := /content/.cloud-build/workspace
 COLAB_REMOTE_ARCHIVE := /content/cloud-build-source.tar.gz
@@ -17,8 +20,6 @@ COLAB_REMOTE_OWNER := $(COLAB_REMOTE_ROOT)/.cloudmake-owner.json
 COLAB_REMOTE_TARGET := /content/cloud-build-target
 COLAB_REMOTE_TARGET_RESULT := /content/.cloud-build/target-result.json
 COLAB_REMOTE_ARTIFACTS := /content/.cloud-build/artifacts.tar.gz
-
-COLAB_ACCELERATOR := $(if $(strip $(COLAB_GPU)),--gpu $(COLAB_GPU),)
 
 .PHONY: help start status stop sync collect dispatch fetch shell open \
 	_colab-start _colab-sync _colab-execute _colab-collect _colab-fetch \
@@ -85,13 +86,13 @@ $(COLAB_STATE_DIR):
 	mkdir -p '$@'
 
 _colab-start: ensure-owner | $(COLAB_STATE_DIR)
-	@set -e; resource_state=reused; \
-	if ! $(COLAB_BIN) sessions 2>/dev/null | \
-		awk -v session='$(COLAB_SESSION)' \
-		'$$1 == "[" session "]" { found = 1 } END { exit !found }'; then \
-		$(COLAB_BIN) new -s '$(COLAB_SESSION)' $(COLAB_ACCELERATOR); \
-		resource_state=started; \
-	fi; \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_allocate.py' \
+		--client '$(COLAB_BIN)' --session '$(COLAB_SESSION)' \
+		$(if $(strip $(COLAB_GPU)),--gpu '$(COLAB_GPU)') \
+		--retry-seconds '$(CLOUDMAKE_RETRY_FOR_SECONDS)' \
+		--resource-state '$(COLAB_RESOURCE_STATE)' \
+		--result '$(CLOUDMAKE_ALLOCATION_RESULT)'
+	@set -e; resource_state="$$(cat '$(COLAB_RESOURCE_STATE)')"; \
 	if ! $(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
 		-f '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_prerequisites.py'; then \
 		echo '[colab] Readiness connection failed; retrying the non-mutating probe once.' >&2; \

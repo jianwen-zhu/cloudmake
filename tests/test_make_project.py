@@ -78,6 +78,7 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
         "host-templates/oci-always-free.conf",
         "host-templates/gcp-e2-micro.conf",
         "notebooks/colab.ipynb",
+        "tools/colab_allocate.py",
         "tools/source_fingerprint.py",
         "tools/target_result.py",
         "tools/lightning_studio_status.py",

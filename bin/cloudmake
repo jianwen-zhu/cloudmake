@@ -58,12 +58,14 @@ BACKENDS = {
     "host-ssh": ("session", "user-managed SSH and rsync", "ssh"),
     "lightning-studio-ssh": ("session", "persistent Studio SSH and rsync", "lightning"),
 }
+EX_TEMPFAIL = getattr(os, "EX_TEMPFAIL", 75)
 GPU_BACKENDS = {
     "colab-notebook",
     "kaggle-notebook",
     "colab-ssh",
     "lightning-studio-ssh",
 }
+CAPACITY_RETRY_BACKENDS = {"colab-notebook"}
 ACTION_OPTIONS = {
     "--backends": "backends",
     "--collect": "collect",
@@ -85,15 +87,18 @@ ACTION_OPTIONS = {
 }
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.DOTALL)
 ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
+DURATION = re.compile(r"^([1-9][0-9]*)([smh])$")
 SSH_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 HOST_TEMPLATE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 RESERVED_ASSIGNMENTS = {
     "ARTIFACT_DIR",
     "BACKEND",
     "CLOUDMAKE_CACHE_ROOT",
+    "CLOUDMAKE_ALLOCATION_RESULT",
     "CLOUDMAKE_CONTEXT_ACCELERATOR",
     "CLOUDMAKE_PROJECT_ARGS_B64",
     "CLOUDMAKE_PROJECT_ROOT",
+    "CLOUDMAKE_RETRY_FOR_SECONDS",
     "CLOUDMAKE_RUN_ID",
     "CLOUDMAKE_STATE_ROOT",
     "CLOUDMAKE_TOOL_ROOT",
@@ -254,6 +259,42 @@ def artifact_receipt(directory: Path) -> dict[str, Any] | None:
     }
 
 
+def allocation_receipt(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return {"attempts": 0, "outcome": "receipt-invalid"}
+    if not isinstance(payload, dict) or payload.get("schema") != 1:
+        return {"attempts": 0, "outcome": "receipt-invalid"}
+    attempts = payload.get("attempts")
+    outcome = payload.get("outcome")
+    if (
+        isinstance(attempts, bool)
+        or not isinstance(attempts, int)
+        or attempts < 0
+        or not isinstance(outcome, str)
+        or not outcome
+    ):
+        return {"attempts": 0, "outcome": "receipt-invalid"}
+    receipt: dict[str, Any] = {"attempts": attempts, "outcome": outcome}
+    classification = payload.get("classification")
+    if isinstance(classification, str) and classification:
+        receipt["classification"] = classification
+    return receipt
+
+
+def allocation_exit_code(receipt: dict[str, Any] | None, default: int) -> int:
+    if receipt is None:
+        return default
+    if receipt.get("outcome") == "capacity-timeout":
+        return EX_TEMPFAIL
+    if receipt.get("outcome") == "interrupted":
+        return 130
+    return default
+
+
 def canonical_backend(value: str) -> str:
     try:
         return ALIASES[value]
@@ -281,6 +322,7 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         "backend": None,
         "project": Path.cwd(),
         "jobs": None,
+        "retry_for": None,
         "accelerator": None,
         "accelerator_set": False,
         "host": None,
@@ -332,6 +374,11 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
             options["accelerator"] = ""
             options["accelerator_set"] = True
             index += 1
+        elif argument == "--retry-for":
+            options["retry_for"], index = take_value(arguments, index, argument)
+        elif argument.startswith("--retry-for="):
+            options["retry_for"] = argument.split("=", 1)[1]
+            index += 1
         elif argument == "--verbose":
             options["verbose"] = True
             index += 1
@@ -368,10 +415,11 @@ Every positional name is passed unchanged to the project Makefile. Cloudmake
 reserves no project target names.
 
 Project options: -b BACKEND, -C DIR, -j N, --host HOST, --gpu[=TYPE], --cpu,
-                 --verbose
+                 --retry-for=DURATION, --verbose
 Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
                   --sync-dry-run, --status, --fetch, --open, --shell, --stop
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
+Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
 Information: --help, --version, --history, --host-templates,
              --host-template NAME
 """
@@ -522,6 +570,20 @@ def encoded_value(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii")
 
 
+def retry_duration(value: str | None) -> int | None:
+    if value is None:
+        return None
+    match = DURATION.fullmatch(value)
+    if match is None:
+        raise UsageError("--retry-for requires a positive duration such as 30s, 15m, or 2h")
+    amount = int(match.group(1))
+    multiplier = {"s": 1, "m": 60, "h": 3600}[match.group(2)]
+    seconds = amount * multiplier
+    if seconds > 24 * 3600:
+        raise UsageError("--retry-for must not exceed 24h")
+    return seconds
+
+
 def collect_directory(value: str) -> str:
     path = PurePosixPath(value)
     if (
@@ -549,6 +611,8 @@ def engine_command(
     key: str,
     target: str,
     assignments: list[str],
+    retry_seconds: int | None,
+    allocation_result: Path | None = None,
     remote_target: str | None = None,
     remote_collect_dir: str | None = None,
     run_id: str | None = None,
@@ -567,11 +631,14 @@ def engine_command(
         f"CLOUDMAKE_STATE_ROOT={state_home / 'projects' / key}",
         f"CLOUDMAKE_CACHE_ROOT={cache_home / 'projects' / key}",
         f"CLOUDMAKE_PROJECT_ARGS_B64={encoded_arguments(assignments)}",
+        f"CLOUDMAKE_RETRY_FOR_SECONDS={retry_seconds or 0}",
         f"BACKEND={backend}",
         f"PYTHON_BIN={sys.executable}",
     ]
     if run_id is not None:
         variables.append(f"CLOUDMAKE_RUN_ID={run_id}")
+    if allocation_result is not None:
+        variables.append(f"CLOUDMAKE_ALLOCATION_RESULT={allocation_result}")
     if jobs is not None:
         if not jobs.isdigit() or int(jobs) < 1:
             raise UsageError("-j requires a positive integer")
@@ -707,10 +774,14 @@ def collect_local_artifacts(
 
 def run(arguments: list[str]) -> int:
     options, positional = parse_invocation(arguments)
+    retry_seconds = retry_duration(options["retry_for"])
     project = validate_project(options["project"])
     config_home, state_home, cache_home = homes()
     key = project_key(project)
     action = options["action"]
+
+    if retry_seconds is not None and action not in {None, "collect", "start"}:
+        raise UsageError("--retry-for is valid only with --start, a project target, or --collect")
 
     if action == "version":
         if positional:
@@ -796,6 +867,12 @@ def run(arguments: list[str]) -> int:
         raise UsageError("accelerator names may contain only letters, numbers, dot, dash, and underscore")
     if accelerator and backend not in GPU_BACKENDS:
         raise UsageError(f"backend {backend!r} does not support accelerator requests")
+    if retry_seconds is not None and backend not in CAPACITY_RETRY_BACKENDS:
+        raise UsageError(
+            f"backend {backend!r} does not classify retryable allocation capacity"
+        )
+    if retry_seconds is not None and action is None and not positional:
+        raise UsageError("--retry-for requires --start, a project target, or --collect")
     if action == "help" or (action is None and not positional):
         if positional:
             raise UsageError("--help does not accept arguments")
@@ -843,6 +920,11 @@ def run(arguments: list[str]) -> int:
 
     state_root = state_home / "projects" / key
     if engine_target not in {"dispatch", "collect"}:
+        operation_allocation_path = (
+            state_root / "operations" / f".{uuid.uuid4().hex}.allocation.json"
+            if backend == "colab-notebook"
+            else None
+        )
         exit_code = engine_command(
             project=project,
             backend=backend,
@@ -856,9 +938,15 @@ def run(arguments: list[str]) -> int:
             key=key,
             target=engine_target,
             assignments=assignments,
+            retry_seconds=retry_seconds,
+            allocation_result=operation_allocation_path,
             remote_target=remote_target,
             remote_collect_dir=remote_collect_dir,
         )
+        if operation_allocation_path is not None:
+            receipt = allocation_receipt(operation_allocation_path)
+            exit_code = allocation_exit_code(receipt, exit_code)
+            operation_allocation_path.unlink(missing_ok=True)
         if (
             exit_code == 0
             and engine_target == "start"
@@ -874,6 +962,13 @@ def run(arguments: list[str]) -> int:
     run_id = uuid.uuid4().hex
     manifest_before = source_manifest_snapshot(state_root, backend)
     runs = state_root / "runs"
+    allocation_path = (
+        runs / f".{run_id}.allocation.json"
+        if backend == "colab-notebook"
+        else None
+    )
+    if allocation_path is not None:
+        allocation_path.unlink(missing_ok=True)
     record_path = runs / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{run_id}.json"
     record: dict[str, Any] = {
         "schema": 1,
@@ -891,6 +986,8 @@ def run(arguments: list[str]) -> int:
     }
     if ssh_host is not None:
         record["host"] = ssh_host
+    if retry_seconds is not None:
+        record["allocation"] = {"attempts": 0, "outcome": "not-attempted"}
     atomic_json(record_path, record)
     try:
         if backend == "local":
@@ -930,22 +1027,40 @@ def run(arguments: list[str]) -> int:
                 key=key,
                 target=engine_target,
                 assignments=assignments,
+                retry_seconds=retry_seconds,
+                allocation_result=allocation_path,
                 remote_target=remote_target,
                 remote_collect_dir=remote_collect_dir,
                 run_id=run_id,
             )
     except BaseException:
+        if allocation_path is not None:
+            receipt = allocation_receipt(allocation_path)
+            if receipt is not None:
+                record["allocation"] = receipt
+            allocation_path.unlink(missing_ok=True)
         record.update(status="interrupted", finished_at=utc_timestamp())
         atomic_json(record_path, record)
         atomic_json(runs / "latest.json", record)
         raise
+
+    if allocation_path is not None:
+        receipt = allocation_receipt(allocation_path)
+        if receipt is not None:
+            record["allocation"] = receipt
+        exit_code = allocation_exit_code(receipt, exit_code)
+        allocation_path.unlink(missing_ok=True)
 
     if backend == "local":
         resource_id, source = os.fspath(project), {"mode": "local-working-tree"}
     else:
         resource_id, source = newest_source_manifest(state_root, backend, manifest_before)
     record.update(
-        status="succeeded" if exit_code == 0 else "failed",
+        status=(
+            "succeeded"
+            if exit_code == 0
+            else "interrupted" if exit_code == 130 else "failed"
+        ),
         exit_code=exit_code,
         finished_at=utc_timestamp(),
         resource_id=resource_id,

@@ -4,7 +4,7 @@ BACKEND_TRANSPORT := colab-native
 BACKEND_ACCESS_CLASS := notebook
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
-BACKEND_CAPABILITIES := sync execute status incremental-sync open artifacts gpu cancel
+BACKEND_CAPABILITIES := sync execute status incremental-sync open artifacts gpu cancel capacity-retry
 
 COLAB_SESSION ?= cuda-build
 COLAB_GPU ?=

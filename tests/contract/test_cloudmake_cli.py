@@ -106,6 +106,44 @@ def test_no_arguments_is_read_only_and_does_not_invoke_engine(
     assert engine_calls(log) == []
 
 
+def test_help_documents_bounded_capacity_retry(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, "--help")
+
+    assert "--retry-for=DURATION" in result.stdout
+    assert "cloudmake --retry-for=30m --start" in result.stdout
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize(
+    ("duration", "seconds"),
+    [("30s", "30"), ("15m", "900"), ("2h", "7200")],
+)
+def test_retry_duration_is_passed_to_colab_allocation_only(
+    tmp_path: Path,
+    fake_bin: Path,
+    duration: str,
+    seconds: str,
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    invoke(
+        project,
+        environment,
+        "-b",
+        "colab",
+        f"--retry-for={duration}",
+        "--start",
+    )
+
+    assert_assignment(engine_calls(log)[0], "CLOUDMAKE_RETRY_FOR_SECONDS", seconds)
+
+
 @pytest.mark.parametrize(
     "arguments",
     [("--version",), ("--backends",), ("--history",), ("--host-templates",)],

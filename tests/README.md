@@ -20,6 +20,7 @@ Run one layer:
 python3 -m pytest tests/test_source_fingerprint.py
 python3 -m pytest tests/test_resilience.py
 python3 -m pytest tests/test_notebooks.py
+python3 -m pytest tests/test_colab_allocate.py
 python3 -m pytest tests/test_target_result.py
 python3 -m pytest -m integration
 ```
@@ -90,6 +91,9 @@ internals:
 - executable Colab and Kaggle notebooks against temporary projects;
 - Colab project-failure receipts, concise diagnostics, retained infrastructure
   tracebacks, and started-versus-reused execution context;
+- Colab capacity classification, bounded allocation backoff, temporary-failure
+  deadlines, immediate interruption, fail-fast compatibility, and at-most-once
+  target dispatch;
 - portable Make build, test, run, package, clean, and incremental behavior;
 - reproducible Makefile overlays for pinned NVIDIA and GPU MODE CUDA lessons;
 - backend lifecycle and command construction through fake provider clients;

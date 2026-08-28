@@ -5,6 +5,10 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+- Add opt-in, deadline-bounded retry for positively classified Colab allocation
+  capacity failures, with exponential backoff, temporary-failure exit status,
+  and allocation attempts recorded in the existing run provenance.
+
 ## 0.9.0 - 2026-08-28
 
 - Separate expected nonzero Colab Make results from notebook infrastructure

@@ -132,6 +132,22 @@ Cloudmake does not blindly retry target execution or a mutating notebook
 submission. An ambiguous failure may already have started work, so automatic
 repetition could produce duplicate jobs or side effects.
 
+The optional launcher form `cloudmake --retry-for=DURATION ...` is narrower than
+a general operation retry. A backend may use it only around a provider allocation
+call and only after positively classifying a documented temporary-capacity
+response. The Colab notebook backend initially recognizes
+`TooManyAssignmentsError`. It does not retry session queries, authentication,
+readiness, synchronization, notebook execution, artifact handling, or project
+Make. Existing-session readiness retains its separate non-mutating probe policy
+and is never converted into allocation or automatic recreation. Deadline expiry
+returns `EX_TEMPFAIL` (75); interruption stops the wait without stopping or
+recreating provider resources.
+
+A dispatched invocation owns one provenance record across all allocation
+attempts. Its `allocation` field records the attempt count, final outcome, and
+capacity classification when applicable. Allocation success then enters the
+ordinary start/sync/execute path exactly once.
+
 Colab target execution separates an expected project failure from an
 infrastructure failure. A completed notebook records the project target and its
 Make exit status in an atomic result receipt. A nonzero status preserves all

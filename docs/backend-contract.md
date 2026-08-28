@@ -82,6 +82,13 @@ A `batch` backend submits a fresh job for each operational target. `start` may
 validate readiness, but it must not pretend to create a reusable VM. `stop` may
 be a documented no-op when the provider ends jobs automatically.
 
+Capacity retry is an opt-in backend allocation capability, not a wrapper around
+an engine operation. A backend supporting `--retry-for` must positively classify
+its own provider's temporary-capacity response, bound its wait, and stop retrying
+before readiness, transfer, or project execution begins. Backends without such a
+classifier reject the option. A transport must never infer retryability from an
+arbitrary nonzero command or HTTP status alone.
+
 The engine's common lifecycle operations are `start`, `sync`, `status`, `fetch`,
 `open`, `shell`, and `stop`; the launcher exposes them as long options. A
 positional name with the same spelling remains a project target. Unsupported

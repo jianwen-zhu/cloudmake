@@ -112,6 +112,16 @@ elif command == "sessions":
     for session_marker in sorted(remote.glob("session-*")):
         print(f"[{session_marker.name.removeprefix('session-')}] running")
 elif command == "new":
+    attempt_file = remote / "allocation-attempts"
+    attempts = int(attempt_file.read_text(encoding="utf-8")) + 1 if attempt_file.exists() else 1
+    attempt_file.write_text(str(attempts), encoding="utf-8")
+    capacity_failures = int(os.environ.get("FAKE_COLAB_CAPACITY_FAILURES", "0"))
+    if os.environ.get("FAKE_COLAB_CAPACITY_UNAVAILABLE") or attempts <= capacity_failures:
+        print("HTTP 412: TooManyAssignmentsError: no accelerator capacity available")
+        raise SystemExit(1)
+    if os.environ.get("FAKE_COLAB_ALLOCATION_ERROR"):
+        print(os.environ["FAKE_COLAB_ALLOCATION_ERROR"])
+        raise SystemExit(2)
     marker.write_text("running", encoding="utf-8")
 elif command == "status":
     print("running" if marker.exists() else "not found")
@@ -782,6 +792,224 @@ def test_colab_launcher_retains_unexpected_notebook_traceback(
     assert "target 'build' failed with exit status" not in result.stdout
     assert "[cloudmake] notebook=" in result.stdout
     assert "provenance=" in result.stdout
+
+
+@pytest.mark.integration
+def test_colab_capacity_retry_allocates_after_two_failures_and_runs_target_once(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "capacity-eventual-success")
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update(
+        {
+            "FAKE_COLAB_CAPACITY_FAILURES": "2",
+            "CLOUDMAKE_RETRY_BASE_SECONDS": "0.01",
+            "CLOUDMAKE_RETRY_MAX_SECONDS": "0.01",
+            "CLOUDMAKE_RETRY_JITTER": "0",
+        }
+    )
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--gpu=T4", "--retry-for=2s", "build"],
+        cwd=project,
+        env=env,
+    )
+
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert sum(call[1] == "new" for call in colab_calls) == 3
+    assert sum(
+        call[1] == "exec" and call[-1].endswith("runner.ipynb")
+        for call in colab_calls
+    ) == 1
+    assert "capacity unavailable: colab TooManyAssignmentsError" in result.stdout
+    assert "attempt=1" in result.stdout
+    assert "attempt=2" in result.stdout
+    assert "elapsed=" in result.stdout
+    assert "remaining=" in result.stdout
+    assert "next=" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["allocation"] == {"attempts": 3, "outcome": "allocated"}
+    assert provenance["status"] == "succeeded"
+    run_records = [
+        path
+        for path in latest.parent.glob("*.json")
+        if path.name != "latest.json"
+    ]
+    assert len(run_records) == 1
+
+
+@pytest.mark.integration
+def test_colab_capacity_retry_deadline_returns_tempfail_without_running_target(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "capacity-timeout")
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update(
+        {
+            "FAKE_COLAB_CAPACITY_UNAVAILABLE": "1",
+            "CLOUDMAKE_RETRY_BASE_SECONDS": "0.2",
+            "CLOUDMAKE_RETRY_MAX_SECONDS": "0.2",
+            "CLOUDMAKE_RETRY_JITTER": "0",
+        }
+    )
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--retry-for=1s", "build"],
+        cwd=project,
+        env=env,
+        check=False,
+        timeout=10,
+    )
+
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert result.returncode == 75
+    assert "retry deadline expired" in result.stdout
+    assert "remaining=0s" in result.stdout
+    assert not any(
+        call[1] == "exec" and call[-1].endswith("runner.ipynb")
+        for call in colab_calls
+    )
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["exit_code"] == 75
+    assert provenance["allocation"]["outcome"] == "capacity-timeout"
+    assert provenance["allocation"]["attempts"] >= 1
+
+
+@pytest.mark.integration
+def test_colab_start_capacity_deadline_also_returns_tempfail(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "start-capacity-timeout")
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update(
+        {
+            "FAKE_COLAB_CAPACITY_UNAVAILABLE": "1",
+            "CLOUDMAKE_RETRY_BASE_SECONDS": "2",
+            "CLOUDMAKE_RETRY_MAX_SECONDS": "2",
+            "CLOUDMAKE_RETRY_JITTER": "0",
+        }
+    )
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--retry-for=1s", "--start"],
+        cwd=project,
+        env=env,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 75
+    assert "retry deadline expired" in result.stdout
+    assert not any(
+        call[1] == "exec" for call in calls(Path(env["FAKE_LOG"]), "colab")
+    )
+
+
+@pytest.mark.integration
+def test_colab_retry_does_not_repeat_non_capacity_allocation_error(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "non-retryable-allocation")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_ALLOCATION_ERROR"] = "Invalid accelerator request"
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--retry-for=2h", "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert result.returncode != 0
+    assert "Invalid accelerator request" in result.stdout
+    assert "capacity unavailable" not in result.stdout
+    assert sum(call[1] == "new" for call in colab_calls) == 1
+    assert not any(call[1] == "stop" for call in colab_calls)
+
+
+@pytest.mark.integration
+def test_colab_retry_never_recreates_existing_session_after_readiness_ambiguity(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "existing-ambiguous-session")
+    env = launcher_environment(fake_bin, tmp_path)
+    remote = Path(env["FAKE_REMOTE"])
+    remote.mkdir(parents=True)
+    (remote / "session-cuda-build").write_text("running", encoding="utf-8")
+    env["FAKE_COLAB_READINESS_FAIL_ALWAYS"] = "1"
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--retry-for=2h", "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert result.returncode != 0
+    assert "refusing automatic recreation" in result.stdout
+    assert not any(call[1] == "new" for call in colab_calls)
+    assert not any(call[1] == "stop" for call in colab_calls)
+    assert sum(
+        call[1] == "exec" and call[-1].endswith("remote_prerequisites.py")
+        for call in colab_calls
+    ) == 2
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["allocation"] == {"attempts": 0, "outcome": "reused"}
+
+
+@pytest.mark.integration
+def test_colab_capacity_without_retry_for_remains_fail_fast(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "capacity-fail-fast")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_CAPACITY_UNAVAILABLE"] = "1"
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert result.returncode != 0
+    assert "TooManyAssignmentsError" in result.stdout
+    assert "retry disabled" in result.stdout
+    assert sum(call[1] == "new" for call in colab_calls) == 1
+    assert "next=" not in result.stdout
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("duration", ["eventually", "0s", "25h"])
+def test_invalid_retry_duration_is_rejected_before_contacting_colab(
+    fake_bin: Path, tmp_path: Path, duration: str
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "invalid-retry-duration")
+    env = launcher_environment(fake_bin, tmp_path)
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", f"--retry-for={duration}", "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--retry-for" in result.stdout
+    assert calls(Path(env["FAKE_LOG"]), "colab") == []
 
 
 @pytest.mark.integration

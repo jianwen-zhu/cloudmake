@@ -530,6 +530,7 @@ Common options:
 | `--host HOST` | Select a user-managed OpenSSH alias for the `ssh` backend. |
 | `--gpu`, `--gpu=TYPE` | Select the default or a named GPU where supported; save it for the selected project unless `-b` is an explicit one-off override. |
 | `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
+| `--retry-for DURATION` | Retry only positively classified temporary allocation capacity, for example `30s`, `15m`, or `2h`. |
 | `--verbose` | Show provider and transfer commands. |
 
 Cloud operation options:
@@ -630,6 +631,23 @@ The executed notebook and provenance record are still saved and their locations
 are printed. Exceptions in notebook setup, synchronization, receipt validation,
 or other Cloudmake machinery remain infrastructure failures and retain their
 diagnostic exception output.
+
+Colab free-tier accelerator capacity may be temporarily unavailable. Opt into a
+bounded allocation wait when that is useful:
+
+```sh
+cloudmake --retry-for=30m --start
+```
+
+Cloudmake currently retries only a `TooManyAssignmentsError` reported while
+creating a new Colab session. It uses bounded exponential backoff with jitter
+and exits with temporary-failure status 75 if the deadline expires. Omitting
+`--retry-for` preserves immediate failure. Authentication, configuration,
+accelerator validation, existing-session readiness, synchronization, artifact,
+and project-target failures are never fed into this allocation retry loop. Once
+allocation succeeds, the normal workflow continues and the project target is
+invoked at most once. The wait remains attached to the foreground command and
+does not create a daemon, queue, detached job, or scheduled start.
 
 Colab kernel execution defaults to a 3600-second cloudmake timeout rather than
 the CLI's short interactive default. Override it for longer workloads with, for
