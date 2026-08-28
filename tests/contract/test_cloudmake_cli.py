@@ -342,7 +342,7 @@ def test_local_backend_is_a_direct_make_passthrough_with_provenance(
     project = make_project(tmp_path / "project")
     environment, log = contract_environment(tmp_path, fake_bin)
 
-    invoke(
+    result = invoke(
         project,
         environment,
         "-b",
@@ -357,6 +357,7 @@ def test_local_backend_is_a_direct_make_passthrough_with_provenance(
     assert engine_calls(log) == [
         ["-f", "Makefile", "-j", "3", "benchmark", "SIZE=large", "DEBUG=1"]
     ]
+    assert "[cloudmake] backend=local resource=local" in result.stdout
     latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
     record = json.loads(latest.read_text(encoding="utf-8"))
     assert record["backend"] == "local"
@@ -364,6 +365,43 @@ def test_local_backend_is_a_direct_make_passthrough_with_provenance(
     assert record["source"] == {"mode": "local-working-tree"}
     assert record["assignments"][0]["name"] == "SIZE"
     assert "large" not in latest.read_text(encoding="utf-8")
+
+
+def test_explicit_gpu_selection_persists_and_is_reused_by_later_targets(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    selected = invoke(project, environment, "--use", "colab")
+
+    first = invoke(project, environment, "--gpu=T4", "bootstrap")
+    second = invoke(project, environment, "verify")
+
+    assert "subsequent targets reuse this selection" in selected.stdout
+    assert "selected accelerator=T4" in first.stdout
+    assert "subsequent targets reuse this selection" in first.stdout
+    assert "selected accelerator" not in second.stdout
+    first_call, second_call = engine_calls(log)
+    for call in (first_call, second_call):
+        assert_assignment(call, "BACKEND", "colab-notebook")
+        assert_assignment(call, "COLAB_GPU", "T4")
+        assert_assignment(call, "CLOUDMAKE_CONTEXT_ACCELERATOR", "T4")
+    preference = next((tmp_path / "config" / "projects").glob("*.json"))
+    assert json.loads(preference.read_text(encoding="utf-8"))["accelerator"] == "T4"
+
+
+def test_saved_cloud_accelerator_does_not_leak_into_local_context(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, _ = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "--use", "colab", "--gpu=T4")
+    invoke(project, environment, "--use", "local")
+
+    result = invoke(project, environment, "verify")
+
+    assert "[cloudmake] backend=local resource=local" in result.stdout
+    assert "accelerator=" not in result.stdout
 
 
 def test_local_collect_runs_target_and_transactionally_materializes_artifacts(
@@ -766,6 +804,21 @@ def test_failed_execution_is_retained_in_provenance(
     assert result.returncode == 7
     assert record["status"] == "failed"
     assert record["exit_code"] == 7
+
+
+def test_local_target_failure_has_context_and_concise_summary(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, _ = contract_environment(tmp_path, fake_bin)
+    environment["CLOUDMAKE_TEST_ENGINE_EXIT"] = "2"
+
+    result = invoke(project, environment, "-b", "local", "build", check=False)
+
+    assert result.returncode == 2
+    assert "[cloudmake] backend=local resource=local" in result.stdout
+    assert "[cloudmake] target 'build' failed with exit status 2" in result.stdout
+    assert "provenance=" in result.stdout
 
 
 def test_history_lists_recent_execution_without_invoking_engine_again(

@@ -101,6 +101,7 @@ _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 	fi
 
 _kaggle-execute: _kaggle-start _kaggle-sync | $(KAGGLE_KERNEL_DIR) $(KAGGLE_OUTPUT_DIR)
+	@CLOUDMAKE_RESOURCE_STATE=new-batch; $(CLOUDMAKE_PRINT_CONTEXT)
 	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_prepare.py' \
 		--template '$(KAGGLE_NOTEBOOK)' \
 		--archive '$(KAGGLE_ARCHIVE)' \

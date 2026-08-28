@@ -141,12 +141,15 @@ def test_colab_notebook_collects_artifacts_only_when_explicitly_requested(
 
 
 def test_colab_collect_removes_stale_artifact_before_a_failing_target(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     remote = tmp_path / "colab" / "workspace"
     source = remote / "src"
     source.mkdir(parents=True)
-    (source / "Makefile").write_text("fail:\n\t@false\n", encoding="utf-8")
+    (source / "Makefile").write_text(
+        "fail:\n\t@printf 'project failure detail\\n' >&2; false\n",
+        encoding="utf-8",
+    )
     artifact = remote / "artifacts.tar.gz"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_bytes(b"stale")
@@ -157,16 +160,43 @@ def test_colab_collect_removes_stale_artifact_before_a_failing_target(
         encoding="utf-8",
     )
 
-    with pytest.raises(Exception):
+    namespace = execute_code_cells(
+        load_notebook(COLAB_NOTEBOOK),
+        {
+            "/content/.cloud-build/workspace": str(remote),
+            "/content/.cloud-build/artifacts.tar.gz": str(artifact),
+            "/content/cloud-build-target": str(control),
+        },
+    )
+
+    output = capsys.readouterr().out
+    assert "project failure detail" in output
+    assert "CalledProcessError" not in output
+    assert namespace["TARGET_EXIT_CODE"] == 2
+    assert json.loads((remote.parent / "target-result.json").read_text(encoding="utf-8")) == {
+        "schema": 1,
+        "target": "fail",
+        "exit_code": 2,
+    }
+    assert not artifact.exists()
+
+
+def test_colab_notebook_keeps_unexpected_setup_exceptions_diagnosable(
+    tmp_path: Path,
+) -> None:
+    remote = tmp_path / "colab" / "workspace"
+    (remote / "src").mkdir(parents=True)
+    control = tmp_path / "colab" / "invalid-target"
+    control.write_text("invalid\ncontrol\nfile\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid cloudmake control file"):
         execute_code_cells(
             load_notebook(COLAB_NOTEBOOK),
             {
                 "/content/.cloud-build/workspace": str(remote),
-                "/content/.cloud-build/artifacts.tar.gz": str(artifact),
                 "/content/cloud-build-target": str(control),
             },
         )
-    assert not artifact.exists()
 
 
 def test_colab_notebook_executes_project_specific_target(tmp_path: Path) -> None:

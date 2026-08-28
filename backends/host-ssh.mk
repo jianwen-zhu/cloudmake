@@ -22,6 +22,8 @@ BACKEND_DOCTOR_PROBE := $(SSH_BIN) $(SSH_OPTIONS) -o BatchMode=yes '$(SSH_HOST)'
 BACKEND_VERSION_COMMAND := $(SSH_BIN) -V
 BACKEND_TESTED_CLIENT := OpenSSH-compatible protocol 2 client
 BACKEND_RESOURCE_ID := $(SSH_HOST)
+BACKEND_CONTEXT_RESOURCE_LABEL := host
+BACKEND_CONTEXT_RESOURCE_STATE := existing
 BACKEND_REMOTE_REQUIRED_COMMANDS := make rsync tar
 BACKEND_STOP_PREREQUISITE := prerequisites
 SSH_REFRESH_MESSAGE := SSH connection failed; retrying once without changing user-managed OpenSSH configuration.

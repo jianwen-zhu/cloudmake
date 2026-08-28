@@ -11,6 +11,7 @@ CLOUDMAKE_LOCK_TIMEOUT ?= 30
 CLOUDMAKE_ADOPT ?= 0
 CLOUDMAKE_PROJECT_ROOT ?= $(PROJECT_DIR)
 CLOUDMAKE_PROJECT_ARGS_B64 ?= W10=
+CLOUDMAKE_CONTEXT_ACCELERATOR ?=
 SOURCE_WARN_MB ?= 25
 SOURCE_MAX_MB ?= 0
 CLOUDMAKE_ALLOW_SECRETS ?= 0
@@ -31,6 +32,25 @@ BACKEND_API_VERSION ?=
 BACKEND_LIFECYCLE ?=
 BACKEND_CAPABILITIES ?=
 BACKEND_RESOURCE_ID ?= default
+BACKEND_CONTEXT_RESOURCE_LABEL ?= resource
+BACKEND_CONTEXT_RESOURCE ?= $(BACKEND_RESOURCE_ID)
+BACKEND_CONTEXT_ACCELERATOR ?= $(CLOUDMAKE_CONTEXT_ACCELERATOR)
+BACKEND_CONTEXT_RESOURCE_STATE ?=
+
+# A compact, backend-neutral execution banner. Callers may set the shell
+# variable CLOUDMAKE_RESOURCE_STATE when they discover started/reused state at
+# runtime; otherwise the backend's static state is used.
+CLOUDMAKE_PRINT_CONTEXT = \
+	printf '[cloudmake] backend=%s' '$(BACKEND)'; \
+	if test -n '$(BACKEND_CONTEXT_ACCELERATOR)'; then \
+		printf ' accelerator=%s' '$(BACKEND_CONTEXT_ACCELERATOR)'; \
+	fi; \
+	if test -n '$(BACKEND_CONTEXT_RESOURCE)'; then \
+		printf ' %s=%s' '$(BACKEND_CONTEXT_RESOURCE_LABEL)' '$(BACKEND_CONTEXT_RESOURCE)'; \
+	fi; \
+	context_state="$${CLOUDMAKE_RESOURCE_STATE:-$(BACKEND_CONTEXT_RESOURCE_STATE)}"; \
+	if test -n "$$context_state"; then printf ' resource=%s' "$$context_state"; fi; \
+	printf '\n'
 
 ifeq ($(strip $(BACKEND_API_VERSION)),)
 $(error Backend "$(BACKEND)" does not declare BACKEND_API_VERSION)

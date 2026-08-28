@@ -98,6 +98,7 @@ _ssh-start: ensure-owner $(BACKEND_PREREQUISITE)
 		echo 'Install the missing tool in the remote image before running cloudmake.' >&2; \
 		exit 2; \
 	fi
+	@CLOUDMAKE_RESOURCE_STATE='$(BACKEND_CONTEXT_RESOURCE_STATE)'; $(CLOUDMAKE_PRINT_CONTEXT)
 
 _ssh-sync: _ssh-start
 	@set -eu; \

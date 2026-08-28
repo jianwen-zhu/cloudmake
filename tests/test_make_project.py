@@ -79,6 +79,7 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
         "host-templates/gcp-e2-micro.conf",
         "notebooks/colab.ipynb",
         "tools/source_fingerprint.py",
+        "tools/target_result.py",
         "tools/lightning_studio_status.py",
         "tools/lightning_ensure_studio.py",
         "tools/validate_ssh_host.py",

@@ -132,6 +132,17 @@ Cloudmake does not blindly retry target execution or a mutating notebook
 submission. An ambiguous failure may already have started work, so automatic
 repetition could produce duplicate jobs or side effects.
 
+Colab target execution separates an expected project failure from an
+infrastructure failure. A completed notebook records the project target and its
+Make exit status in an atomic result receipt. A nonzero status preserves all
+Make output, returns the same nonzero status locally, and produces a concise
+Cloudmake failure summary without turning that ordinary result into a notebook
+Python traceback. A missing, malformed, or inconsistent receipt is an
+infrastructure failure. Unexpected notebook exceptions continue to fail notebook
+execution normally so their traceback and provider diagnostics remain visible.
+In both cases, the launcher retains the executed notebook location and writes
+the normal provenance record; it never retries the project target automatically.
+
 Provider-specific status is retained and followed by one normalized state:
 
 - `absent`

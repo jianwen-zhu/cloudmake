@@ -91,6 +91,7 @@ RESERVED_ASSIGNMENTS = {
     "ARTIFACT_DIR",
     "BACKEND",
     "CLOUDMAKE_CACHE_ROOT",
+    "CLOUDMAKE_CONTEXT_ACCELERATOR",
     "CLOUDMAKE_PROJECT_ARGS_B64",
     "CLOUDMAKE_PROJECT_ROOT",
     "CLOUDMAKE_RUN_ID",
@@ -485,6 +486,8 @@ def resolve_preferences(
         return backend, os.environ["CLOUDMAKE_GPU"], True, ssh_host
     for config in (project_config, shared_config, global_config):
         if "accelerator" in config:
+            if backend not in GPU_BACKENDS:
+                return backend, None, False, ssh_host
             value = config["accelerator"]
             if not isinstance(value, str):
                 raise UsageError("configured accelerator must be a string")
@@ -578,6 +581,9 @@ def engine_command(
     if backend == "host-ssh" and ssh_host is not None:
         variables.append(f"SSH_HOST={ssh_host}")
     if accelerator_set:
+        variables.append(
+            f"CLOUDMAKE_CONTEXT_ACCELERATOR={accelerator or 'cpu'}"
+        )
         variable = {
             "colab-notebook": "COLAB_GPU",
             "colab-ssh": "COLAB_GPU",
@@ -596,6 +602,33 @@ def engine_command(
     if verbose:
         print("+", " ".join(command), file=sys.stderr)
     return subprocess.run(command, cwd=TOOL_ROOT, check=False).returncode
+
+
+def print_local_execution_context(accelerator: str | None, accelerator_set: bool) -> None:
+    fields = ["backend=local"]
+    if accelerator_set:
+        fields.append(f"accelerator={accelerator or 'cpu'}")
+    fields.append("resource=local")
+    print("[cloudmake] " + " ".join(fields), flush=True)
+
+
+def persist_invocation_accelerator(
+    *,
+    project: Path,
+    config_home: Path,
+    key: str,
+    accelerator: str | None,
+) -> None:
+    path = config_home / "projects" / f"{key}.json"
+    saved = load_json(path)
+    saved["accelerator"] = accelerator or ""
+    saved["project"] = os.fspath(project)
+    atomic_json(path, saved)
+    print(
+        f"[cloudmake] selected accelerator={accelerator or 'cpu'} for "
+        f"project={project.name}; subsequent targets reuse this selection.",
+        flush=True,
+    )
 
 
 def local_make_command(
@@ -746,7 +779,10 @@ def run(arguments: list[str]) -> int:
             f", accelerator={accelerator or 'cpu'}" if accelerator_set else ""
         )
         host_note = f", host={ssh_host}" if backend == "host-ssh" else ""
-        print(f"Saved {scope} backend={backend}{host_note}{accelerator_note}")
+        print(
+            f"Saved {scope} backend={backend}{host_note}{accelerator_note}; "
+            "subsequent targets reuse this selection."
+        )
         return 0
     if options["global"]:
         raise UsageError("--global is valid only with --use")
@@ -793,9 +829,21 @@ def run(arguments: list[str]) -> int:
         if not (project / "Makefile").is_file():
             raise UsageError(f"project Makefile was not found: {project / 'Makefile'}")
 
+    if (
+        options["accelerator_set"]
+        and options["backend"] is None
+        and engine_target in {"dispatch", "collect", "start"}
+    ):
+        persist_invocation_accelerator(
+            project=project,
+            config_home=config_home,
+            key=key,
+            accelerator=accelerator,
+        )
+
     state_root = state_home / "projects" / key
     if engine_target not in {"dispatch", "collect"}:
-        return engine_command(
+        exit_code = engine_command(
             project=project,
             backend=backend,
             accelerator=accelerator,
@@ -811,6 +859,17 @@ def run(arguments: list[str]) -> int:
             remote_target=remote_target,
             remote_collect_dir=remote_collect_dir,
         )
+        if (
+            exit_code == 0
+            and engine_target == "start"
+            and BACKENDS[backend][0] == "session"
+            and backend != "host-ssh"
+        ):
+            print(
+                "[cloudmake] subsequent targets reuse this resource until "
+                "cloudmake --stop."
+            )
+        return exit_code
 
     run_id = uuid.uuid4().hex
     manifest_before = source_manifest_snapshot(state_root, backend)
@@ -835,6 +894,7 @@ def run(arguments: list[str]) -> int:
     atomic_json(record_path, record)
     try:
         if backend == "local":
+            print_local_execution_context(accelerator, accelerator_set)
             exit_code = local_make_command(
                 project=project,
                 target=remote_target,
@@ -842,6 +902,12 @@ def run(arguments: list[str]) -> int:
                 jobs=options["jobs"],
                 verbose=options["verbose"],
             )
+            if exit_code:
+                print(
+                    f"[cloudmake] target {remote_target!r} failed with exit status "
+                    f"{exit_code}",
+                    file=sys.stderr,
+                )
             if exit_code == 0 and engine_target == "collect":
                 exit_code = collect_local_artifacts(
                     project=project,

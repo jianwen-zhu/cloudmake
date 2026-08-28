@@ -4,6 +4,7 @@ COLAB_FINGERPRINT := $(COLAB_STATE_DIR)/source.sha256
 COLAB_REMOTE_FINGERPRINT_COPY := $(COLAB_STATE_DIR)/remote-source.sha256
 COLAB_REMOTE_OWNER_COPY := $(COLAB_STATE_DIR)/remote-owner.json
 COLAB_TARGET_FILE := $(COLAB_STATE_DIR)/target
+COLAB_TARGET_RESULT := $(COLAB_STATE_DIR)/target-result.json
 COLAB_ARTIFACT_ARCHIVE := $(COLAB_STATE_DIR)/artifacts.tar.gz
 COLAB_RUN_NOTEBOOK := $(COLAB_STATE_DIR)/runner.ipynb
 
@@ -14,6 +15,7 @@ COLAB_REMOTE_FINGERPRINT := $(COLAB_REMOTE_ROOT)/source.sha256
 COLAB_REMOTE_OWNER_INCOMING := /content/cloud-build-owner.json
 COLAB_REMOTE_OWNER := $(COLAB_REMOTE_ROOT)/.cloudmake-owner.json
 COLAB_REMOTE_TARGET := /content/cloud-build-target
+COLAB_REMOTE_TARGET_RESULT := /content/.cloud-build/target-result.json
 COLAB_REMOTE_ARTIFACTS := /content/.cloud-build/artifacts.tar.gz
 
 COLAB_ACCELERATOR := $(if $(strip $(COLAB_GPU)),--gpu $(COLAB_GPU),)
@@ -83,12 +85,13 @@ $(COLAB_STATE_DIR):
 	mkdir -p '$@'
 
 _colab-start: ensure-owner | $(COLAB_STATE_DIR)
-	@if ! $(COLAB_BIN) sessions 2>/dev/null | \
+	@set -e; resource_state=reused; \
+	if ! $(COLAB_BIN) sessions 2>/dev/null | \
 		awk -v session='$(COLAB_SESSION)' \
 		'$$1 == "[" session "]" { found = 1 } END { exit !found }'; then \
 		$(COLAB_BIN) new -s '$(COLAB_SESSION)' $(COLAB_ACCELERATOR); \
-	fi
-	@set -e; \
+		resource_state=started; \
+	fi; \
 	if ! $(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
 		-f '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_prerequisites.py'; then \
 		echo '[colab] Readiness connection failed; retrying the non-mutating probe once.' >&2; \
@@ -98,7 +101,8 @@ _colab-start: ensure-owner | $(COLAB_STATE_DIR)
 			echo '[colab] Inspect cloudmake --status, then use cloudmake --stop and retry only after verifying the session.' >&2; \
 			exit 1; \
 		fi; \
-	fi
+	fi; \
+	CLOUDMAKE_RESOURCE_STATE=$$resource_state; $(CLOUDMAKE_PRINT_CONTEXT)
 
 _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 	@set -e; \
@@ -160,8 +164,28 @@ _colab-execute: _colab-sync | $(COLAB_STATE_DIR)
 	@mv '$(COLAB_RUN_NOTEBOOK).tmp' '$(COLAB_RUN_NOTEBOOK)'
 	$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
 		'$(COLAB_TARGET_FILE)' '$(COLAB_REMOTE_TARGET)'
+	@set +e; \
 	$(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
-		-f '$(COLAB_RUN_NOTEBOOK)'
+		-f '$(COLAB_RUN_NOTEBOOK)'; \
+	exec_status=$$?; \
+	printf '%s\n' '[cloudmake] notebook=$(COLAB_RUN_NOTEBOOK)'; \
+	if test $$exec_status -ne 0; then \
+		printf '[cloudmake] infrastructure failure: notebook execution exited with status %s\n' "$$exec_status" >&2; \
+	fi; \
+	exit $$exec_status
+	@rm -f '$(COLAB_TARGET_RESULT)' '$(COLAB_TARGET_RESULT).tmp'
+	@set +e; \
+	$(COLAB_BIN) download -s '$(COLAB_SESSION)' \
+		'$(COLAB_REMOTE_TARGET_RESULT)' '$(COLAB_TARGET_RESULT).tmp'; \
+	download_status=$$?; \
+	if test $$download_status -ne 0; then \
+		printf '[cloudmake] infrastructure failure: target result receipt download exited with status %s\n' "$$download_status" >&2; \
+		rm -f '$(COLAB_TARGET_RESULT).tmp'; \
+	fi; \
+	exit $$download_status
+	@mv '$(COLAB_TARGET_RESULT).tmp' '$(COLAB_TARGET_RESULT)'
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/target_result.py' \
+		--result '$(COLAB_TARGET_RESULT)'
 
 _colab-collect: _colab-execute
 	@$(MAKE) --no-print-directory _colab-fetch-ready

@@ -5,6 +5,14 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+## 0.9.0 - 2026-08-28
+
+- Separate expected nonzero Colab Make results from notebook infrastructure
+  exceptions, preserving project output and exit status without exposing an
+  internal `CalledProcessError` traceback.
+- Print compact execution-context banners with the known backend, accelerator,
+  resource identity, and started/reused state, and persist explicit accelerator
+  selection for subsequent project targets.
 - Add the `local` reference backend. Project targets invoke the selected
   project's `Makefile` directly, with no engine dispatch, source transfer,
   session, or injected Make variables, while preserving Cloudmake selection,

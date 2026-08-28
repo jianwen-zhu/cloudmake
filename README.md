@@ -458,6 +458,24 @@ Use `-b` for a one-off override without changing the saved preference:
 cloudmake -b kaggle verify
 ```
 
+An accelerator on the selected backend is also a project preference. For
+example, the first command below selects T4 for this project, starts or reuses
+the environment, and runs the project-provided `bootstrap` target. The later
+targets reuse that selection without repeating `--gpu`:
+
+```sh
+export COLAB_SESSION=tilelang-lab
+cloudmake --use colab
+cloudmake --gpu=T4 bootstrap
+cloudmake verify
+cloudmake quickstart
+```
+
+`--cpu` changes the saved accelerator preference in the same way. An explicit
+`-b` remains a one-invocation backend override and does not change saved
+selection. Cloudmake reports whenever `--use`, `--gpu`, `--cpu`, or `--start`
+changes or establishes reusable project state.
+
 ### 5. Run the project
 
 ```sh
@@ -475,6 +493,19 @@ target.
 Typing `cloudmake` without a command is read-only: it shows the current project,
 selected backend, and concise help. Use `cloudmake --status` when a live provider
 status probe is wanted.
+
+At execution time Cloudmake prints one compact context line before project
+output. Fields that a backend cannot know reliably are omitted:
+
+```text
+[cloudmake] backend=colab-notebook accelerator=T4 session=tilelang-lab resource=started
+[cloudmake] backend=colab-notebook accelerator=T4 session=tilelang-lab resource=reused
+[cloudmake] backend=local resource=local
+```
+
+`resource=started` means this invocation created or started the resource;
+`resource=reused` means it found the existing named resource. This distinction
+describes the execution environment, not a requirement of the project target.
 
 ## Usage
 
@@ -497,8 +528,8 @@ Common options:
 | `-C DIR` | Treat `DIR` as the local project directory. |
 | `-j N` | Pass the parallel job count to Make. |
 | `--host HOST` | Select a user-managed OpenSSH alias for the `ssh` backend. |
-| `--gpu`, `--gpu=TYPE` | Request the default or a named GPU where supported. |
-| `--cpu` | Explicitly request a CPU runtime. |
+| `--gpu`, `--gpu=TYPE` | Select the default or a named GPU where supported; save it for the selected project unless `-b` is an explicit one-off override. |
+| `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
 | `--verbose` | Show provider and transfer commands. |
 
 Cloud operation options:
@@ -590,6 +621,15 @@ Prerequisites:
 Cloudmake uses `colab new`, `sessions`, `upload`, `download`, `exec`, `url`, and
 `stop`. The source is fingerprinted before upload. An unchanged tree reuses the
 remote source and persistent build directory in the named session.
+
+For a normal nonzero project Make result, the notebook preserves the complete
+Make stdout/stderr and writes a small result receipt instead of raising a Python
+`CalledProcessError`. The local command then prints a concise summary such as
+`[cloudmake] target 'gemm' failed with exit status 2` and exits with that status.
+The executed notebook and provenance record are still saved and their locations
+are printed. Exceptions in notebook setup, synchronization, receipt validation,
+or other Cloudmake machinery remain infrastructure failures and retain their
+diagnostic exception output.
 
 Colab kernel execution defaults to a 3600-second cloudmake timeout rather than
 the CLI's short interactive default. Override it for longer workloads with, for

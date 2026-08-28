@@ -109,8 +109,8 @@ elif command == "sessions":
     if os.environ.get("FAKE_COLAB_AUTH_FAIL"):
         print("Colab authentication expired")
         raise SystemExit(1)
-    if marker.exists():
-        print(f"[{session}] running")
+    for session_marker in sorted(remote.glob("session-*")):
+        print(f"[{session_marker.name.removeprefix('session-')}] running")
 elif command == "new":
     marker.write_text("running", encoding="utf-8")
 elif command == "status":
@@ -150,7 +150,19 @@ elif command == "exec":
         control = (remote / "cloud-build-target").read_text(encoding="utf-8").splitlines()
         target_b64 = control[0]
         target = base64.urlsafe_b64decode(target_b64).decode()
-        if len(control) == 5 and control[4]:
+        (remote / "target-result.json").unlink(missing_ok=True)
+        if os.environ.get("FAKE_COLAB_NOTEBOOK_INTERNAL_FAIL"):
+            print("Traceback (most recent call last):")
+            print("RuntimeError: unexpected notebook infrastructure failure")
+            raise SystemExit(1)
+        target_exit = int(os.environ.get("FAKE_COLAB_TARGET_EXIT", "0"))
+        if os.environ.get("FAKE_COLAB_TARGET_OUTPUT"):
+            print(os.environ["FAKE_COLAB_TARGET_OUTPUT"])
+        (remote / "target-result.json").write_text(
+            json.dumps({"schema": 1, "target": target, "exit_code": target_exit}) + "\n",
+            encoding="utf-8",
+        )
+        if target_exit == 0 and len(control) == 5 and control[4]:
             payload = remote / "artifact-payload"
             payload.mkdir(exist_ok=True)
             (payload / "hello").write_text("fake artifact\n", encoding="utf-8")
@@ -695,6 +707,81 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     assert not any(call[1] == "new" for call in second_calls)
     assert not any(call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz" for call in second_calls)
     assert any(call[1] == "upload" and call[-1] == "/content/cloud-build-target" for call in second_calls)
+
+
+@pytest.mark.integration
+def test_colab_launcher_reports_context_reuse_and_expected_target_failure_cleanly(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "external-context-project")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["COLAB_SESSION"] = "tilelang-lab"
+
+    selected = run_command([LAUNCHER, "--use", "colab"], cwd=project, env=env)
+    first = run_command(
+        [LAUNCHER, "--gpu=T4", "build"], cwd=project, env=env
+    )
+    second = run_command([LAUNCHER, "test"], cwd=project, env=env)
+
+    assert "subsequent targets reuse this selection" in selected.stdout
+    assert "selected accelerator=T4" in first.stdout
+    assert (
+        "[cloudmake] backend=colab-notebook accelerator=T4 "
+        "session=tilelang-lab resource=started"
+    ) in first.stdout
+    assert (
+        "[cloudmake] backend=colab-notebook accelerator=T4 "
+        "session=tilelang-lab resource=reused"
+    ) in second.stdout
+
+    env["FAKE_COLAB_TARGET_EXIT"] = "2"
+    env["FAKE_COLAB_TARGET_OUTPUT"] = "make: deliberate project failure"
+    failed = run_command(
+        [LAUNCHER, "gemm"], cwd=project, env=env, check=False
+    )
+
+    assert failed.returncode == 2
+    assert "make: deliberate project failure" in failed.stdout
+    assert "[cloudmake] target 'gemm' failed with exit status 2" in failed.stdout
+    assert "CalledProcessError" not in failed.stdout
+    assert "Traceback" not in failed.stdout
+    assert "resource=reused" in failed.stdout
+    assert "[cloudmake] notebook=" in failed.stdout
+    assert "provenance=" in failed.stdout
+    runner = next((tmp_path / "state").rglob("runner.ipynb"))
+    assert runner.is_file()
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["target"] == "gemm"
+    assert provenance["status"] == "failed"
+    assert provenance["exit_code"] == 2
+
+
+@pytest.mark.integration
+def test_colab_launcher_retains_unexpected_notebook_traceback(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "external-infrastructure-failure")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["COLAB_SESSION"] = "diagnostic-session"
+    env["FAKE_COLAB_NOTEBOOK_INTERNAL_FAIL"] = "1"
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Traceback (most recent call last):" in result.stdout
+    assert "unexpected notebook infrastructure failure" in result.stdout
+    assert "[cloudmake] infrastructure failure: notebook execution" in result.stdout
+    assert "target 'build' failed with exit status" not in result.stdout
+    assert "[cloudmake] notebook=" in result.stdout
+    assert "provenance=" in result.stdout
 
 
 @pytest.mark.integration
