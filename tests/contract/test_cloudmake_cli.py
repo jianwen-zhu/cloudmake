@@ -172,6 +172,62 @@ def test_doctor_invokes_read_only_backend_readiness_gate(
     assert not any(argument.startswith("REMOTE_TARGET_B64=") for argument in call)
 
 
+def test_colab_default_session_is_stable_and_distinct_per_project(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    first_project = make_project(tmp_path / "first project")
+    second_project = make_project(tmp_path / "second project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    invoke(first_project, environment, "-b", "colab", "build")
+    invoke(first_project, environment, "-b", "colab", "test")
+    invoke(second_project, environment, "-b", "colab", "build")
+
+    sessions = [
+        next(argument.split("=", 1)[1] for argument in call if argument.startswith("COLAB_SESSION="))
+        for call in engine_calls(log)
+    ]
+    assert sessions[0] == sessions[1]
+    assert sessions[0].startswith("first-project-")
+    assert sessions[2].startswith("second-project-")
+    assert sessions[0] != sessions[2]
+
+
+def test_explicit_colab_session_is_preserved_exactly(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    environment["COLAB_SESSION"] = "shared-lab"
+
+    invoke(project, environment, "-b", "colab", "build")
+
+    assert_assignment(engine_calls(log)[0], "COLAB_SESSION", "shared-lab")
+
+
+def test_existing_v09_cuda_build_state_retains_legacy_default_session(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "-b", "colab", "build")
+    first = engine_calls(log)[0]
+    state_root = Path(
+        next(
+            argument.split("=", 1)[1]
+            for argument in first
+            if argument.startswith("CLOUDMAKE_STATE_ROOT=")
+        )
+    )
+    (state_root / "colab-notebook" / "cuda-build").mkdir(parents=True)
+    log.write_text("", encoding="utf-8")
+
+    result = invoke(project, environment, "-b", "colab", "test")
+
+    assert "Reusing legacy default session cuda-build" in result.stdout
+    assert_assignment(engine_calls(log)[0], "COLAB_SESSION", "cuda-build")
+
+
 def test_use_persists_canonical_backend_outside_project(
     tmp_path: Path, fake_bin: Path
 ) -> None:

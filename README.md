@@ -622,6 +622,29 @@ Cloudmake uses `colab new`, `sessions`, `upload`, `download`, `exec`, `url`, and
 `stop`. The source is fingerprinted before upload. An unchanged tree reuses the
 remote source and persistent build directory in the named session.
 
+Unless `COLAB_SESSION` is set explicitly, the launcher derives a readable,
+collision-resistant session name from the local project identity. Projects
+with existing v0.9 local state under the former `cuda-build` default continue
+using that session and receive a migration notice.
+
+New or waking sessions are polled with a non-mutating prerequisite probe before
+source upload or target submission. `COLAB_READY_TIMEOUT` (default `120`),
+`COLAB_READY_POLL_SECONDS` (default `3`), and
+`COLAB_READY_PROBE_TIMEOUT` (default `15`) tune the bounded wait. If a session
+created by the current invocation never becomes ready, Cloudmake releases it.
+An unreachable pre-existing session is left untouched because ownership cannot
+be verified. In both cases the requested project target was not submitted and
+is safe to retry.
+
+Colab sessions are reusable but not durable. If remote ownership or fingerprint
+control state disappears, Cloudmake treats the runtime as fresh/reset, warns
+that runtime-local generated files may be gone, and performs a full stateless
+source sync. Projects that need repeatable session setup may declare an
+idempotent Make target with `COLAB_SESSION_PREPARE_TARGET=TARGET`; it runs after
+a fresh/reset sync and is skipped while its session receipt remains valid.
+The retry boundary and provider-identity limitation are detailed in the
+[Colab session resilience design](docs/colab-session-resilience.md).
+
 For a normal nonzero project Make result, the notebook preserves the complete
 Make stdout/stderr and writes a small result receipt instead of raising a Python
 `CalledProcessError`. The local command then prints a concise summary such as
@@ -1022,7 +1045,10 @@ limits before extraction.
 Every project execution creates a private local provenance record containing the
 backend, remote resource, target, source fingerprint, result, and—when collected—
 an artifact fingerprint. Make-assignment names are recorded, but their values are
-stored only as hashes. `cloudmake --history` shows the ten latest runs.
+stored only as hashes. Native Colab records additionally identify the lifecycle
+phase, normalized provider/runtime state, whether this invocation created the
+session, target-submission certainty, and retry safety. `cloudmake --history`
+shows the ten latest runs.
 
 Cloudmake verifies workspace ownership before destructive synchronization,
 serializes concurrent mutations, reconciles saved sessions with live provider

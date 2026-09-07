@@ -122,11 +122,24 @@ provider-generated SSH configuration has expired, cloudmake refreshes it once
 after a failed connection. Host SSH configuration is user-managed, so Cloudmake
 never rewrites or regenerates it.
 
-Colab retries its non-mutating remote-readiness probe once. If the named kernel
-remains unreachable, Cloudmake refuses automatic recreation because it cannot
-verify remote ownership through the broken connection. The operator must inspect
-status and explicitly stop the session before retrying. Cloudmake never applies
-readiness retries to a project target.
+Colab polls its non-mutating remote-readiness probe until a configurable,
+monotonic deadline. Polling happens before source mutation or target submission
+and reports one waiting message plus a final outcome rather than flooding the
+terminal. A never-ready session is automatically released only when the current
+invocation successfully created it. A pre-existing unreachable session is not
+stopped, recreated, or adopted because ownership is ambiguous. In either case
+the requested target remains `not_submitted`, and Cloudmake reports that retrying
+the command is safe.
+
+The default Colab session is scoped to stable local project identity. Explicit
+`COLAB_SESSION` values are unchanged; projects with existing local state under
+the old `cuda-build` default retain it. Once reachable, a workspace with the
+expected owner is classified as the same runtime. Missing ownership or source
+fingerprint control state is classified as fresh/reset and forces a complete
+stateless source replacement. A foreign owner is refused unless explicitly
+adopted. An unreachable runtime stays ambiguous. Because v0.9 has no durable
+workspace layer, reset warnings explicitly note that runtime-local generated
+state may be gone.
 
 Cloudmake does not blindly retry target execution or a mutating notebook
 submission. An ambiguous failure may already have started work, so automatic
@@ -142,6 +155,13 @@ infrastructure failure. Unexpected notebook exceptions continue to fail notebook
 execution normally so their traceback and provider diagnostics remain visible.
 In both cases, the launcher retains the executed notebook location and writes
 the normal provenance record; it never retries the project target automatically.
+
+Colab provenance adds the current phase, normalized provider state, runtime
+classification, current-invocation creation evidence, target-submission state,
+and retry-safety flag. `not_submitted` is safe to retry; `ambiguous` means the
+execution request crossed the provider boundary and must be investigated before
+manual repetition. Messages include the exact safe status command when one is
+available and never include provider credentials.
 
 Provider-specific status is retained and followed by one normalized state:
 

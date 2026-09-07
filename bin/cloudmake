@@ -92,6 +92,7 @@ RESERVED_ASSIGNMENTS = {
     "BACKEND",
     "CLOUDMAKE_CACHE_ROOT",
     "CLOUDMAKE_CONTEXT_ACCELERATOR",
+    "CLOUDMAKE_OPERATION_STATE",
     "CLOUDMAKE_PROJECT_ARGS_B64",
     "CLOUDMAKE_PROJECT_ROOT",
     "CLOUDMAKE_RUN_ID",
@@ -142,6 +143,18 @@ def project_key(project: Path) -> str:
 def project_slug(project: Path, key: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", project.name).strip("-.")
     return f"{stem or 'project'}-{key[:8]}"
+
+
+def colab_session_name(project: Path, key: str, state_root: Path) -> str:
+    if "COLAB_SESSION" in os.environ:
+        return os.environ["COLAB_SESSION"]
+    if (state_root / "colab-notebook" / "cuda-build").is_dir():
+        print(
+            "[colab] Reusing legacy default session cuda-build for this project's "
+            "existing local state; set COLAB_SESSION explicitly to migrate."
+        )
+        return "cuda-build"
+    return project_slug(project, key)
 
 
 def load_json(path: Path, *, optional: bool = True) -> dict[str, Any]:
@@ -552,6 +565,8 @@ def engine_command(
     remote_target: str | None = None,
     remote_collect_dir: str | None = None,
     run_id: str | None = None,
+    colab_session: str | None = None,
+    operation_state: Path | None = None,
 ) -> int:
     make = shutil.which("make")
     if make is None:
@@ -572,6 +587,10 @@ def engine_command(
     ]
     if run_id is not None:
         variables.append(f"CLOUDMAKE_RUN_ID={run_id}")
+    if colab_session is not None:
+        variables.append(f"COLAB_SESSION={colab_session}")
+    if operation_state is not None:
+        variables.append(f"CLOUDMAKE_OPERATION_STATE={operation_state}")
     if jobs is not None:
         if not jobs.isdigit() or int(jobs) < 1:
             raise UsageError("-j requires a positive integer")
@@ -842,7 +861,19 @@ def run(arguments: list[str]) -> int:
         )
 
     state_root = state_home / "projects" / key
+    colab_session = (
+        colab_session_name(project, key, state_root)
+        if backend == "colab-notebook"
+        else None
+    )
     if engine_target not in {"dispatch", "collect"}:
+        operation_state = (
+            state_root / "operations" / f"{engine_target}.json"
+            if backend == "colab-notebook"
+            else None
+        )
+        if operation_state is not None:
+            operation_state.unlink(missing_ok=True)
         exit_code = engine_command(
             project=project,
             backend=backend,
@@ -858,7 +889,20 @@ def run(arguments: list[str]) -> int:
             assignments=assignments,
             remote_target=remote_target,
             remote_collect_dir=remote_collect_dir,
+            colab_session=colab_session,
+            operation_state=operation_state,
         )
+        lifecycle = (
+            load_json(operation_state)
+            if operation_state is not None and operation_state.is_file()
+            else {}
+        )
+        if (
+            exit_code != 0
+            and lifecycle.get("failure_code")
+            in {"readiness_deadline_exceeded", "readiness_deadline_cleanup_failed"}
+        ):
+            exit_code = 75
         if (
             exit_code == 0
             and engine_target == "start"
@@ -892,6 +936,7 @@ def run(arguments: list[str]) -> int:
     if ssh_host is not None:
         record["host"] = ssh_host
     atomic_json(record_path, record)
+    operation_state = state_root / "operations" / f"{run_id}.json"
     try:
         if backend == "local":
             print_local_execution_context(accelerator, accelerator_set)
@@ -933,6 +978,8 @@ def run(arguments: list[str]) -> int:
                 remote_target=remote_target,
                 remote_collect_dir=remote_collect_dir,
                 run_id=run_id,
+                colab_session=colab_session,
+                operation_state=operation_state,
             )
     except BaseException:
         record.update(status="interrupted", finished_at=utc_timestamp())
@@ -940,6 +987,13 @@ def run(arguments: list[str]) -> int:
         atomic_json(runs / "latest.json", record)
         raise
 
+    lifecycle = load_json(operation_state) if operation_state.is_file() else {}
+    if (
+        exit_code != 0
+        and lifecycle.get("failure_code")
+        in {"readiness_deadline_exceeded", "readiness_deadline_cleanup_failed"}
+    ):
+        exit_code = 75
     if backend == "local":
         resource_id, source = os.fspath(project), {"mode": "local-working-tree"}
     else:
@@ -951,6 +1005,20 @@ def run(arguments: list[str]) -> int:
         resource_id=resource_id,
         source=source,
     )
+    if lifecycle:
+        record["lifecycle"] = lifecycle
+        for field in (
+            "phase",
+            "provider_state",
+            "runtime_state",
+            "session_created",
+            "target_submission",
+            "preparation_state",
+            "retry_safe",
+            "failure_code",
+        ):
+            if field in lifecycle:
+                record[field] = lifecycle[field]
     if engine_target == "collect" and exit_code == 0:
         record["artifacts"] = artifact_receipt(project / "artifacts")
     atomic_json(record_path, record)
