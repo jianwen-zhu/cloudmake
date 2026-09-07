@@ -13,8 +13,14 @@ stable on that host, and unlikely to collide with another project.
 
 An explicit `COLAB_SESSION` always wins. If the project's external Cloudmake
 state already contains `colab-notebook/cuda-build`, the launcher keeps the old
-v0.9 default and prints a migration notice. Shared explicit names remain
-possible, but remote ownership checking prevents accidental replacement.
+v0.9 default and prints the persistent migration command. The operator selects
+a durable per-project replacement with
+`COLAB_SESSION=NAME cloudmake --use colab`. A normal environment override stays
+unpersisted. Before changing the saved selection, the operator inspects
+`cuda-build` with `COLAB_SESSION=cuda-build cloudmake -b colab --status` and,
+only when it is no longer needed, releases it with the corresponding `--stop`
+command. Shared explicit names remain possible, but remote ownership checking
+prevents accidental replacement.
 
 ## Pre-submission state machine
 
@@ -39,7 +45,9 @@ No other session is automatically destroyed or recreated.
 
 The provider CLI does not expose a stable runtime-instance identifier, so
 Cloudmake uses its remote ownership and source-fingerprint files as control
-state:
+state. It first runs a non-mutating remote existence probe. Only a successful
+probe can establish that a file is absent; a failed probe or a failed download
+of a file reported present is ambiguous and stops before synchronization:
 
 - `same`: the reachable workspace has the expected owner and control state;
 - `fresh`: this invocation created the session and remote ownership is absent;
@@ -55,7 +63,11 @@ source snapshot. It does not preserve generated files across a replacement VM.
 `COLAB_SESSION_PREPARE_TARGET` optionally names a project-defined, idempotent
 Make target. Cloudmake runs it after fresh/reset synchronization, records a
 receipt only after confirmed success, and skips it while the same live session
-retains that receipt. The requested target is uploaded only afterward.
+retains a receipt bound to both the target name and synchronized source
+fingerprint. Source changes conservatively rerun the idempotent preparation.
+The requested target is uploaded only afterward. Receipt upload and installation
+failures retain `not_submitted` for the requested target and have distinct
+machine-readable failure codes.
 
 ## Failure provenance and replay boundary
 

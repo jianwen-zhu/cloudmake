@@ -119,10 +119,30 @@ elif command == "stop":
     marker.unlink(missing_ok=True)
 elif command == "upload":
     local, remote_name = arguments[-2:]
+    if (
+        os.environ.get("FAKE_COLAB_PREP_RECEIPT_UPLOAD_FAIL")
+        and remote_name == "/content/cloud-build-prepared"
+    ):
+        print("Connection was lost while uploading preparation receipt.")
+        raise SystemExit(1)
     shutil.copyfile(local, remote / Path(remote_name).name)
 elif command == "download":
     remote_name, local = arguments[-2:]
     source = remote / Path(remote_name).name
+    if (
+        os.environ.get("FAKE_COLAB_OWNER_DOWNLOAD_CONNECTION_FAIL")
+        and remote_name.endswith("/.cloudmake-owner.json")
+        and source.exists()
+    ):
+        print("Connection was lost while downloading owner record.")
+        raise SystemExit(1)
+    if (
+        os.environ.get("FAKE_COLAB_FINGERPRINT_DOWNLOAD_CONNECTION_FAIL")
+        and remote_name.endswith("/source.sha256")
+        and source.exists()
+    ):
+        print("Connection was lost while downloading source fingerprint.")
+        raise SystemExit(1)
     if not source.exists():
         raise SystemExit(1)
     Path(local).parent.mkdir(parents=True, exist_ok=True)
@@ -149,10 +169,17 @@ elif command == "exec":
         (remote / "readiness-failed-once").write_text("failed", encoding="utf-8")
         print("Connection was lost.")
         raise SystemExit(1)
-    if script.name == "colab_sync.py":
+    if script.name == "colab_control_state.py":
+        owner = "present" if (remote / ".cloudmake-owner.json").is_file() else "absent"
+        fingerprint = "present" if (remote / "source.sha256").is_file() else "absent"
+        print(f"[cloudmake] control-state owner={owner} fingerprint={fingerprint}")
+    elif script.name == "colab_sync.py":
         shutil.copyfile(remote / "cloud-build-source.sha256", remote / "source.sha256")
         shutil.copyfile(remote / "cloud-build-owner.json", remote / ".cloudmake-owner.json")
     elif script.name == "colab_prepare.py":
+        if os.environ.get("FAKE_COLAB_PREP_INSTALL_FAIL"):
+            print("Connection was lost while installing preparation receipt.")
+            raise SystemExit(1)
         shutil.copyfile(remote / "cloud-build-prepared", remote / ".cloudmake-prepared")
     elif script.suffix == ".ipynb" and (remote / "cloud-build-target").exists():
         control = (remote / "cloud-build-target").read_text(encoding="utf-8").splitlines()
@@ -708,7 +735,8 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     assert all(
         call[call.index("--timeout") + 1] == "3600"
         for call in first_calls
-        if call[1] == "exec" and not call[-1].endswith("remote_prerequisites.py")
+        if call[1] == "exec"
+        and not call[-1].endswith(("remote_prerequisites.py", "colab_control_state.py"))
     )
     readiness_call = next(
         call
@@ -1077,13 +1105,71 @@ def test_colab_idempotent_preparation_runs_on_fresh_and_reset_only(
 
     run_command(command, cwd=prototype, env=env)
     run_command(command, cwd=prototype, env=env)
+    (prototype / "preparation-input.txt").write_text("changed\n", encoding="utf-8")
+    run_command(command, cwd=prototype, env=env)
     remote = Path(env["FAKE_REMOTE"])
     (remote / ".cloudmake-owner.json").unlink()
     (remote / "source.sha256").unlink()
     run_command(command, cwd=prototype, env=env)
 
     targets = [call[1] for call in calls(Path(env["FAKE_LOG"])) if call[0] == "target"]
-    assert targets == ["bootstrap", "build", "build", "bootstrap", "build"]
+    assert targets == [
+        "bootstrap",
+        "build",
+        "build",
+        "bootstrap",
+        "build",
+        "bootstrap",
+        "build",
+    ]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("failure_variable", "failure_code", "preparation_state"),
+    [
+        (
+            "FAKE_COLAB_PREP_RECEIPT_UPLOAD_FAIL",
+            "preparation_receipt_upload_failed",
+            "succeeded",
+        ),
+        (
+            "FAKE_COLAB_PREP_INSTALL_FAIL",
+            "preparation_receipt_install_ambiguous",
+            "ambiguous",
+        ),
+    ],
+)
+def test_colab_preparation_receipt_failures_keep_requested_target_unsubmitted(
+    fake_bin: Path,
+    tmp_path: Path,
+    failure_variable: str,
+    failure_code: str,
+    preparation_state: str,
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / failure_code)
+    env = launcher_environment(fake_bin, tmp_path)
+    env["COLAB_SESSION_PREPARE_TARGET"] = "bootstrap"
+    env[failure_variable] = "1"
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "build"], cwd=project, env=env, check=False
+    )
+
+    assert result.returncode != 0
+    assert "requested target was not submitted" in result.stdout
+    assert [call for call in calls(Path(env["FAKE_LOG"])) if call[0] == "target"] == [
+        ["target", "bootstrap"]
+    ]
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["phase"] == "preparation"
+    assert provenance["provider_state"] == "unknown"
+    assert provenance["preparation_state"] == preparation_state
+    assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
+    assert provenance["failure_code"] == failure_code
 
 
 @pytest.mark.integration
@@ -1155,6 +1241,97 @@ def test_colab_native_refuses_foreign_workspace_without_explicit_adoption(
         env=env,
     )
     assert "Adopting Colab session" in adopted.stdout
+
+
+@pytest.mark.integration
+def test_colab_owner_download_failure_never_overwrites_foreign_workspace(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "owner-download-ambiguity")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["COLAB_SESSION"] = "shared-foreign"
+    env["FAKE_COLAB_OWNER_DOWNLOAD_CONNECTION_FAIL"] = "1"
+    remote = Path(env["FAKE_REMOTE"])
+    remote.mkdir(parents=True)
+    (remote / "session-shared-foreign").write_text("running", encoding="utf-8")
+    foreign_owner = {
+        "schema": 1,
+        "project_id": "foreign",
+        "project_name": "other-project",
+        "source_path": "/other/project",
+        "hostname": "other-host",
+    }
+    (remote / ".cloudmake-owner.json").write_text(
+        json.dumps(foreign_owner), encoding="utf-8"
+    )
+    (remote / "source.sha256").write_text("f" * 64 + "\n", encoding="utf-8")
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "build"], cwd=project, env=env, check=False
+    )
+
+    assert result.returncode != 0
+    assert "owner exists but could not be read" in result.stdout
+    assert "synchronization was refused" in result.stdout
+    assert json.loads(
+        (remote / ".cloudmake-owner.json").read_text(encoding="utf-8")
+    ) == foreign_owner
+    all_calls = calls(Path(env["FAKE_LOG"]))
+    assert not any(
+        call[0] == "colab" and call[1] in {"new", "stop"} for call in all_calls
+    )
+    assert not any(
+        call[0] == "colab"
+        and call[1] == "upload"
+        and call[-1] == "/content/cloud-build-source.tar.gz"
+        for call in all_calls
+    )
+    assert not any(call[0] == "target" for call in all_calls)
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["phase"] == "ownership"
+    assert provenance["provider_state"] == "unknown"
+    assert provenance["runtime_state"] == "unreachable"
+    assert provenance["session_created"] is False
+    assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
+    assert provenance["failure_code"] == "owner_record_unreadable"
+
+
+@pytest.mark.integration
+def test_colab_fingerprint_download_failure_is_not_treated_as_reset(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "fingerprint-download-ambiguity")
+    env = launcher_environment(fake_bin, tmp_path)
+    run_command([LAUNCHER, "-b", "colab", "build"], cwd=project, env=env)
+    Path(env["FAKE_LOG"]).write_text("", encoding="utf-8")
+    env["FAKE_COLAB_FINGERPRINT_DOWNLOAD_CONNECTION_FAIL"] = "1"
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "test"], cwd=project, env=env, check=False
+    )
+
+    assert result.returncode != 0
+    assert "fingerprint exists but could not be read" in result.stdout
+    all_calls = calls(Path(env["FAKE_LOG"]))
+    assert not any(
+        call[0] == "colab"
+        and call[1] == "upload"
+        and call[-1] == "/content/cloud-build-source.tar.gz"
+        for call in all_calls
+    )
+    assert not any(call[0] == "target" for call in all_calls)
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["phase"] == "synchronization"
+    assert provenance["provider_state"] == "unknown"
+    assert provenance["runtime_state"] == "unreachable"
+    assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
+    assert provenance["failure_code"] == "fingerprint_unreadable"
 
 
 @pytest.mark.integration

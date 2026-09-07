@@ -224,8 +224,21 @@ def test_existing_v09_cuda_build_state_retains_legacy_default_session(
 
     result = invoke(project, environment, "-b", "colab", "test")
 
-    assert "Reusing legacy default session cuda-build" in result.stdout
+    assert "Continuing with legacy session cuda-build" in result.stdout
+    assert "COLAB_SESSION=NAME cloudmake --use colab" in result.stdout
     assert_assignment(engine_calls(log)[0], "COLAB_SESSION", "cuda-build")
+
+    environment["COLAB_SESSION"] = "migrated-project-session"
+    selected = invoke(project, environment, "--use", "colab")
+    assert "session=migrated-project-session" in selected.stdout
+    del environment["COLAB_SESSION"]
+    log.write_text("", encoding="utf-8")
+
+    invoke(project, environment, "-b", "colab", "build")
+
+    assert_assignment(
+        engine_calls(log)[0], "COLAB_SESSION", "migrated-project-session"
+    )
 
 
 def test_use_persists_canonical_backend_outside_project(

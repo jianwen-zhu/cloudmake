@@ -133,13 +133,18 @@ the command is safe.
 
 The default Colab session is scoped to stable local project identity. Explicit
 `COLAB_SESSION` values are unchanged; projects with existing local state under
-the old `cuda-build` default retain it. Once reachable, a workspace with the
-expected owner is classified as the same runtime. Missing ownership or source
-fingerprint control state is classified as fresh/reset and forces a complete
-stateless source replacement. A foreign owner is refused unless explicitly
-adopted. An unreachable runtime stays ambiguous. Because v0.9 has no durable
-workspace layer, reset warnings explicitly note that runtime-local generated
-state may be gone.
+the old `cuda-build` default retain it. Operators persist a deliberate migration
+with `COLAB_SESSION=NAME cloudmake --use colab`; a normal environment override
+remains unpersisted. The legacy session should first be inspected with
+`COLAB_SESSION=cuda-build cloudmake -b colab --status` and stopped explicitly
+only when no longer needed. Once reachable, a workspace with the expected owner
+is classified as the same runtime. A successful remote probe that reports missing
+ownership or source-fingerprint control state establishes fresh/reset and forces
+a complete stateless source replacement. A transport/download failure does not
+prove absence: Cloudmake records the workspace as unreachable/ambiguous and
+stops before synchronization. A foreign owner is refused unless explicitly
+adopted. Because v0.9 has no durable workspace layer, reset warnings explicitly
+note that runtime-local generated state may be gone.
 
 Cloudmake does not blindly retry target execution or a mutating notebook
 submission. An ambiguous failure may already have started work, so automatic

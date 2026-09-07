@@ -51,8 +51,10 @@ The Colab backend has one opt-in setup hook. If the operator sets
 after a fresh or reset session has received the source snapshot, before the
 requested target. It must be idempotent because a lost connection can make its
 completion ambiguous. Cloudmake records a session-local receipt after confirmed
-success and skips the hook on subsequent uses of the same intact runtime. This
-does not create a mandatory target name or cross-session persistence contract.
+success and skips the hook only when both its target name and synchronized
+source fingerprint still match on the same intact runtime. A source change
+conservatively runs the idempotent hook again. This does not create a mandatory
+target name or cross-session persistence contract.
 
 ## Make-variable interface
 

@@ -7,13 +7,15 @@ once a version is published as a GitHub release.
 
 - Derive the default native Colab session from stable local project identity,
   while preserving explicit `COLAB_SESSION` values and existing v0.9
-  `cuda-build` state.
+  `cuda-build` state, with an explicit per-project command to persist migration.
 - Replace the two-shot Colab readiness check with configurable deadline-bounded
   polling, cleaning up only a never-ready session created by that invocation
   and never replaying a project target.
-- Detect missing remote Colab control state as a fresh/reset runtime, force a
+- Confirm missing remote Colab control state before treating it as a fresh/reset
+  runtime, refuse synchronization when control-state reads are ambiguous, force a
   full stateless source sync, support an optional idempotent session-preparation
-  target, and record structured lifecycle and retry-safety provenance.
+  target with source-bound receipts, and record structured lifecycle and
+  retry-safety provenance.
 
 ## 0.9.0 - 2026-08-28
 

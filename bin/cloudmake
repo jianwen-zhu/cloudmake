@@ -85,6 +85,7 @@ ACTION_OPTIONS = {
 }
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.DOTALL)
 ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
+COLAB_SESSION_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 SSH_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 HOST_TEMPLATE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 RESERVED_ASSIGNMENTS = {
@@ -145,13 +146,25 @@ def project_slug(project: Path, key: str) -> str:
     return f"{stem or 'project'}-{key[:8]}"
 
 
-def colab_session_name(project: Path, key: str, state_root: Path) -> str:
+def colab_session_name(
+    project: Path, key: str, state_root: Path, config_home: Path
+) -> str:
     if "COLAB_SESSION" in os.environ:
         return os.environ["COLAB_SESSION"]
+    configured = load_json(config_home / "projects" / f"{key}.json").get(
+        "colab_session"
+    )
+    if configured is not None:
+        if not isinstance(configured, str) or not COLAB_SESSION_NAME.fullmatch(
+            configured
+        ):
+            raise UsageError("configured Colab session name is invalid")
+        return configured
     if (state_root / "colab-notebook" / "cuda-build").is_dir():
         print(
-            "[colab] Reusing legacy default session cuda-build for this project's "
-            "existing local state; set COLAB_SESSION explicitly to migrate."
+            "[colab] Continuing with legacy session cuda-build for this project's "
+            "existing v0.9 state. To select and persist a replacement: "
+            "COLAB_SESSION=NAME cloudmake --use colab"
         )
         return "cuda-build"
     return project_slug(project, key)
@@ -785,11 +798,25 @@ def run(arguments: list[str]) -> int:
         )
         if backend == "host-ssh" and ssh_host is None:
             raise UsageError("the ssh backend requires --host HOST")
+        selected_colab_session = None
+        if backend == "colab-notebook" and "COLAB_SESSION" in os.environ:
+            selected_colab_session = os.environ["COLAB_SESSION"]
+            if not COLAB_SESSION_NAME.fullmatch(selected_colab_session):
+                raise UsageError(
+                    "Colab session names must contain only letters, numbers, dot, "
+                    "dash, and underscore"
+                )
+            if options["global"]:
+                raise UsageError(
+                    "COLAB_SESSION can be persisted only with per-project --use"
+                )
         saved["backend"] = backend
         if accelerator_set:
             saved["accelerator"] = accelerator or ""
         if backend == "host-ssh":
             saved["host"] = ssh_host
+        if selected_colab_session is not None:
+            saved["colab_session"] = selected_colab_session
         if not options["global"]:
             saved["project"] = os.fspath(project)
         atomic_json(path, saved)
@@ -798,8 +825,14 @@ def run(arguments: list[str]) -> int:
             f", accelerator={accelerator or 'cpu'}" if accelerator_set else ""
         )
         host_note = f", host={ssh_host}" if backend == "host-ssh" else ""
+        session_note = (
+            f", session={selected_colab_session}"
+            if selected_colab_session is not None
+            else ""
+        )
         print(
-            f"Saved {scope} backend={backend}{host_note}{accelerator_note}; "
+            f"Saved {scope} backend={backend}{host_note}{accelerator_note}"
+            f"{session_note}; "
             "subsequent targets reuse this selection."
         )
         return 0
@@ -862,7 +895,7 @@ def run(arguments: list[str]) -> int:
 
     state_root = state_home / "projects" / key
     colab_session = (
-        colab_session_name(project, key, state_root)
+        colab_session_name(project, key, state_root, config_home)
         if backend == "colab-notebook"
         else None
     )

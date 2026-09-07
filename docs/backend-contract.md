@@ -83,6 +83,8 @@ identity. An explicit `COLAB_SESSION` remains exact, and existing local state
 for the v0.9 `cuda-build` default selects that legacy name. This prevents two
 unrelated projects from silently sharing a mutable session while retaining an
 intentional shared-session escape hatch guarded by normal ownership checks.
+`COLAB_SESSION=NAME cloudmake --use colab` persists a deliberate per-project
+replacement; a one-off environment override is not persisted.
 
 A `batch` backend submits a fresh job for each operational target. `start` may
 validate readiness, but it must not pretend to create a reusable VM. `stop` may
@@ -127,6 +129,11 @@ readiness probes and must bound the wait by a deadline. It may automatically
 release a never-ready resource only when the current invocation has positive
 evidence that it created that resource. A pre-existing unreachable resource
 must not be stopped, recreated, or adopted automatically.
+
+Likewise, transport failure is not evidence that a remote control file is
+absent. Fresh/reset recovery requires a successful remote probe that positively
+reports absence. If the probe says an owner or fingerprint exists but its
+contents cannot be downloaded, synchronization must stop as ambiguous.
 
 Once a target request has crossed the execution boundary, a connection failure
 is ambiguous. The transport must not replay the target. Failure state records
