@@ -477,6 +477,12 @@ cloudmake verify
 cloudmake quickstart
 ```
 
+Without `COLAB_SESSION`, the native Colab backend derives a stable name from
+the project directory name and identity, such as `tilelang-lab-a1b2c3d4`.
+Different project paths therefore receive different defaults. Existing local
+state created with the former `cuda-build` default remains compatible and is
+reused with a migration notice.
+
 `--cpu` changes the saved accelerator preference in the same way. An explicit
 `-b` remains a one-invocation backend override and does not change saved
 selection. Cloudmake reports whenever `--use`, `--gpu`, `--cpu`, or `--start`
@@ -700,6 +706,18 @@ Colab kernel execution defaults to a 3600-second cloudmake timeout rather than
 the CLI's short interactive default. Override it for longer workloads with, for
 example, `COLAB_TIMEOUT=7200 cloudmake PROJECT_TARGET`, replacing
 `PROJECT_TARGET` with a target from the project's Makefile.
+
+Initial remote readiness has its own bounded policy: a 120-second deadline,
+15-second probe timeout, and 3-second polling interval. Tune these with
+`COLAB_READY_TIMEOUT`, `COLAB_READY_PROBE_TIMEOUT`, and
+`COLAB_READY_POLL_SECONDS`. These retries happen before target submission and
+never replay project work.
+
+For idempotent setup that must be restored after Colab replaces a runtime, a
+project may opt in with
+`COLAB_SESSION_PREPARE_TARGET=prepare-session cloudmake PROJECT_TARGET`.
+Cloudmake records successful preparation in the runtime and skips it on reuse.
+See the [project contract](docs/project-contract.md) before enabling the hook.
 
 Accelerator availability, runtime duration, and usage limits are dynamic and are
 not guaranteed. Omitting the GPU requests a CPU runtime. Always stop an unused
@@ -1104,6 +1122,7 @@ notebook or ignored filename is not a secrets manager. Review these focused
 documents before using private source or diagnosing a failure:
 
 - [Resilience and recovery](docs/resilience.md)
+- [Colab session resilience design](docs/colab-session-resilience.md)
 - [Security model](docs/security.md)
 - [Project contract](docs/project-contract.md)
 - [Backend contract](docs/backend-contract.md)

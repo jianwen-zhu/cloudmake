@@ -97,6 +97,13 @@ before readiness, transfer, or project execution begins. Backends without such a
 classifier reject the option. A transport must never infer retryability from an
 arbitrary nonzero command or HTTP status alone.
 
+Readiness polling is a separate pre-execution policy. It may repeat only a
+non-mutating remote prerequisite probe and must have a deadline plus a bounded
+per-probe timeout. The transport must record whether allocation occurred in the
+current invocation and whether target submission is `not_submitted`,
+`submitted`, or `ambiguous`. Once submission may have happened, neither
+readiness nor capacity policy may replay the project target.
+
 The engine's common lifecycle operations are `start`, `sync`, `status`, `fetch`,
 `open`, `shell`, and `stop`; the launcher exposes them as long options. A
 positional name with the same spelling remains a project target. Unsupported
@@ -158,6 +165,12 @@ cells. The generated notebook and control code belong to cloudmake rather than
 the project. A reusable notebook session can skip upload when the manifest is
 unchanged; a batch provider may reuse its local archive but still submits a new
 job.
+
+A reusable notebook resource name is not a runtime-instance identity. The
+transport must check its remote owner and synchronization control records on
+every invocation. Missing control state forces a full source upload and a
+reported fresh/reset transition; a foreign owner remains a hard refusal unless
+the operator explicitly adopts it.
 
 SSH transports synchronize incrementally with rsync and invoke Make over the
 same SSH execution surface. Provider backends supply connection discovery and

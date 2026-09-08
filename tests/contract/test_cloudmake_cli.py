@@ -897,6 +897,41 @@ def test_execution_provenance_hashes_assignment_values_and_tracks_result(
     )
 
 
+def test_colab_default_session_migrates_existing_legacy_project_state(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "legacy-project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "build")
+    first = engine_calls(log)[0]
+    state_root = Path(
+        next(
+            argument.split("=", 1)[1]
+            for argument in first
+            if argument.startswith("CLOUDMAKE_STATE_ROOT=")
+        )
+    )
+    (state_root / "colab-notebook" / "cuda-build").mkdir(parents=True)
+    log.write_text("", encoding="utf-8")
+
+    result = invoke(project, environment, "test")
+
+    assert_assignment(engine_calls(log)[0], "COLAB_SESSION", "cuda-build")
+    assert "Reusing legacy default session cuda-build" in result.stdout
+
+
+def test_explicit_colab_session_is_preserved_exactly(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "explicit-project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    environment["COLAB_SESSION"] = "teaching-runtime-07"
+
+    invoke(project, environment, "build")
+
+    assert_assignment(engine_calls(log)[0], "COLAB_SESSION", "teaching-runtime-07")
+
+
 def test_failed_execution_is_retained_in_provenance(
     tmp_path: Path, fake_bin: Path
 ) -> None:

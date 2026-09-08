@@ -31,6 +31,15 @@ There are no universally mandatory target names.
 | The target named by `cloudmake TARGET` | It must exist or be resolvable by the project Makefile for that invocation. |
 | The target named by `cloudmake --collect DIR TARGET` | It has the same Make semantics; after success cloudmake collects project-relative `DIR`. |
 
+The Colab notebook backend also supports an optional host-side setting,
+`COLAB_SESSION_PREPARE_TARGET`. When declared, that project Make target must be
+idempotent. Cloudmake runs it after a confirmed fresh/reset runtime and records
+a runtime-local preparation receipt; it is skipped when that prepared runtime
+is reused. Preparation receives no command-specific `NAME=value` assignments
+and is never an implicit retry of the requested target. Projects should use it
+only for generic session prerequisites that are safe to repeat after an
+ambiguous preparation disconnect.
+
 Every positional target name belongs to the project. For example,
 `cloudmake status` invokes the project's `status` target, while
 `cloudmake --status` asks the selected provider for its status. Cloudmake does
