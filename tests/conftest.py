@@ -53,7 +53,7 @@ def prototype(tmp_path: Path) -> Path:
         PROJECT_ROOT,
         destination,
         ignore=shutil.ignore_patterns(
-            ".cloud-state", "artifacts", "build", "*_output.ipynb", "__pycache__"
+            ".git", ".cloud-state", "artifacts", "build", "*_output.ipynb", "__pycache__"
         ),
     )
     return destination
@@ -74,4 +74,3 @@ def command_runner():
 @pytest.fixture
 def executable_writer():
     return write_executable
-

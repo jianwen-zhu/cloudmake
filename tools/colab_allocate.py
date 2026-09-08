@@ -11,6 +11,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from run_state import update
+
 
 EX_TEMPFAIL = 75
 CAPACITY_MARKER = "TooManyAssignmentsError"
@@ -51,6 +53,51 @@ def write_receipt(
     if classification is not None:
         payload["classification"] = classification
     atomic_json(path, payload)
+
+
+def record_operation_failure(
+    state_file: Path, receipt_file: Path, returncode: int
+) -> None:
+    try:
+        receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        receipt = {}
+    outcome = receipt.get("outcome")
+    provider_state, runtime_state, failure_code = {
+        "capacity-timeout": (
+            "absent",
+            "absent",
+            "capacity_retry_deadline_exceeded",
+        ),
+        "capacity-unavailable": ("absent", "absent", "capacity_unavailable"),
+        "session-query-failed": (
+            "unknown",
+            "unreachable",
+            "session_listing_failed",
+        ),
+        "allocation-failed": ("unknown", "unreachable", "allocation_failed"),
+        "retry-configuration-failed": (
+            "absent",
+            "absent",
+            "retry_configuration_failed",
+        ),
+        "interrupted": ("unknown", "unreachable", "allocation_interrupted"),
+    }.get(
+        outcome,
+        ("unknown", "unreachable", "allocation_receipt_missing"),
+    )
+    update(
+        state_file,
+        {
+            "phase": "allocation",
+            "provider_state": provider_state,
+            "runtime_state": runtime_state,
+            "session_created": False,
+            "target_submission": "not_submitted",
+            "retry_safe": returncode != 130,
+            "failure_code": failure_code,
+        },
+    )
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -241,6 +288,7 @@ def main() -> int:
     parser.add_argument("--retry-seconds", required=True, type=int)
     parser.add_argument("--resource-state", required=True, type=Path)
     parser.add_argument("--result", required=True, type=Path)
+    parser.add_argument("--state-file", type=Path)
     arguments = parser.parse_args()
     if arguments.retry_seconds < 0:
         parser.error("--retry-seconds must not be negative")
@@ -248,7 +296,7 @@ def main() -> int:
     arguments.resource_state.unlink(missing_ok=True)
     arguments.result.unlink(missing_ok=True)
     try:
-        return allocate(arguments)
+        returncode = allocate(arguments)
     except KeyboardInterrupt:
         write_receipt(
             arguments.result,
@@ -256,7 +304,7 @@ def main() -> int:
             attempts=getattr(arguments, "allocation_attempts", 0),
             outcome="interrupted",
         )
-        return 130
+        returncode = 130
     except ValueError as error:
         print(f"[cloudmake] allocation retry configuration error: {error}", file=sys.stderr)
         write_receipt(
@@ -265,7 +313,10 @@ def main() -> int:
             attempts=0,
             outcome="retry-configuration-failed",
         )
-        return 2
+        returncode = 2
+    if returncode != 0 and arguments.state_file is not None:
+        record_operation_failure(arguments.state_file, arguments.result, returncode)
+    return returncode
 
 
 if __name__ == "__main__":

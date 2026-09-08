@@ -46,6 +46,16 @@ cloudmake firmware.bin BOARD=rev2
 cloudmake --collect dist export-release VERSION=2.0
 ```
 
+The Colab backend has one opt-in setup hook. If the operator sets
+`COLAB_SESSION_PREPARE_TARGET=TARGET`, that project-defined Make target runs
+after a fresh or reset session has received the source snapshot, before the
+requested target. It must be idempotent because a lost connection can make its
+completion ambiguous. Cloudmake records a session-local receipt after confirmed
+success and skips the hook only when both its target name and synchronized
+source fingerprint still match on the same intact runtime. A source change
+conservatively runs the idempotent hook again. This does not create a mandatory
+target name or cross-session persistence contract.
+
 ## Make-variable interface
 
 Cloudmake injects no Make variables. The remote invocation consists of the
@@ -60,6 +70,10 @@ Those trailing assignments are encoded directly for the remote project
 Makefile. Cloudmake's host engine does not evaluate them, even when a project
 variable happens to share a name with a backend setting. Configure the backend
 through Cloudmake options or host environment variables instead.
+
+The optional Colab session-preparation target receives no user-supplied Make
+assignments. It is environment setup, not a substitute execution of the
+requested target.
 
 With `-b local`, Cloudmake invokes that same root Makefile directly in the
 project directory. It does not enter the backend engine, synchronize files, or

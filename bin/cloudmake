@@ -88,6 +88,7 @@ ACTION_OPTIONS = {
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.DOTALL)
 ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
 DURATION = re.compile(r"^([1-9][0-9]*)([smh])$")
+COLAB_SESSION_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 SSH_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 HOST_TEMPLATE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 RESERVED_ASSIGNMENTS = {
@@ -96,6 +97,7 @@ RESERVED_ASSIGNMENTS = {
     "CLOUDMAKE_CACHE_ROOT",
     "CLOUDMAKE_ALLOCATION_RESULT",
     "CLOUDMAKE_CONTEXT_ACCELERATOR",
+    "CLOUDMAKE_OPERATION_STATE",
     "CLOUDMAKE_PROJECT_ARGS_B64",
     "CLOUDMAKE_PROJECT_ROOT",
     "CLOUDMAKE_RETRY_FOR_SECONDS",
@@ -147,6 +149,30 @@ def project_key(project: Path) -> str:
 def project_slug(project: Path, key: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", project.name).strip("-.")
     return f"{stem or 'project'}-{key[:8]}"
+
+
+def colab_session_name(
+    project: Path, key: str, state_root: Path, config_home: Path
+) -> str:
+    if "COLAB_SESSION" in os.environ:
+        return os.environ["COLAB_SESSION"]
+    configured = load_json(config_home / "projects" / f"{key}.json").get(
+        "colab_session"
+    )
+    if configured is not None:
+        if not isinstance(configured, str) or not COLAB_SESSION_NAME.fullmatch(
+            configured
+        ):
+            raise UsageError("configured Colab session name is invalid")
+        return configured
+    if (state_root / "colab-notebook" / "cuda-build").is_dir():
+        print(
+            "[colab] Continuing with legacy session cuda-build for this project's "
+            "existing v0.9 state. To select and persist a replacement: "
+            "COLAB_SESSION=NAME cloudmake --use colab"
+        )
+        return "cuda-build"
+    return project_slug(project, key)
 
 
 def load_json(path: Path, *, optional: bool = True) -> dict[str, Any]:
@@ -616,6 +642,8 @@ def engine_command(
     remote_target: str | None = None,
     remote_collect_dir: str | None = None,
     run_id: str | None = None,
+    colab_session: str | None = None,
+    operation_state: Path | None = None,
 ) -> int:
     make = shutil.which("make")
     if make is None:
@@ -639,6 +667,10 @@ def engine_command(
         variables.append(f"CLOUDMAKE_RUN_ID={run_id}")
     if allocation_result is not None:
         variables.append(f"CLOUDMAKE_ALLOCATION_RESULT={allocation_result}")
+    if colab_session is not None:
+        variables.append(f"COLAB_SESSION={colab_session}")
+    if operation_state is not None:
+        variables.append(f"CLOUDMAKE_OPERATION_STATE={operation_state}")
     if jobs is not None:
         if not jobs.isdigit() or int(jobs) < 1:
             raise UsageError("-j requires a positive integer")
@@ -837,11 +869,25 @@ def run(arguments: list[str]) -> int:
         )
         if backend == "host-ssh" and ssh_host is None:
             raise UsageError("the ssh backend requires --host HOST")
+        selected_colab_session = None
+        if backend == "colab-notebook" and "COLAB_SESSION" in os.environ:
+            selected_colab_session = os.environ["COLAB_SESSION"]
+            if not COLAB_SESSION_NAME.fullmatch(selected_colab_session):
+                raise UsageError(
+                    "Colab session names must contain only letters, numbers, dot, "
+                    "dash, and underscore"
+                )
+            if options["global"]:
+                raise UsageError(
+                    "COLAB_SESSION can be persisted only with per-project --use"
+                )
         saved["backend"] = backend
         if accelerator_set:
             saved["accelerator"] = accelerator or ""
         if backend == "host-ssh":
             saved["host"] = ssh_host
+        if selected_colab_session is not None:
+            saved["colab_session"] = selected_colab_session
         if not options["global"]:
             saved["project"] = os.fspath(project)
         atomic_json(path, saved)
@@ -850,8 +896,14 @@ def run(arguments: list[str]) -> int:
             f", accelerator={accelerator or 'cpu'}" if accelerator_set else ""
         )
         host_note = f", host={ssh_host}" if backend == "host-ssh" else ""
+        session_note = (
+            f", session={selected_colab_session}"
+            if selected_colab_session is not None
+            else ""
+        )
         print(
-            f"Saved {scope} backend={backend}{host_note}{accelerator_note}; "
+            f"Saved {scope} backend={backend}{host_note}{accelerator_note}"
+            f"{session_note}; "
             "subsequent targets reuse this selection."
         )
         return 0
@@ -919,12 +971,24 @@ def run(arguments: list[str]) -> int:
         )
 
     state_root = state_home / "projects" / key
+    colab_session = (
+        colab_session_name(project, key, state_root, config_home)
+        if backend == "colab-notebook"
+        else None
+    )
     if engine_target not in {"dispatch", "collect"}:
         operation_allocation_path = (
             state_root / "operations" / f".{uuid.uuid4().hex}.allocation.json"
             if backend == "colab-notebook"
             else None
         )
+        operation_state = (
+            state_root / "operations" / f"{engine_target}.json"
+            if backend == "colab-notebook"
+            else None
+        )
+        if operation_state is not None:
+            operation_state.unlink(missing_ok=True)
         exit_code = engine_command(
             project=project,
             backend=backend,
@@ -942,11 +1006,24 @@ def run(arguments: list[str]) -> int:
             allocation_result=operation_allocation_path,
             remote_target=remote_target,
             remote_collect_dir=remote_collect_dir,
+            colab_session=colab_session,
+            operation_state=operation_state,
         )
         if operation_allocation_path is not None:
             receipt = allocation_receipt(operation_allocation_path)
             exit_code = allocation_exit_code(receipt, exit_code)
             operation_allocation_path.unlink(missing_ok=True)
+        lifecycle = (
+            load_json(operation_state)
+            if operation_state is not None and operation_state.is_file()
+            else {}
+        )
+        if (
+            exit_code != 0
+            and lifecycle.get("failure_code")
+            in {"readiness_deadline_exceeded", "readiness_deadline_cleanup_failed"}
+        ):
+            exit_code = 75
         if (
             exit_code == 0
             and engine_target == "start"
@@ -989,6 +1066,7 @@ def run(arguments: list[str]) -> int:
     if retry_seconds is not None:
         record["allocation"] = {"attempts": 0, "outcome": "not-attempted"}
     atomic_json(record_path, record)
+    operation_state = state_root / "operations" / f"{run_id}.json"
     try:
         if backend == "local":
             print_local_execution_context(accelerator, accelerator_set)
@@ -1032,6 +1110,8 @@ def run(arguments: list[str]) -> int:
                 remote_target=remote_target,
                 remote_collect_dir=remote_collect_dir,
                 run_id=run_id,
+                colab_session=colab_session,
+                operation_state=operation_state,
             )
     except BaseException:
         if allocation_path is not None:
@@ -1051,6 +1131,13 @@ def run(arguments: list[str]) -> int:
         exit_code = allocation_exit_code(receipt, exit_code)
         allocation_path.unlink(missing_ok=True)
 
+    lifecycle = load_json(operation_state) if operation_state.is_file() else {}
+    if (
+        exit_code != 0
+        and lifecycle.get("failure_code")
+        in {"readiness_deadline_exceeded", "readiness_deadline_cleanup_failed"}
+    ):
+        exit_code = 75
     if backend == "local":
         resource_id, source = os.fspath(project), {"mode": "local-working-tree"}
     else:
@@ -1066,6 +1153,20 @@ def run(arguments: list[str]) -> int:
         resource_id=resource_id,
         source=source,
     )
+    if lifecycle:
+        record["lifecycle"] = lifecycle
+        for field in (
+            "phase",
+            "provider_state",
+            "runtime_state",
+            "session_created",
+            "target_submission",
+            "preparation_state",
+            "retry_safe",
+            "failure_code",
+        ):
+            if field in lifecycle:
+                record[field] = lifecycle[field]
     if engine_target == "collect" and exit_code == 0:
         record["artifacts"] = artifact_receipt(project / "artifacts")
     atomic_json(record_path, record)

@@ -5,9 +5,28 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+## 1.0.0 - 2026-09-07
+
+- Establish the stable stateless Cloudmake base release. Durable workspaces,
+  checkpoints, and cross-VM restoration are outside this release line and begin
+  with the stateful 2.0 series.
 - Add opt-in, deadline-bounded retry for positively classified Colab allocation
   capacity failures, with exponential backoff, temporary-failure exit status,
   and allocation attempts recorded in the existing run provenance.
+
+## 0.9.1 - 2026-09-07
+
+- Derive the default native Colab session from stable local project identity,
+  while preserving explicit `COLAB_SESSION` values and existing v0.9
+  `cuda-build` state, with an explicit per-project command to persist migration.
+- Replace the two-shot Colab readiness check with configurable deadline-bounded
+  polling, cleaning up only a never-ready session created by that invocation
+  and never replaying a project target.
+- Confirm missing remote Colab control state before treating it as a fresh/reset
+  runtime, refuse synchronization when control-state reads are ambiguous, force a
+  full stateless source sync, support an optional idempotent session-preparation
+  target with source-bound receipts, and record structured lifecycle and
+  retry-safety provenance.
 
 ## 0.9.0 - 2026-08-28
 
