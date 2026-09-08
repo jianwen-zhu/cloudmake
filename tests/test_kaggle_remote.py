@@ -77,8 +77,12 @@ def install_project(project: Path) -> None:
     project.mkdir()
     (project / "Makefile").write_text(
         ".PHONY: build check fail\n"
-        "build:\n\t@mkdir -p generated\n\t@printf persisted > generated/tool\n"
-        "check:\n\t@test \"$$(cat generated/tool)\" = persisted\n\t@printf checked > generated/result\n"
+        "build:\n\t@mkdir -p generated $$HOME/.cache/cloudmake-test\n"
+        "\t@printf persisted > generated/tool\n"
+        "\t@printf home-persisted > $$HOME/.cache/cloudmake-test/tool\n"
+        "check:\n\t@test \"$$(cat generated/tool)\" = persisted\n"
+        "\t@test \"$$(cat $$HOME/.cache/cloudmake-test/tool)\" = home-persisted\n"
+        "\t@printf checked > generated/result\n"
         "fail:\n\t@mkdir -p generated\n\t@printf partial > generated/partial\n\t@exit 2\n",
         encoding="utf-8",
     )
@@ -127,6 +131,9 @@ def test_checkpoint_restores_generated_state_across_fresh_kaggle_vms(tmp_path: P
     )
     assert second.returncode == 0, second.stdout
     assert (second_dir / "root/workspace/src/generated/result").read_text() == "checked"
+    assert (
+        second_dir / "root/workspace/home/.cache/cloudmake-test/tool"
+    ).read_text() == "home-persisted"
     receipt = json.loads((second_dir / "working/cloudmake-checkpoint-result.json").read_text())
     assert receipt["restore"]["outcome"] == "restored"
     assert receipt["snapshot"] == second_ref
@@ -155,6 +162,50 @@ def test_target_failure_is_receipted_without_checkpoint_or_runner_traceback(tmp_
     )
     assert checkpoint["status"] == "skipped"
     assert checkpoint["outcome"] == "target-failed"
+
+
+def test_requested_network_failure_stops_before_target(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    install_project(project)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "working").mkdir()
+    archive, manifest = source_snapshot(project, run_dir)
+    value = control(
+        manifest,
+        active="tester/cloudmake-ws-0123456789abcdef01234567-a",
+    )
+    value["network_required"] = True
+    module = load_remote()
+
+    def unavailable(_host: str, _description: str) -> None:
+        raise module.InfrastructureError("provider internet unavailable")
+
+    monkeypatch.setattr(module, "require_network", unavailable)
+    run_control = run_dir / "control.json"
+    run_control.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(module.InfrastructureError):
+        # Exercise the imported implementation so the network probe can be
+        # replaced without contacting the internet.
+        old_argv = module.os.sys.argv
+        module.os.sys.argv = [
+            str(REMOTE), "--control", str(run_control), "--source-archive",
+            str(archive), "--oci-runner", str(PROJECT_ROOT / "tools/oci_runner.py"),
+            "--root", str(run_dir / "root"), "--working", str(run_dir / "working"),
+            "--input-root", str(tmp_path / "input"),
+        ]
+        try:
+            module.main()
+        finally:
+            module.os.sys.argv = old_argv
+
+    receipt = json.loads(
+        (run_dir / "working/cloudmake-target-result.json").read_text()
+    )
+    assert receipt["phase"] == "network_preflight"
+    assert receipt["target_submission"] == "not_submitted"
+    assert receipt["retry_safe"] is True
+    assert not (run_dir / "root/workspace/src/generated").exists()
 
 
 def test_checkpoint_round_trip_preserves_hard_links_and_read_only_directories(
@@ -212,10 +263,10 @@ def test_expected_oci_preparation_failure_writes_infrastructure_receipt(
     monkeypatch.setattr(loaded, "run_target", fail)
     with pytest.raises(loaded.InfrastructureError):
         loaded.internal_run(
-            [
-                str(control_path), str(tmp_path / "source"), str(tmp_path / "cache"),
-                str(tmp_path / "oci.py"), str(result_path),
-            ]
+                [
+                    str(control_path), str(tmp_path / "source"), str(tmp_path / "cache"),
+                    str(tmp_path / "home"), str(tmp_path / "oci.py"), str(result_path),
+                ]
         )
 
     receipt = json.loads(result_path.read_text())

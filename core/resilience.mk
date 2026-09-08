@@ -43,6 +43,12 @@ BACKEND_LIFECYCLE ?=
 BACKEND_SESSION_REUSE ?= $(if $(filter batch,$(BACKEND_LIFECYCLE)),no,$(if $(filter local session,$(BACKEND_LIFECYCLE)),yes,))
 BACKEND_CAPABILITIES ?=
 BACKEND_OCI_RUNTIMES ?=
+# Public Internet reachability is independent of the provider control
+# transport.  A notebook backend can accept authenticated command submission
+# while exposing no inbound socket at all.  API-1 descriptors that predate
+# these declarations remain valid and report unknown until qualified.
+BACKEND_INTERNET_INBOUND ?= unknown
+BACKEND_INTERNET_OUTBOUND ?= unknown
 BACKEND_RESOURCE_ID ?= default
 BACKEND_CONTEXT_RESOURCE_LABEL ?= resource
 BACKEND_CONTEXT_RESOURCE ?= $(BACKEND_RESOURCE_ID)
@@ -88,6 +94,12 @@ ifneq ($(words $(BACKEND_OCI_RUNTIMES)),1)
 $(error Backend "$(BACKEND)" must declare OCI runtime "none" alone)
 endif
 endif
+ifneq ($(filter-out yes no conditional inherited unknown,$(BACKEND_INTERNET_INBOUND)),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_INTERNET_INBOUND "$(BACKEND_INTERNET_INBOUND)")
+endif
+ifneq ($(filter-out yes no conditional inherited unknown,$(BACKEND_INTERNET_OUTBOUND)),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_INTERNET_OUTBOUND "$(BACKEND_INTERNET_OUTBOUND)")
+endif
 
 CLOUDMAKE_LOCK_FILE := $(CLOUDMAKE_STATE_ROOT)/locks/$(BACKEND)/$(BACKEND_RESOURCE_ID).lock
 CLOUDMAKE_MANIFEST_DIR := $(CLOUDMAKE_STATE_ROOT)/manifests/$(BACKEND)
@@ -115,6 +127,8 @@ backend-info: backend-contract
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'
 	@echo 'oci-runtimes=$(BACKEND_OCI_RUNTIMES)'
+	@echo 'internet-inbound=$(BACKEND_INTERNET_INBOUND)'
+	@echo 'internet-outbound=$(BACKEND_INTERNET_OUTBOUND)'
 
 ifeq ($(BACKEND_TRANSPORT),local)
 sync-dry-run: backend-contract

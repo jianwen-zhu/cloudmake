@@ -611,18 +611,22 @@ Information: --help, --version, --history, --host-templates,
 """
 
 
-def backend_oci_runtimes(backend: str) -> list[str]:
+def backend_declaration(backend: str, name: str) -> str:
     path = TOOL_ROOT / "backends" / f"{backend}.mk"
     try:
         source = path.read_text(encoding="utf-8")
     except OSError as error:
         raise UsageError(f"cannot read backend definition {path}: {error}") from error
     match = re.search(
-        r"^BACKEND_OCI_RUNTIMES\s*:?=\s*([^#\n]*?)\s*$", source, re.MULTILINE
+        rf"^{re.escape(name)}\s*:?=\s*([^#\n]*?)\s*$", source, re.MULTILINE
     )
     if match is None:
-        raise UsageError(f"backend {backend!r} does not declare OCI runtime options")
-    values = match.group(1).split()
+        raise UsageError(f"backend {backend!r} does not declare {name}")
+    return match.group(1).strip()
+
+
+def backend_oci_runtimes(backend: str) -> list[str]:
+    values = backend_declaration(backend, "BACKEND_OCI_RUNTIMES").split()
     if values == ["none"]:
         return []
     if not values or len(values) != len(set(values)):
@@ -639,15 +643,19 @@ def backend_oci_runtimes(backend: str) -> list[str]:
 def show_backends() -> None:
     print(
         f"{'BACKEND':22} {'SESSION REUSE':13} {'PERSISTENCE':12} "
-        f"{'TRANSPORT':36} {'OCI RUNTIMES':34} HOST CLIENT"
+        f"{'TRANSPORT':36} {'OCI RUNTIMES':34} {'INTERNET IN':12} "
+        f"{'INTERNET OUT':12} HOST CLIENT"
     )
     for name, (session_reuse, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
         runtimes = backend_oci_runtimes(name)
         runtime_text = ",".join(runtimes) if runtimes else "unsupported"
+        internet_in = backend_declaration(name, "BACKEND_INTERNET_INBOUND")
+        internet_out = backend_declaration(name, "BACKEND_INTERNET_OUTBOUND")
         print(
             f"{name:22} {session_reuse:13} {PERSISTENCE_MODES[name]:12} "
-            f"{transport:36} {runtime_text:34} {client} ({installed})"
+            f"{transport:36} {runtime_text:34} {internet_in:12} "
+            f"{internet_out:12} {client} ({installed})"
         )
 
 

@@ -299,8 +299,8 @@ def restore_checkpoint(
 
 
 def run_target(
-    *, control: dict[str, Any], source: Path, cache: Path, oci_runner: Path,
-    result: Path
+    *, control: dict[str, Any], source: Path, cache: Path, home: Path,
+    oci_runner: Path, result: Path
 ) -> int:
     target = control["target"]
     base = [
@@ -384,7 +384,7 @@ def run_target(
                 json.dumps(control["project_arguments"], separators=(",", ":")).encode()
             ).decode(),
             "--jobs", str(control["jobs"]), "--rootless-workspace-owner", "65534:65534",
-            "--result", os.fspath(result),
+            "--runtime-home", os.fspath(home), "--result", os.fspath(result),
         ]
         if control["devices"]:
             command.extend(["--cdi-spec-dir", os.fspath(cdi_directory)])
@@ -483,6 +483,7 @@ def main() -> int:
     current_manifest = validate_manifest(control.get("source_manifest"))
     workspace = arguments.root / "workspace"
     source = workspace / "src"
+    home = workspace / "home"
     cache = workspace / "cache" / "oci"
     run_log = arguments.working / "cloud-build.log"
     target_result = arguments.working / "cloudmake-target-result.json"
@@ -501,17 +502,30 @@ def main() -> int:
         previous_manifest = restore.pop("source_manifest", {"schema": 1, "entries": {}})
         reconcile_source(source, previous_manifest, current_manifest)
         extract_archive(arguments.source_archive, source)
+        home.mkdir(parents=True, exist_ok=True)
         print(f"Workspace: {source}", flush=True)
         print(f"Requested target: {control['target']}", flush=True)
+        if control.get("network_required"):
+            phase = "network_preflight"
+            require_network("pypi.org", "Kaggle requested internet access")
         phase = "runner_preflight" if control["runner"] == "oci" else "target_execution"
         with run_log.open("w", encoding="utf-8") as log:
+            remote_environment = os.environ.copy()
+            remote_environment.update(
+                HOME=os.fspath(home),
+                XDG_CACHE_HOME=os.fspath(home / ".cache"),
+                XDG_CONFIG_HOME=os.fspath(home / ".config"),
+                XDG_STATE_HOME=os.fspath(home / ".local/state"),
+            )
             completed = subprocess.run(
                 [
                     os.fspath(Path(os.sys.executable)), os.fspath(Path(__file__).resolve()),
                     "--internal-run", os.fspath(arguments.control), os.fspath(source),
-                    os.fspath(cache), os.fspath(arguments.oci_runner), os.fspath(oci_result),
+                    os.fspath(cache), os.fspath(home), os.fspath(arguments.oci_runner),
+                    os.fspath(oci_result),
                 ],
                 check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                env=remote_environment,
             )
             print(completed.stdout, end="", flush=True)
             log.write(completed.stdout)
@@ -581,11 +595,11 @@ def main() -> int:
 
 def internal_run(arguments: list[str]) -> int:
     control = json.loads(Path(arguments[0]).read_text(encoding="utf-8"))
-    result = Path(arguments[4])
+    result = Path(arguments[5])
     try:
         return run_target(
             control=control, source=Path(arguments[1]), cache=Path(arguments[2]),
-            oci_runner=Path(arguments[3]), result=result
+            home=Path(arguments[3]), oci_runner=Path(arguments[4]), result=result
         )
     except InfrastructureError as error:
         atomic_json(

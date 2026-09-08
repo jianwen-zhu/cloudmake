@@ -288,6 +288,8 @@ def test_backends_reports_persistence_mode_for_every_backend(
 
     assert "PERSISTENCE" in result.stdout
     assert "OCI RUNTIMES" in result.stdout
+    assert "INTERNET IN" in result.stdout
+    assert "INTERNET OUT" in result.stdout
     rows = {
         line.split()[0]: line.split()
         for line in result.stdout.splitlines()[1:]
@@ -295,9 +297,12 @@ def test_backends_reports_persistence_mode_for_every_backend(
     }
     assert rows["colab-notebook"][2] == "checkpoint"
     assert "crun" in rows["colab-notebook"]
+    assert "no" in rows["colab-notebook"]
+    assert "yes" in rows["colab-notebook"]
     assert rows["kaggle-notebook"][1] == "no"
     assert rows["kaggle-notebook"][2] == "checkpoint"
     assert "proot" in rows["kaggle-notebook"]
+    assert "conditional" in rows["kaggle-notebook"]
     assert "podman,docker,nerdctl,proot" in rows["host-ssh"]
     for backend in (
         "local",

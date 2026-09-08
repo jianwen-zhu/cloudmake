@@ -53,8 +53,16 @@ This is both a security and portability contract:
 Every additional mount, capability, device, namespace exception, credential,
 or host integration must be justified by the backend, an explicit CDI request,
 or the core Make execution contract. Convenience alone is insufficient.
-Cloudmake inherits ordinary network reachability from the backend but does not
-become a network configurator or port-publishing service.
+Cloudmake records public Internet inbound and workload Internet outbound as two
+separate backend properties. Provider command submission and authenticated
+runtime proxies are control transports, not public inbound endpoints. Local and
+user-managed hosts inherit their existing policy; managed providers declare
+qualified, absent, or conditional reachability. Cloudmake does not become a
+network configurator, firewall manager, or port-publishing service. A backend
+whose outbound access is conditional must positively probe it before
+Cloudmake-managed network preparation when the invocation requests that
+surface. Native Make targets remain opaque and retain responsibility for their
+own undeclared network dependencies.
 
 Least privilege concerns workload authority; it is not synonymous with strong
 container isolation. If a managed backend must share the VM kernel, namespaces,
@@ -127,6 +135,16 @@ OCI and CDI do not by themselves prove that a VM can run an image:
 - CDI describes device injection, not provider allocation or scheduling; and
 - the host kernel, architecture, driver, privileges, namespaces, mounts,
   cgroups, and chosen runtime still determine whether execution is possible.
+
+Nor does an OCI image carry a standardized list of privileges its application
+requires. Image configuration supplies execution defaults; capabilities,
+namespaces, security policy, and host mounts are part of the runtime
+specification constructed at launch. Cloudmake constructs that specification
+from its least-privileged profile and explicit CDI device requests rather than
+accepting a general caller-supplied runtime spec. This prevents silent privilege
+granting, but it cannot pre-classify an implicit target-specific need for root
+or another unsupported facility. Such an image is outside the supported profile
+and may fail only when its project target runs.
 
 Cloudmake therefore uses three validation layers:
 

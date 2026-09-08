@@ -5,6 +5,8 @@ BACKEND_API_VERSION := 1
 BACKEND_SESSION_REUSE := yes
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts cancel native-persistence oci-runner
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
+BACKEND_INTERNET_INBOUND := conditional
+BACKEND_INTERNET_OUTBOUND := conditional
 
 # Required: the permanent Codespaces name shown by `gh codespace list`.
 CODESPACE ?=

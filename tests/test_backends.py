@@ -88,6 +88,8 @@ def test_api1_backend_lifecycle_remains_a_compatible_session_reuse_input(
     result = run_command(["make", "-f", descriptor, "backend-info"], cwd=tmp_path)
 
     assert "session-reuse=no" in result.stdout
+    assert "internet-inbound=unknown" in result.stdout
+    assert "internet-outbound=unknown" in result.stdout
 
 
 def calls(log: Path, program: str | None = None) -> list[list[str]]:
@@ -2870,19 +2872,63 @@ def test_engine_defines_no_project_target_shortcuts(
 
 
 @pytest.mark.parametrize(
-    ("backend", "session_reuse", "capability", "persistence_capability"),
+    (
+        "backend",
+        "session_reuse",
+        "capability",
+        "persistence_capability",
+        "internet_inbound",
+        "internet_outbound",
+    ),
     [
-        ("local", "yes", "execute", "native-persistence"),
-        ("colab-notebook", "yes", "incremental-sync", "checkpoint-persistence"),
-        ("kaggle-notebook", "no", "gpu", "checkpoint-persistence"),
-        ("codespaces-ssh", "yes", "shell", "native-persistence"),
-        ("colab-ssh", "yes", "gpu", None),
-        ("host-ssh", "yes", "incremental-sync", "native-persistence"),
+        (
+            "local",
+            "yes",
+            "execute",
+            "native-persistence",
+            "inherited",
+            "inherited",
+        ),
+        (
+            "colab-notebook",
+            "yes",
+            "incremental-sync",
+            "checkpoint-persistence",
+            "no",
+            "yes",
+        ),
+        (
+            "kaggle-notebook",
+            "no",
+            "gpu",
+            "checkpoint-persistence",
+            "no",
+            "conditional",
+        ),
+        (
+            "codespaces-ssh",
+            "yes",
+            "shell",
+            "native-persistence",
+            "conditional",
+            "conditional",
+        ),
+        ("colab-ssh", "yes", "gpu", None, "no", "yes"),
+        (
+            "host-ssh",
+            "yes",
+            "incremental-sync",
+            "native-persistence",
+            "inherited",
+            "inherited",
+        ),
         (
             "lightning-studio-ssh",
             "yes",
             "persistent-storage",
             "native-persistence",
+            "conditional",
+            "conditional",
         ),
     ],
 )
@@ -2892,6 +2938,8 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
     session_reuse: str,
     capability: str,
     persistence_capability: str | None,
+    internet_inbound: str,
+    internet_outbound: str,
 ) -> None:
     result = run_command(["make", f"BACKEND={backend}", "backend-info"], cwd=prototype)
     assert "api=1" in result.stdout
@@ -2910,6 +2958,39 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
         else "podman docker nerdctl proot"
     )
     assert f"oci-runtimes={expected_oci}" in result.stdout
+    assert f"internet-inbound={internet_inbound}" in result.stdout
+    assert f"internet-outbound={internet_outbound}" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("BACKEND_INTERNET_INBOUND", "sometimes"),
+        ("BACKEND_INTERNET_OUTBOUND", "available"),
+    ],
+)
+def test_backend_contract_rejects_unknown_internet_capability_values(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    descriptor = tmp_path / "invalid-network-backend.mk"
+    descriptor.write_text(
+        "BACKEND := invalid-network\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_SESSION_REUSE := no\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_OCI_RUNTIMES := none\n"
+        f"{field} := {value}\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert f"invalid {field}" in result.stdout
 
 
 @pytest.mark.integration

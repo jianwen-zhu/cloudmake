@@ -13,6 +13,8 @@ Kaggle declares:
 session-reuse=no
 persistence=checkpoint
 oci-runtimes=proot
+internet-inbound=no
+internet-outbound=conditional
 ```
 
 Each project target receives a fresh batch VM. Persistence does not change that
@@ -22,6 +24,12 @@ only the locally recorded last-good slot to the next job as a Kaggle
 `kernel_source`. A successful target publishes the successor and atomically
 advances the local head. Target or infrastructure failure leaves the old head
 unchanged.
+
+The adapter sets `HOME` and the XDG cache, configuration, and state roots under
+that logical workspace before invoking Make. This keeps project-managed tool
+installations outside the synchronized source tree while ensuring they are part
+of the next checkpoint. It is important for unmodified projects that correctly
+place large generated environments under `$HOME/.cache`.
 
 The checkpoint is provider-private rather than Cloudmake-encrypted. Its archive
 travels between Kaggle jobs inside the provider and never through the laptop.
@@ -87,12 +95,22 @@ log and receipts, not the checkpoint payload.
 End-to-end Cloudmake OCI attempts failed safely before Make because VMs whose
 returned metadata confirmed `enable_internet=true` could not resolve Ubuntu
 package hosts. No checkpoint head advanced. `enable_internet=true` is therefore
-a request, not a reachability guarantee. A cold OCI workspace needs package and
-registry network access; a warm checkpoint can reuse its cached packages and
-image. Cloudmake reports either failure as infrastructure failure and never
-retries or replays the project target. The offline PRoot/CDI implementation is
-fully exercised with provider doubles, but a successful live cold pull remains
-an explicit release limitation rather than a claimed result.
+a request, not a reachability guarantee. Two independent September 2026 clean
+ECE326 Lab 1 jobs (private kernel versions 2 and 3, each receiving a fresh VM)
+reproduced the same behavior: Kaggle accepted the setting but the batch VM
+could not resolve PyPI. This is reproducible for the tested CLI/account path,
+not evidence that Kaggle permanently forbids egress; the backend consequently
+declares outbound Internet `conditional`, not `no`.
+
+Cloudmake probes requested internet before target submission, records an
+infrastructure failure when it is absent, and leaves the checkpoint head
+unchanged. Both ECE326 attempts recorded `target_submission=not_submitted` and
+`retry_safe=true`; neither created a checkpoint head. A cold OCI workspace
+needs package and registry network access; a warm checkpoint can reuse its
+cached packages and image. Cloudmake never retries or replays the project
+target. The offline PRoot/CDI implementation is fully exercised with provider
+doubles, but a successful live cold pull and the ECE326/ECE467 course gates
+remain explicit release blockers rather than claimed results.
 
 Release qualification must retain fake-provider coverage for slot alternation,
 fresh-VM restore, source reconciliation, target-at-most-once behavior, failed

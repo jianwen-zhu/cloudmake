@@ -7,6 +7,8 @@ BACKEND_API_VERSION := 1
 BACKEND_SESSION_REUSE := yes
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts native-persistence oci-runner
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
+BACKEND_INTERNET_INBOUND := inherited
+BACKEND_INTERNET_OUTBOUND := inherited
 
 SSH_HOST ?=
 export SSH_HOST

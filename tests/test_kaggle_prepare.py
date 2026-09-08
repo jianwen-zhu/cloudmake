@@ -30,6 +30,7 @@ def prepare(
     private: str = "true",
     internet: str = "false",
     collect_dir: str = "",
+    runner: str = "native",
 ):
     archive = tmp_path / "source.tar.gz"
     archive.write_bytes(b"test archive payload")
@@ -78,6 +79,22 @@ def prepare(
             base64.urlsafe_b64encode(collect_dir.encode()).decode() if collect_dir else "",
             "--accelerator",
             accelerator,
+            "--runner",
+            runner,
+            "--image-b64",
+            (
+                base64.urlsafe_b64encode(
+                    ("registry.example/tools@sha256:" + "a" * 64).encode()
+                ).decode()
+                if runner == "oci"
+                else ""
+            ),
+            "--runtimes-b64",
+            (
+                base64.urlsafe_b64encode(b'["proot"]').decode()
+                if runner == "oci"
+                else "W10="
+            ),
         ],
         cwd=tmp_path,
         check=False,
@@ -86,7 +103,9 @@ def prepare(
 
 
 def test_prepare_embeds_archive_and_replaces_control_tokens(tmp_path: Path) -> None:
-    result, archive, output, metadata = prepare(tmp_path, accelerator="NvidiaL4")
+    result, archive, output, metadata = prepare(
+        tmp_path, accelerator="NvidiaL4", internet="true"
+    )
 
     assert result.returncode == 0, result.stdout
     notebook = json.loads(output.read_text(encoding="utf-8"))
@@ -101,6 +120,7 @@ def test_prepare_embeds_archive_and_replaces_control_tokens(tmp_path: Path) -> N
     control = embedded_control(output)
     assert control["target"] == "test"
     assert control["jobs"] == 7
+    assert control["network_required"] is True
     assert all(cell.get("outputs", []) == [] for cell in notebook["cells"] if cell["cell_type"] == "code")
     assert all(cell.get("execution_count") is None for cell in notebook["cells"] if cell["cell_type"] == "code")
     assert metadata.exists()
@@ -112,6 +132,23 @@ def test_prepare_embeds_explicit_artifact_collection_directory(tmp_path: Path) -
 
     assert result.returncode == 0, result.stdout
     assert embedded_control(output)["collect_dir"] == "dist/release"
+
+
+def test_prepare_records_disabled_network_as_no_requirement(tmp_path: Path) -> None:
+    result, _, output, _ = prepare(tmp_path)
+
+    assert result.returncode == 0, result.stdout
+    assert embedded_control(output)["network_required"] is False
+
+
+def test_prepare_allows_warm_oci_checkpoint_to_run_without_blanket_egress_probe(
+    tmp_path: Path,
+) -> None:
+    result, _, output, metadata_path = prepare(tmp_path, runner="oci")
+
+    assert result.returncode == 0, result.stdout
+    assert embedded_control(output)["network_required"] is False
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["enable_internet"] is True
 
 
 @pytest.mark.parametrize(

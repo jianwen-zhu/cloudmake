@@ -38,6 +38,24 @@ working `make`. Cloudmake mounts the project at `/workspace`, overrides the
 image entry point, preserves user-supplied `NAME=value` arguments, and invokes
 the requested target at most once.
 
+An OCI image configuration is not an application-requirement manifest. The
+standard records defaults such as user, environment, entry point, command,
+working directory, ports, and volumes; it does not declare that an application
+requires privileged mode, Linux capabilities, host namespaces, or arbitrary
+mounts. Those fields belong to the OCI runtime specification assembled when a
+container is created. Cloudmake owns that launch specification and deliberately
+constructs a narrower `least-privileged-compute-v1` policy instead of accepting
+an unrestricted caller-supplied runtime spec.
+
+Consequently, Cloudmake never silently grants an undeclared privilege. CDI is
+the explicit standard device request and is validated before Make. An image
+whose target implicitly depends on root, added capabilities, services, ports,
+or extra mounts is outside this profile. The generic `make --version` preflight
+cannot discover every target-specific dependency, so such a target may fail as
+a normal project target rather than being rejected during infrastructure
+preflight. OCI alone has no standard metadata that would make that earlier
+classification sound.
+
 ## Validation and failure boundary
 
 Before target submission Cloudmake:
@@ -72,6 +90,13 @@ ready; the mere presence of a client executable is insufficient. CDI requests
 filter out only candidates that cannot apply them. Image preflight then
 validates the chosen runtime without ever replaying the project target through
 another one.
+
+For Podman, Docker, and nerdctl, Cloudmake requests a read-only image root, a
+fresh writable `/tmp`, the caller's numeric non-root identity, all capabilities
+dropped, and `no-new-privileges`. The only host data mount is `/workspace`;
+additional device-related binds must come from an explicit CDI request. The
+selected native runtime remains responsible for translating those options into
+an OCI runtime specification and rejecting an unsupported combination.
 
 The Colab notebook backend declares one provider-qualified runtime profile.
 Cloudmake installs `skopeo`, `umoci`, and `crun` when absent, materializes the

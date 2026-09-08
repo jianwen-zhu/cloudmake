@@ -188,6 +188,10 @@ control = {
     "image": image,
     "devices": devices,
     "runtime_candidates": runtimes,
+    # Explicit target egress is checked before Make. OCI preparation performs
+    # narrower package/registry probes only when a cold cache actually needs
+    # them, allowing a restored warm image to execute offline.
+    "network_required": arguments.enable_internet,
 }
 notebook.setdefault("metadata", {})["cloudmake"] = {
     "schema": owner["schema"],

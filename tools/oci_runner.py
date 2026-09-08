@@ -332,11 +332,21 @@ def materialize_bundle(
 def native_base_command(
     runtime: str, source: Path, reference: str, devices: list[str]
 ) -> list[str]:
-    command = [runtime, "run", "--rm", "--workdir", "/workspace"]
+    command = [
+        runtime,
+        "run",
+        "--rm",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges=true",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev",
+        "--workdir",
+        "/workspace",
+    ]
     if runtime == "podman":
         command.extend(["--userns=keep-id"])
-    else:
-        command.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+    command.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
     command.extend(["--volume", f"{source}:/workspace:rw"])
     for device in devices:
         command.extend(["--device", device])
@@ -616,6 +626,8 @@ def proot_base_command(
     identity_prefix: list[str] | None = None,
     cdi_bindings: list[tuple[str, str]] | None = None,
     environment: list[str] | None = None,
+    runtime_tmp: Path | None = None,
+    runtime_home: Path | None = None,
 ) -> list[str]:
     command = [
         *(identity_prefix or []),
@@ -625,6 +637,10 @@ def proot_base_command(
         "-b",
         f"{source}:/workspace",
     ]
+    if runtime_tmp is not None:
+        command.extend(["-b", f"{runtime_tmp}:/tmp"])
+    if runtime_home is not None:
+        command.extend(["-b", f"{runtime_home}:/home/cloudmake"])
     for host, container in cdi_bindings or []:
         command.extend(["-b", f"{host}:{container}"])
     command.extend([
@@ -893,6 +909,8 @@ def prepare(
     internal_result: Path | None = None,
     rootless_workspace_owner: str | None = None,
     cdi_directories: list[Path] | None = None,
+    runtime_tmp: Path | None = None,
+    runtime_home: Path | None = None,
 ) -> tuple[list[str], dict[str, Any], str | None]:
     if not source.is_dir():
         raise RunnerError(f"project workspace is unavailable: {source}")
@@ -903,15 +921,37 @@ def prepare(
         identity_prefix, identity = proot_identity_prefix(
             source, rootless_workspace_owner
         )
+        if runtime_home is not None:
+            runtime_home.mkdir(parents=True, exist_ok=True)
+            if rootless_workspace_owner is not None:
+                uid, gid = workspace_owner(rootless_workspace_owner)
+                chown_workspace(runtime_home, uid, gid)
+            home_root = bundle / "rootfs/home"
+            if home_root.is_symlink():
+                raise RunnerError("OCI image '/home' runtime path must not be a symbolic link")
+            home_root.mkdir(mode=0o755, exist_ok=True)
+            image_home = home_root / "cloudmake"
+            if image_home.is_symlink():
+                raise RunnerError(
+                    "OCI image '/home/cloudmake' runtime path must not be a symbolic link"
+                )
+            image_home.mkdir(mode=0o755, exist_ok=True)
         bindings: list[tuple[str, str]] = []
         environment = oci_process_environment(bundle)
         if devices:
             bindings, environment, _ = proot_cdi_configuration(
                 bundle, devices, cdi_directories or []
             )
+        if runtime_home is not None:
+            environment = [
+                value for value in environment if not value.startswith("HOME=")
+            ]
+            environment.append("HOME=/home/cloudmake")
+            environment.sort()
         return (
             proot_base_command(
-                bundle, source, identity_prefix, bindings, environment
+                bundle, source, identity_prefix, bindings, environment, runtime_tmp,
+                runtime_home
             ),
             image,
             identity,
@@ -980,6 +1020,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--arguments-b64", default="W10=")
     result.add_argument("--jobs", type=int, default=1)
     result.add_argument("--rootless-workspace-owner")
+    result.add_argument("--runtime-home", type=Path)
     result.add_argument("--cdi-spec-dir", action="append", type=Path, default=[])
     result.add_argument("--result", type=Path, required=True)
     return result
@@ -994,6 +1035,7 @@ def main() -> int:
             return EX_SOFTWARE
     arguments = parser().parse_args()
     receipt: dict[str, Any] = {"schema": 1, "mode": arguments.mode}
+    runtime_tmp: Path | None = None
     try:
         _, digest = image_reference(arguments.image)
         devices = [device_name(value) for value in arguments.device]
@@ -1005,6 +1047,9 @@ def main() -> int:
             arguments.runtime_candidate,
             requires_cdi=bool(devices),
         )
+        if runtime == "proot":
+            runtime_tmp = Path(tempfile.mkdtemp(prefix="cloudmake-proot-tmp-"))
+            runtime_tmp.chmod(0o1777)
         receipt.update(
             status="preparing",
             runner="oci",
@@ -1013,6 +1058,14 @@ def main() -> int:
             digest=digest,
             devices=devices,
             runtime_candidates=arguments.runtime_candidate,
+            execution_policy={
+                "profile": "least-privileged-compute-v1",
+                "privileged": False,
+                "no_new_privileges": True,
+                "effective_capabilities": [],
+                "host_credentials": "not-injected",
+                "host_mount_scope": "workspace,tmp,cdi",
+            },
         )
         base, image, identity = prepare(
             runtime=runtime,
@@ -1026,6 +1079,12 @@ def main() -> int:
             ),
             rootless_workspace_owner=arguments.rootless_workspace_owner,
             cdi_directories=arguments.cdi_spec_dir,
+            runtime_tmp=runtime_tmp,
+            runtime_home=(
+                arguments.runtime_home.resolve()
+                if arguments.runtime_home is not None
+                else None
+            ),
         )
         receipt["image_inspection"] = image
         if identity is not None:
@@ -1081,6 +1140,9 @@ def main() -> int:
         atomic_json(arguments.result, receipt)
         print(f"[cloudmake] OCI infrastructure failure: {error}", file=sys.stderr)
         return EX_SOFTWARE
+    finally:
+        if runtime_tmp is not None:
+            shutil.rmtree(runtime_tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

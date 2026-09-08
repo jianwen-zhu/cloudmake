@@ -6,6 +6,8 @@ BACKEND_API_VERSION := 1
 BACKEND_SESSION_REUSE := yes
 BACKEND_CAPABILITIES := sync execute status incremental-sync open artifacts gpu cancel capacity-retry persistent-workspace checkpoint-persistence environment-profile oci-runner
 BACKEND_OCI_RUNTIMES := crun
+BACKEND_INTERNET_INBOUND := no
+BACKEND_INTERNET_OUTBOUND := yes
 
 COLAB_SESSION ?= $(PROJECT_SLUG)
 COLAB_GPU ?=

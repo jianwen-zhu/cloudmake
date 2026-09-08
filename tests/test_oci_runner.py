@@ -112,6 +112,45 @@ def test_preflight_pulls_digest_and_checks_make_without_submitting_target(
     assert receipt["status"] == "ready"
     assert receipt["runtime"] == "podman"
     assert receipt["digest"] == "sha256:" + "a" * 64
+    assert receipt["execution_policy"] == {
+        "profile": "least-privileged-compute-v1",
+        "privileged": False,
+        "no_new_privileges": True,
+        "effective_capabilities": [],
+        "host_credentials": "not-injected",
+        "host_mount_scope": "workspace,tmp,cdi",
+    }
+    assert "--read-only" in calls[3]
+    assert "--cap-drop=ALL" in calls[3]
+    assert "--security-opt=no-new-privileges=true" in calls[3]
+    assert "/tmp:rw,nosuid,nodev" in calls[3]
+    assert ["--user", f"{os.getuid()}:{os.getgid()}"] == calls[3][
+        calls[3].index("--user") : calls[3].index("--user") + 2
+    ]
+
+
+@pytest.mark.parametrize("runtime", ["podman", "docker", "nerdctl"])
+def test_native_runtimes_receive_the_same_least_privilege_policy(
+    tmp_path: Path, runtime: str
+) -> None:
+    module = load(f"oci_runner_native_policy_{runtime}")
+    command = module.native_base_command(
+        runtime,
+        tmp_path / "source",
+        "registry.example/tools@sha256:" + "a" * 64,
+        ["nvidia.com/gpu=all"],
+    )
+
+    assert "--privileged" not in command
+    assert "--network=host" not in command
+    assert "--pid=host" not in command
+    assert "--read-only" in command
+    assert "--cap-drop=ALL" in command
+    assert "--security-opt=no-new-privileges=true" in command
+    assert "/tmp:rw,nosuid,nodev" in command
+    assert ["--device", "nvidia.com/gpu=all"] == command[
+        command.index("--device") : command.index("--device") + 2
+    ]
 
 
 def test_target_failure_is_preserved_after_exactly_one_submission(
@@ -240,6 +279,80 @@ def test_proot_adapter_translates_cdi_device_to_least_privileged_bind(
     assert bindings == [("/dev/null", "/dev/null")]
     assert "VISIBLE_GPU=yes" in environment
     assert sources == [str(cdi / "device.json")]
+
+
+def test_proot_command_binds_a_fresh_runtime_tmp(tmp_path: Path) -> None:
+    module = load("oci_runner_proot_tmp")
+    runtime_tmp = tmp_path / "runtime-tmp"
+    command = module.proot_base_command(
+        tmp_path / "bundle",
+        tmp_path / "source",
+        environment=["PATH=/usr/bin"],
+        runtime_tmp=runtime_tmp,
+    )
+
+    assert f"{runtime_tmp}:/tmp" in command
+
+
+def test_proot_command_binds_checkpointed_home(tmp_path: Path) -> None:
+    module = load("oci_runner_proot_home")
+    runtime_home = tmp_path / "home"
+    command = module.proot_base_command(
+        tmp_path / "bundle",
+        tmp_path / "source",
+        environment=["HOME=/home/cloudmake", "PATH=/usr/bin"],
+        runtime_home=runtime_home,
+    )
+
+    assert f"{runtime_home}:/home/cloudmake" in command
+    assert "HOME=/home/cloudmake" in command
+
+
+def test_proot_checkpointed_home_overrides_image_home_after_cdi(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("oci_runner_proot_cdi_home")
+    bundle = tmp_path / "bundle"
+    (bundle / "rootfs").mkdir(parents=True)
+    (bundle / "config.json").write_text(
+        json.dumps({"process": {"env": ["HOME=/image-user", "PATH=/usr/bin"]}}),
+        encoding="utf-8",
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    runtime_home = tmp_path / "runtime-home"
+    monkeypatch.setattr(
+        module,
+        "materialize_bundle",
+        lambda **_: (bundle, {"architecture": "amd64"}),
+    )
+    monkeypatch.setattr(
+        module, "proot_identity_prefix", lambda *_: (["setpriv"], "501:20")
+    )
+    monkeypatch.setattr(
+        module,
+        "proot_cdi_configuration",
+        lambda *_: (
+            [("/dev/null", "/dev/null")],
+            ["HOME=/image-user", "PATH=/usr/bin", "VISIBLE_GPU=yes"],
+            ["/etc/cdi/gpu.json"],
+        ),
+    )
+
+    command, _, _ = module.prepare(
+        runtime="proot",
+        reference="registry.example/tools@sha256:" + "a" * 64,
+        digest="sha256:" + "a" * 64,
+        source=source,
+        devices=["nvidia.com/gpu=all"],
+        cache=tmp_path / "cache",
+        runtime_home=runtime_home,
+    )
+
+    assert f"{runtime_home}:/home/cloudmake" in command
+    assert "HOME=/home/cloudmake" in command
+    assert "HOME=/image-user" not in command
+    assert "VISIBLE_GPU=yes" in command
 
 
 def test_dynamic_runtime_probe_tries_multiple_backend_options(monkeypatch) -> None:

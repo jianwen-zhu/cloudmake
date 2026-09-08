@@ -204,6 +204,14 @@ that same fact rather than separate capabilities. Adding checkpoint restore may
 make the logical workspace durable, but it does not change session reuse or hide
 the fixed per-target startup, restore, and publication cost.
 
+Network reachability is directional and independent of command transport.
+Cloudmake records public Internet inbound access separately from workload
+Internet outbound access. An authenticated notebook API or SSH proxy can submit
+commands without exposing a public VM endpoint; an environment with no inbound
+endpoint may still download dependencies. Conditional provider settings are
+treated as requests until the runtime positively demonstrates the needed
+outbound path.
+
 Execution composes those services with a fourth independent choice: the source
 of the project. Today the local working tree is authoritative; future source
 adapters may add other acquisition mechanisms without changing compute,
@@ -477,8 +485,8 @@ cloudmake --doctor
 cloudmake --backends
 ```
 
-`cloudmake --backends` reports the adapters and whether their main host clients are
-installed. `cloudmake --doctor` checks the selected backend's complete local
+`cloudmake --backends` reports the adapters, directional Internet declarations,
+and whether their main host clients are installed. `cloudmake --doctor` checks the selected backend's complete local
 prerequisites and provider authentication without allocating a VM. It also
 prints the installed client version and the client line used for Cloudmake's
 latest compatibility validation.
@@ -797,8 +805,9 @@ provider guarantees and may change on a replacement VM. The OCI runner performs
 its own execution preflight on every target invocation. The local backend
 supports the same observation command for comparison.
 
-`cloudmake --backends` also shows the ordered OCI runtime options declared by
-each backend. Host-oriented backends can declare several choices for dynamic
+`cloudmake --backends` also shows the ordered OCI runtime options and separate
+public-inbound/workload-outbound Internet declarations for each backend.
+Host-oriented backends can declare several choices for dynamic
 probing; managed notebook backends can declare one constrained adapter or
 explicitly declare OCI unsupported.
 
@@ -1044,6 +1053,11 @@ failure nor infrastructure failure advances the checkpoint head. This matches
 the same successful-target boundary used by Colab. `--workspace show`, `attach`, and destructive
 `--force --workspace purge ID` apply to Kaggle workspaces too.
 
+Kaggle target processes receive a workspace-scoped `HOME` plus XDG cache,
+configuration, and state directories. A project can therefore keep generated
+tool installations outside its source tree in the usual `$HOME/.cache` location
+and still recover them in the next fresh batch VM.
+
 Kaggle checkpoints are private provider outputs, not end-to-end encrypted
 archives. Kaggle can inspect them under its service boundary. Kaggle credentials
 remain only in the host CLI and are never embedded in the notebook or checkpoint.
@@ -1051,6 +1065,10 @@ remain only in the host CLI and are never embedded in the notebook or checkpoint
 Although the generated notebook is private, its versions retain uploaded source
 in the Kaggle account's version history. Do not include credentials, private keys,
 or other secrets in the source tree. Internet access is disabled by default.
+When it is requested, Cloudmake probes reachability before submitting Make and
+fails as infrastructure if the provider accepted the metadata but withheld
+egress. Kaggle CLI submissions have exhibited exactly that behavior; a metadata
+value of `enable_internet=true` is not proof of usable network access.
 
 #### Preinstalled Kaggle GPU stack
 
@@ -1346,6 +1364,23 @@ The three service-adapter roles are visible in each backend's contract:
 | `colab-ssh` | Reusable paid Colab VM over SSH | Unsupported | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
 | `host-ssh` | Existing user-managed SSH host | Host filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
 | `lightning-studio-ssh` | Reusable quota/credit-backed Studio | Studio filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+
+Network direction is a separate backend property, not an implication of the
+transport:
+
+| Backend | Public Internet inbound | Workload Internet outbound |
+| --- | --- | --- |
+| `local`, `host-ssh` | inherited from the selected host | inherited from the selected host |
+| `colab-notebook`, `colab-ssh` | no | yes |
+| `kaggle-notebook` | no | conditional; requested per job and probed before a network-dependent target |
+| `codespaces-ssh`, `lightning-studio-ssh` | conditional on provider configuration | conditional on provider/account policy |
+
+Authenticated provider control is not public inbound connectivity. For
+example, `colab exec` can submit work over Google's runtime proxy even though
+the VM exposes no public listening endpoint. Inspect the declarations with
+`cloudmake --backends`, or invoke the maintainer-facing
+`make BACKEND=NAME backend-info`; older API-1 third-party descriptors remain
+valid and report unqualified directions as `unknown`.
 
 The roles intentionally converge at the project Makefile, not at their
 transport, storage, or bundle layer. Project developers should use the

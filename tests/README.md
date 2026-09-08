@@ -95,6 +95,26 @@ The prepared ORFS project owns its tool acquisition, launcher, stage checks,
 and target names. See the [gate contract](acceptance/orfs-checkpoint/README.md).
 The harness leaves the session intact after any failed or ambiguous operation.
 
+## Kaggle course acceptance
+
+Kaggle must pass the same real-consumer behavior already accepted on local and
+Colab backends. The opt-in gate uses a clean public ECE326 Lab 1 release, the
+paired Lab 4 calibration, and the ECE467 accelerator-labs project. It also
+forces Kaggle's `session-reuse=no` behavior to prove that checkpointed `$HOME`
+state survives every fresh target VM:
+
+```sh
+export KAGGLE_USERNAME=your-account-slug
+export CLOUDMAKE_TEST_LIVE_KAGGLE_COURSES=1
+tests/acceptance/kaggle-courses/run.sh \
+  /tmp/ece326-lab1 /path/to/ece326-lab4-pair \
+  /path/to/ece467-labs evidence
+```
+
+See the [course-gate contract](acceptance/kaggle-courses/README.md). The gate is
+not green until all ECE326 and ECE467 targets complete; a provider internet or
+accelerator limitation is recorded as a release blocker rather than waived.
+
 ## ORFS OCI/CDI acceptance
 
 The separate 2.1 gate uses the pinned official ORFS OCI image on a Colab T4.

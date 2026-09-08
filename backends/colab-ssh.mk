@@ -6,6 +6,8 @@ BACKEND_API_VERSION := 1
 BACKEND_SESSION_REUSE := yes
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel oci-runner
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
+BACKEND_INTERNET_INBOUND := no
+BACKEND_INTERNET_OUTBOUND := yes
 
 COLAB_SESSION ?= cuda-build
 COLAB_GPU ?=

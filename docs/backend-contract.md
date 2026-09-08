@@ -56,6 +56,7 @@ Each backend declares:
 - an ordered set of capabilities, including any persistence and bundle-runtime
   roles;
 - an ordered OCI runtime list, or `none`; and
+- separate public-Internet inbound and outbound declarations; and
 - a resource identifier suitable for local serialization.
 
 The shared core validates the descriptor before running an operational target.
@@ -69,6 +70,30 @@ Capabilities describe real behavior rather than provider branding. Examples
 include synchronization, execution, artifact retrieval, status, opening a web
 interface, stopping reusable compute, and an interactive shell. A backend must
 not advertise a shell merely because its provider has a browser terminal.
+
+Public Internet reachability is also independent of the control transport.
+Every maintained backend declares `BACKEND_INTERNET_INBOUND` and
+`BACKEND_INTERNET_OUTBOUND`; `backend-info` renders them separately as
+`internet-inbound` and `internet-outbound`. The vocabulary is:
+
+| Value | Meaning |
+| --- | --- |
+| `yes` | Part of the qualified backend contract. |
+| `no` | Not exposed by the backend. |
+| `conditional` | Depends on provider, account, policy, or per-run settings and must be checked when required. |
+| `inherited` | Cloudmake uses the already configured local or user-managed host behavior. |
+| `unknown` | Not yet qualified; also the API-1 compatibility default for older third-party descriptors. |
+
+“Inbound” means a public Internet connection initiated toward the workload. It
+does not include authenticated provider control channels such as `colab exec`,
+Kaggle notebook submission, an SSH proxy, or a provider port-forwarding
+service. Cloudmake reports these properties; it does not configure firewalls,
+publish ports, or promise that every external host is reachable. A conditional
+outbound declaration requires a bounded pre-target probe when the selected
+invocation explicitly asks Cloudmake for network-dependent preparation. Native
+project targets remain opaque; Cloudmake does not infer their network needs
+from target names or recipes. A provider metadata request alone is not positive
+evidence.
 
 `environment-profile` is separate from these Cloudmake backend capabilities.
 It means the backend can observe the selected execution VM and report the
@@ -326,12 +351,14 @@ The implementation is complete when it has:
 
 1. a canonical, transport-explicit name and optional human-friendly alias;
 2. a valid descriptor and capability set;
-3. host prerequisite and read-only authentication checks;
-4. live status reconciliation;
-5. source ownership, locking, transfer, and remote prerequisite handling;
-6. target execution and safe artifact retrieval;
-7. normalized status mappings; and
-8. offline fake-provider tests for successful and failed operations, including
+3. separate, qualified public-Internet inbound and workload-outbound
+   declarations;
+4. host prerequisite and read-only authentication checks;
+5. live status reconciliation;
+6. source ownership, locking, transfer, and remote prerequisite handling;
+7. target execution and safe artifact retrieval;
+8. normalized status mappings; and
+9. offline fake-provider tests for successful and failed operations, including
    proof that it does not cross architecture boundaries such as cloning the
    user's project or using SSH from a native-notebook backend.
 

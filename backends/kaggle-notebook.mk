@@ -5,6 +5,8 @@ BACKEND_API_VERSION := 1
 BACKEND_SESSION_REUSE := no
 BACKEND_CAPABILITIES := sync execute status open artifacts gpu persistent-workspace checkpoint-persistence oci-runner
 BACKEND_OCI_RUNTIMES := proot
+BACKEND_INTERNET_INBOUND := no
+BACKEND_INTERNET_OUTBOUND := conditional
 
 KAGGLE_BIN ?= kaggle
 KAGGLE_USERNAME ?=
