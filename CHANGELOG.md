@@ -5,6 +5,12 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+## 1.0.1 - 2026-09-07
+
+- Accept the notebook kernel's injected `-f <connection-file>` argument when
+  running the remote Colab control-state probe, while retaining strict argument
+  validation for local control-state receipt parsing.
+
 ## 1.0.0 - 2026-09-07
 
 - Establish the stable stateless Cloudmake base release. Durable workspaces,

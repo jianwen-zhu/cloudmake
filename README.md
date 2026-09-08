@@ -385,19 +385,19 @@ drivers the project itself requires.
 
 ### 2. Install cloudmake
 
-The stable stateless base release is Cloudmake 1.0.0. Durable workspaces,
+The stable stateless base release is Cloudmake 1.0.1. Durable workspaces,
 checkpoints, and cross-VM restoration are reserved for the stateful 2.0 series.
 Install the stateless release's launcher from the versioned tool checkout:
 
 ```sh
-git clone --branch v1.0.0 --depth 1 https://github.com/jianwen-zhu/cloudmake.git
+git clone --branch v1.0.1 --depth 1 https://github.com/jianwen-zhu/cloudmake.git
 cd cloudmake
 make install
 ~/.local/bin/cloudmake --version
 ```
 
-The final command must print `cloudmake 1.0.0`. For an immutable deployment,
-also verify that the checkout's `HEAD` is the published 1.0.0 release commit
+The final command must print `cloudmake 1.0.1`. For an immutable deployment,
+also verify that the checkout's `HEAD` is the published 1.0.1 release commit
 listed with the release artifact and tag.
 
 Installation creates an unprivileged launcher under `~/.local/bin/cloudmake`

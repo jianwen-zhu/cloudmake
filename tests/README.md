@@ -91,6 +91,8 @@ internals:
 - executable Colab and Kaggle notebooks against temporary projects;
 - Colab project-failure receipts, concise diagnostics, retained infrastructure
   tracebacks, and started-versus-reused execution context;
+- real Colab control-state helper execution with Jupyter's injected kernel
+  connection-file argument and strict local receipt parsing;
 - Colab capacity classification, bounded allocation backoff, temporary-failure
   deadlines, immediate interruption, fail-fast compatibility, and at-most-once
   target dispatch;

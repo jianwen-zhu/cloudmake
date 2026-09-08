@@ -1,6 +1,6 @@
-# Colab session resilience design (v1.0.0)
+# Colab session resilience design (v1.0.1)
 
-This design applies specifically to the stateless v1.0.0 Colab notebook backend.
+This design applies specifically to the stateless v1.0.1 Colab notebook backend.
 It improves the safety of reusable live sessions without introducing durable
 workspaces, checkpoints, or cross-VM restoration.
 
@@ -56,7 +56,13 @@ of a file reported present is ambiguous and stops before synchronization:
 - `foreign`: ownership belongs to another project;
 - `unreachable`: the runtime cannot be inspected, so its identity is ambiguous.
 
-Fresh/reset state invalidates the cached remote fingerprint and forces the v0.9
+The provider executes Python helpers inside a Jupyter kernel, which injects its
+`-f <connection-file>` launcher argument. The remote control-state probe accepts
+that kernel-only argument without interpreting it. Its local `--parse` and
+`--field` receipt interface remains strict and rejects injected or unknown
+arguments.
+
+Fresh/reset state invalidates the cached remote fingerprint and forces the
 full-archive synchronization path. That synchronization replaces the remote
 source snapshot. It does not preserve generated files across a replacement VM.
 

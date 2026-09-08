@@ -143,8 +143,8 @@ ownership or source-fingerprint control state establishes fresh/reset and forces
 a complete stateless source replacement. A transport/download failure does not
 prove absence: Cloudmake records the workspace as unreachable/ambiguous and
 stops before synchronization. A foreign owner is refused unless explicitly
-adopted. Because v0.9 has no durable workspace layer, reset warnings explicitly
-note that runtime-local generated state may be gone.
+adopted. Because the stateless 1.x release line has no durable workspace layer,
+reset warnings explicitly note that runtime-local generated state may be gone.
 
 Cloudmake does not blindly retry target execution or a mutating notebook
 submission. An ambiguous failure may already have started work, so automatic
