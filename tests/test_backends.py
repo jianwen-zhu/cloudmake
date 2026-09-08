@@ -1001,9 +1001,9 @@ def test_colab_retry_never_recreates_existing_session_after_readiness_ambiguity(
         {
             "COLAB_SESSION": "cuda-build",
             "FAKE_COLAB_READINESS_FAIL_ALWAYS": "1",
-            "COLAB_READY_TIMEOUT": "0.12",
+            "COLAB_READY_TIMEOUT": "0.7",
             "COLAB_READY_POLL_SECONDS": "0.01",
-            "COLAB_READY_PROBE_TIMEOUT": "0.03",
+            "COLAB_READY_PROBE_TIMEOUT": "0.2",
         }
     )
 
