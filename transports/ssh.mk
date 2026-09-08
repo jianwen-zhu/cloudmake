@@ -2,6 +2,9 @@ REMOTE_SRC := $(REMOTE_ROOT)/src
 REMOTE_OWNER_FILE := $(REMOTE_ROOT)/.cloudmake-owner.json
 REMOTE_LOCK := $(REMOTE_ROOT)/.cloudmake-lock
 REMOTE_ARTIFACT_ARCHIVE := $(REMOTE_ROOT)/.cloudmake-artifacts.tar.gz
+REMOTE_OCI_TOOL := $(REMOTE_ROOT)/.cloudmake-oci-runner.py
+REMOTE_OCI_CACHE := $(REMOTE_ROOT)/.cloudmake-oci-cache
+REMOTE_OCI_RESULT := $(REMOTE_ROOT)/.cloudmake-oci-result.json
 REMOTE_LOCK_STALE ?= 7200
 
 SSH_BIN ?= ssh
@@ -12,7 +15,8 @@ BACKEND_START ?= :
 BACKEND_STATUS ?= :
 BACKEND_STOP ?= :
 BACKEND_STOP_PREREQUISITE ?= doctor
-BACKEND_REMOTE_REQUIRED_COMMANDS ?= make rsync tar
+BACKEND_REMOTE_REQUIRED_COMMANDS ?= $(if $(filter oci,$(CLOUDMAKE_RUNNER)),python3,make) rsync tar
+CLOUDMAKE_REMOTE_REQUIRED_COMMANDS := $(if $(filter oci,$(CLOUDMAKE_RUNNER)),python3 rsync tar,$(BACKEND_REMOTE_REQUIRED_COMMANDS))
 REMOTE_MAKEFILE ?= $(PROJECT_MAKEFILE)
 SSH_REFRESH_MESSAGE ?= SSH connection failed; refreshing generated configuration once.
 
@@ -24,6 +28,7 @@ SSH_REMOTE_OWNER_COPY := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_I
 CLOUDMAKE_RSYNC_IGNORE := $(if $(wildcard $(PROJECT_DIR)/.cloudmakeignore),--exclude-from='$(PROJECT_DIR)/.cloudmakeignore',)
 SSH_ARTIFACT_ARCHIVE := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/artifacts.tar.gz
 SSH_SOURCE_DELETE_SCRIPT := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/source-delete.sh
+SSH_OCI_RESULT := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/oci-result.json
 
 .PHONY: help start status stop sync collect dispatch fetch shell open \
 	_ssh-backend-start _ssh-start _ssh-sync _ssh-sync-unlocked _ssh-execute \
@@ -89,7 +94,7 @@ _ssh-start: ensure-owner $(BACKEND_PREREQUISITE)
 		$(SSH) true; \
 	fi
 	@missing=0; \
-	for command in $(BACKEND_REMOTE_REQUIRED_COMMANDS); do \
+	for command in $(CLOUDMAKE_REMOTE_REQUIRED_COMMANDS); do \
 		if ! $(SSH) "command -v '$$command' >/dev/null 2>&1"; then \
 			echo "Missing required remote command: $$command" >&2; \
 			missing=1; \
@@ -144,6 +149,10 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 		'$(PROJECT_DIR)/' $(SSH_HOST):$(REMOTE_SRC)/
 	$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
 		'$(CLOUDMAKE_OWNER_FILE)' $(SSH_HOST):$(REMOTE_OWNER_FILE)
+	@if test '$(CLOUDMAKE_RUNNER)' = oci; then \
+		$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
+			'$(CLOUDMAKE_TOOL_ROOT)/tools/oci_runner.py' $(SSH_HOST):$(REMOTE_OCI_TOOL); \
+	fi
 	@mv '$(CLOUDMAKE_CURRENT_MANIFEST)' '$(CLOUDMAKE_MANIFEST)'
 
 _ssh-execute: _ssh-start
@@ -156,12 +165,38 @@ _ssh-execute: _ssh-start
 	if test -n '$(REMOTE_COLLECT_DIR_B64)'; then \
 		$(SSH) "rm -f '$(REMOTE_ARTIFACT_ARCHIVE)'"; \
 	fi; \
+	if test '$(CLOUDMAKE_RUNNER)' = oci; then \
+		$(SSH) "rm -f '$(REMOTE_OCI_RESULT)'"; \
+	fi; \
 	command="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_make_command.py' \
 		--source '$(REMOTE_SRC)' --makefile '$(REMOTE_MAKEFILE)' \
 		--jobs '$(JOBS)' --target '$(REMOTE_TARGET)' \
 		--target-b64 '$(REMOTE_TARGET_B64)' \
-		--arguments-b64 '$(CLOUDMAKE_PROJECT_ARGS_B64)' )"; \
-	$(SSH) "$$command"; \
+		--arguments-b64 '$(CLOUDMAKE_PROJECT_ARGS_B64)' \
+		--runner '$(CLOUDMAKE_RUNNER)' \
+		--oci-image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
+		--oci-devices-b64 '$(CLOUDMAKE_OCI_DEVICES_B64)' \
+		--oci-runtimes-b64 '$(CLOUDMAKE_OCI_RUNTIMES_B64)' \
+		--oci-runtime '$(CLOUDMAKE_OCI_RUNTIME)' \
+		--oci-tool '$(REMOTE_OCI_TOOL)' --oci-cache '$(REMOTE_OCI_CACHE)' \
+		--oci-result '$(REMOTE_OCI_RESULT)' )"; \
+	rm -f '$(SSH_OCI_RESULT)' '$(SSH_OCI_RESULT).tmp'; \
+	set +e; $(SSH) "$$command"; execute_status=$$?; set -e; \
+	if test '$(CLOUDMAKE_RUNNER)' = oci; then \
+		mkdir -p '$(dir $(SSH_OCI_RESULT))'; \
+		$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
+			$(SSH_HOST):$(REMOTE_OCI_RESULT) '$(SSH_OCI_RESULT).tmp' >/dev/null 2>&1 || :; \
+		if test -f '$(SSH_OCI_RESULT).tmp'; then \
+			mv '$(SSH_OCI_RESULT).tmp' '$(SSH_OCI_RESULT)'; \
+		fi; \
+		set +e; \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/oci_result.py' \
+			--result '$(SSH_OCI_RESULT)' --expect terminal \
+			--process-status "$$execute_status"; result_status=$$?; \
+		set -e; \
+		if test $$result_status -ne 0; then exit $$result_status; fi; \
+	fi; \
+	if test $$execute_status -ne 0; then exit $$execute_status; fi; \
 	if test -n '$(REMOTE_COLLECT_DIR_B64)'; then \
 		collect_command="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_collect_command.py' \
 			--source '$(REMOTE_SRC)' --directory-b64 '$(REMOTE_COLLECT_DIR_B64)' \

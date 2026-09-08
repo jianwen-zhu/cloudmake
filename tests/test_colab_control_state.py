@@ -1,61 +1,61 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
-from conftest import PROJECT_ROOT
+from conftest import PROJECT_ROOT, run_command
 
 
-TOOL = PROJECT_ROOT / "tools" / "colab_control_state.py"
+HELPER = PROJECT_ROOT / "tools" / "colab_control_state.py"
 
 
-def load(name: str):
-    spec = importlib.util.spec_from_file_location(name, TOOL)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_remote_probe_ignores_jupyter_kernel_arguments(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_remote_probe_accepts_injected_notebook_kernel_connection_file(
+    tmp_path: Path,
 ) -> None:
-    module = load("colab_control_state_jupyter")
-    monkeypatch.setattr(module, "OWNER", tmp_path / "owner.json")
-    monkeypatch.setattr(module, "FINGERPRINT", tmp_path / "source.sha256")
-    module.OWNER.write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(
-        module.sys,
-        "argv",
-        ["ipykernel_launcher.py", "-f", "/tmp/kernel-connection.json"],
-    )
+    kernel = tmp_path / "kernel-123.json"
+    kernel.write_text("{}\n", encoding="utf-8")
 
-    assert module.main() == 0
-    assert (
-        capsys.readouterr().out.strip()
-        == "[cloudmake] control-state owner=present fingerprint=absent"
+    result = run_command([sys.executable, HELPER, "-f", kernel], cwd=tmp_path)
+
+    assert result.stdout.strip() == (
+        "[cloudmake] control-state owner=absent fingerprint=absent"
     )
 
 
-def test_host_receipt_parser_remains_strict(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    module = load("colab_control_state_strict")
-    receipt = tmp_path / "receipt.txt"
+def test_local_receipt_parse_remains_strict_and_valid(tmp_path: Path) -> None:
+    receipt = tmp_path / "control-state.txt"
     receipt.write_text(
-        "[cloudmake] control-state owner=present fingerprint=present\n",
+        "kernel noise\n"
+        "[cloudmake] control-state owner=present fingerprint=absent\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        module.sys,
-        "argv",
-        ["colab_control_state.py", "--parse", str(receipt), "--field", "owner", "--typo"],
+
+    result = run_command(
+        [sys.executable, HELPER, "--parse", receipt, "--field", "owner"],
+        cwd=tmp_path,
     )
 
-    with pytest.raises(SystemExit) as error:
-        module.main()
-    assert error.value.code == 2
+    assert result.stdout.strip() == "present"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--parse", "receipt.txt"),
+        ("--field", "owner"),
+        ("--parse", "receipt.txt", "--field", "invalid"),
+        ("--parse", "receipt.txt", "--field", "owner", "-f", "kernel.json"),
+        ("--unexpected",),
+    ],
+)
+def test_malformed_local_or_remote_probe_is_rejected(
+    tmp_path: Path, arguments: tuple[str, ...]
+) -> None:
+    result = run_command(
+        [sys.executable, HELPER, *arguments], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode == 2
+    assert "error:" in result.stdout

@@ -90,6 +90,14 @@ project directory. It does not enter the backend engine, synchronize files, or
 inject variables. This direct invocation is the reference semantics remote
 backends are required to preserve.
 
+When the user selects a digest-pinned OCI image, Cloudmake mounts the same
+project root at `/workspace`, overrides the image entry point with `make`, and
+passes the same target and user assignments. The project contract does not gain
+an image file, container-launch target, or Cloudmake variable. The selected
+image must contain a compatible `make` and the project tools its recipes expect;
+Cloudmake validates that execution surface before submitting the target. CDI
+device names are Cloudmake runner options rather than Make assignments.
+
 Persistent-workspace selection does not expand the project interface. Native
 persistence uses the backend's existing project tree without adding Make
 variables or transfer steps. Managed checkpoint persistence surrounds target

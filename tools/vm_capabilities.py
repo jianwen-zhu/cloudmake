@@ -224,6 +224,111 @@ def accelerator_record() -> dict[str, Any]:
     return {"nvidia": record}
 
 
+def oci_runtime_record() -> dict[str, Any]:
+    commands = {
+        "podman": ["podman", "--version"],
+        "docker": ["docker", "--version"],
+        "nerdctl": ["nerdctl", "--version"],
+        "skopeo": ["skopeo", "--version"],
+        "umoci": ["umoci", "--version"],
+        "proot": ["proot", "--version"],
+    }
+    result: dict[str, Any] = {}
+    for name, command in commands.items():
+        executable = shutil.which(name)
+        if executable is None:
+            result[name] = {"status": "unavailable"}
+            continue
+        probe = run_probe(command)
+        result[name] = {
+            "status": "installed" if probe.get("status") == "available" else "unusable",
+            "path": executable,
+        }
+        detail = probe.get("detail")
+        if isinstance(detail, str) and detail:
+            result[name]["version"] = detail
+    return result
+
+
+def restricted_chroot_record() -> dict[str, Any]:
+    capabilities = effective_capabilities()
+    commands = {
+        name: shutil.which(name) is not None for name in ("chroot", "mount", "umount")
+    }
+    devices = {
+        name: Path("/dev", name).exists()
+        for name in ("null", "zero", "full", "random", "urandom")
+    }
+    candidate = bool(
+        os.geteuid() == 0
+        and capabilities.get("sys_chroot")
+        and capabilities.get("sys_admin")
+        and all(commands.values())
+        and devices["null"]
+    )
+    return {
+        "status": "candidate" if candidate else "unavailable",
+        "effective_root": os.geteuid() == 0,
+        "capabilities": {
+            name: capabilities.get(name) for name in ("sys_chroot", "sys_admin")
+        },
+        "commands": commands,
+        "device_sources": devices,
+        "profile": {
+            "rootfs": "bind-ro-nosuid-nodev",
+            "project": "bind-rw-nosuid-nodev",
+            "proc": "bind-ro-nosuid-nodev-noexec",
+            "tmp": "fresh-bind-rw-nosuid-nodev",
+            "devices": "individual-standard-character-devices",
+            "identity": "non-root",
+        },
+        "runtime_preflight_required": True,
+    }
+
+
+def cdi_record(
+    directories: tuple[Path, ...] = (Path("/etc/cdi"), Path("/var/run/cdi"))
+) -> dict[str, Any]:
+    devices: set[str] = set()
+    invalid = 0
+    files = 0
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for path in sorted(
+            (
+                *directory.glob("*.json"),
+                *directory.glob("*.yaml"),
+                *directory.glob("*.yml"),
+            )
+        ):
+            files += 1
+            if path.suffix != ".json":
+                # YAML is valid CDI, but parsing it would add a non-standard
+                # dependency to this universal probe. Record its presence
+                # without claiming to have validated its devices.
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                kind = payload["kind"]
+                entries = payload["devices"]
+                if not isinstance(kind, str) or not isinstance(entries, list):
+                    raise ValueError
+                for entry in entries:
+                    name = entry.get("name") if isinstance(entry, dict) else None
+                    if isinstance(name, str):
+                        devices.add(f"{kind}={name}")
+            except Exception:
+                invalid += 1
+    return {
+        "spec_directories": [os.fspath(path) for path in directories],
+        "files": files,
+        "json_invalid": invalid,
+        "devices": sorted(devices),
+        "evidence": "observed",
+    }
+
+
 def memory_bytes() -> int | None:
     line = read_first(Path("/proc/meminfo"))
     if line and line.startswith("MemTotal:"):
@@ -268,6 +373,11 @@ def observe(workspace: Path) -> dict[str, Any]:
             "kvm": device_record("/dev/kvm"),
         },
         "accelerators": accelerator_record(),
+        "oci": {
+            "clients": oci_runtime_record(),
+            "cdi": cdi_record(),
+            "restricted_chroot": restricted_chroot_record(),
+        },
     }
 
 
@@ -314,6 +424,19 @@ def render(profile: dict[str, Any]) -> None:
         f"kvm={'yes' if devices.get('kvm', {}).get('present') else 'no'}",
     ]
     print("[cloudmake] capabilities " + " ".join(feature_fields))
+    oci = profile.get("oci", {})
+    clients = oci.get("clients", {})
+    installed = sorted(
+        name for name, value in clients.items() if value.get("status") == "installed"
+    )
+    cdi = oci.get("cdi", {})
+    restricted = oci.get("restricted_chroot", {})
+    print(
+        "[cloudmake] oci-clients="
+        + (",".join(installed) if installed else "none")
+        + f" cdi-devices={len(cdi.get('devices', []))}"
+        + f" restricted-chroot={restricted.get('status', 'unknown')}"
+    )
     print("[cloudmake] environment evidence=observed (not a provider guarantee)")
 
 
@@ -326,11 +449,23 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
-def main() -> int:
-    # `colab exec -f` evaluates the script in a Jupyter kernel whose process
-    # arguments include `-f <kernel-connection.json>`. They are not Cloudmake
-    # arguments and must not prevent the remote probe from producing a receipt.
-    arguments, _kernel_arguments = parser().parse_known_args()
+def main(argv: list[str] | None = None) -> int:
+    arguments_list = sys.argv[1:] if argv is None else argv
+    local_mode = any(
+        value == option or value.startswith(option + "=")
+        for value in arguments_list
+        for option in ("--workspace", "--result", "--render", "--json")
+    )
+    if not local_mode and not any(value in {"-h", "--help"} for value in arguments_list):
+        # `colab exec -f` evaluates this file in a Jupyter kernel whose only
+        # injected arguments are `-f <kernel-connection.json>`. Accept exactly
+        # that shape; arbitrary unknown arguments remain errors.
+        kernel_parser = argparse.ArgumentParser(add_help=False)
+        kernel_parser.add_argument("-f", dest="kernel_connection_file")
+        kernel_parser.parse_args(arguments_list)
+        arguments = parser().parse_args([])
+    else:
+        arguments = parser().parse_args(arguments_list)
     if arguments.render is not None:
         profile = json.loads(arguments.render.read_text(encoding="utf-8"))
     else:
@@ -348,4 +483,6 @@ def main() -> int:
 if __name__ == "__main__":
     # A successful SystemExit is still rendered as an exception by IPython,
     # which is implementation noise in `colab exec -f` output.
-    main()
+    exit_code = main()
+    if exit_code:
+        raise SystemExit(exit_code)

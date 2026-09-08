@@ -225,6 +225,66 @@ def test_colab_notebook_executes_project_specific_target(tmp_path: Path) -> None
     assert (source / "deployed" / "marker").is_file()
 
 
+def test_colab_notebook_dispatches_oci_target_through_remote_runner_once(
+    tmp_path: Path,
+) -> None:
+    remote = tmp_path / "colab" / "workspace"
+    source = remote / "src"
+    source.mkdir(parents=True)
+    (source / "Makefile").write_text("route:\n\t@true\n", encoding="utf-8")
+    control = tmp_path / "colab" / "target"
+    image = "registry.example/orfs@sha256:" + "a" * 64
+    control.write_text(
+        "\n".join(
+            [
+                base64.urlsafe_b64encode(b"route").decode(),
+                "4",
+                "Makefile",
+                "W10=",
+                "",
+                base64.urlsafe_b64encode(image.encode()).decode(),
+                base64.urlsafe_b64encode(b"[]").decode(),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runner = tmp_path / "oci-runner.py"
+    marker = tmp_path / "submissions"
+    runner.write_text(
+        "import argparse, json\n"
+        "from pathlib import Path\n"
+        "p=argparse.ArgumentParser()\n"
+        "p.add_argument('--result', type=Path, required=True)\n"
+        "p.add_argument('--target-b64', required=True)\n"
+        "args, _ = p.parse_known_args()\n"
+        f"marker=Path({str(marker)!r})\n"
+        "marker.write_text(marker.read_text() + 'x' if marker.exists() else 'x')\n"
+        "target=__import__('base64').urlsafe_b64decode(args.target_b64).decode()\n"
+        "args.result.parent.mkdir(parents=True, exist_ok=True)\n"
+        "args.result.write_text(json.dumps({'schema':1,'status':'succeeded','target':target,'exit_code':0})+'\\n')\n",
+        encoding="utf-8",
+    )
+
+    namespace = execute_code_cells(
+        load_notebook(COLAB_NOTEBOOK),
+        {
+            "/content/.cloud-build/workspace": str(remote),
+            "/content/.cloud-build/artifacts.tar.gz": str(remote / "artifacts.tar.gz"),
+            "/content/cloud-build-target": str(control),
+            "/content/cloudmake-oci-runner.py": str(runner),
+            "/content/.cloud-build/oci-cache": str(tmp_path / "cache"),
+        },
+    )
+
+    assert namespace["OCI_IMAGE"] == image
+    assert namespace["TARGET_EXIT_CODE"] == 0
+    assert marker.read_text(encoding="utf-8") == "x"
+    receipt = json.loads((remote.parent / "target-result.json").read_text(encoding="utf-8"))
+    assert receipt["target"] == "route"
+    assert receipt["status"] == "succeeded"
+
+
 @pytest.mark.parametrize("target", ["build", "test", "run", "package"])
 def test_kaggle_notebook_executes_each_make_target(tmp_path: Path, target: str) -> None:
     root = tmp_path / "kaggle" / "build"

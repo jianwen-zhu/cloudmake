@@ -15,8 +15,8 @@ MARKER = re.compile(
 
 
 def remote_probe() -> int:
-    owner = "present" if OWNER.is_file() else "absent"
-    fingerprint = "present" if FINGERPRINT.is_file() else "absent"
+    owner = "present" if OWNER.exists() else "absent"
+    fingerprint = "present" if FINGERPRINT.exists() else "absent"
     print(f"[cloudmake] control-state owner={owner} fingerprint={fingerprint}")
     return 0
 
@@ -29,29 +29,36 @@ def parse_receipt(path: Path, field: str) -> int:
     return 0
 
 
-def main() -> int:
-    # `colab exec -f` evaluates this file inside an existing Jupyter kernel.
-    # The kernel process contributes its own `-f <connection.json>` arguments;
-    # an argument-free invocation is the remote probe and must not parse those
-    # unrelated arguments. Host-side receipt parsing remains strict so a
-    # misspelled Cloudmake option is never silently accepted.
-    if "--parse" not in sys.argv[1:]:
-        return remote_probe()
+def main(argv: list[str] | None = None) -> int:
+    arguments_list = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(description="Probe or parse Colab control state")
     parser.add_argument("--parse", type=Path)
     parser.add_argument("--field", choices=("owner", "fingerprint"))
-    arguments = parser.parse_args()
+    local_options = ("--parse", "--field")
+    local_mode = any(
+        argument == option or argument.startswith(option + "=")
+        for argument in arguments_list
+        for option in local_options
+    )
+    if not local_mode and not any(
+        argument in {"-h", "--help"} for argument in arguments_list
+    ):
+        kernel_parser = argparse.ArgumentParser(add_help=False)
+        kernel_parser.add_argument("-f", dest="kernel_connection_file")
+        kernel_parser.parse_args(arguments_list)
+        return remote_probe()
+
+    arguments = parser.parse_args(arguments_list)
     if arguments.parse is None:
         if arguments.field is not None:
             parser.error("--field requires --parse")
-        return remote_probe()
+        parser.error("remote probe mode accepts only notebook-kernel arguments")
     if arguments.field is None:
         parser.error("--parse requires --field")
     return parse_receipt(arguments.parse, arguments.field)
 
 
 if __name__ == "__main__":
-    # IPython renders even successful SystemExit as a traceback. All failures
-    # in this helper already raise directly, so returning normally keeps the
-    # remote probe quiet without hiding errors.
-    main()
+    exit_code = main()
+    if exit_code:
+        raise SystemExit(exit_code)

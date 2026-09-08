@@ -109,6 +109,10 @@ RESERVED_ASSIGNMENTS = {
     "CLOUDMAKE_CACHE_ROOT",
     "CLOUDMAKE_ALLOCATION_RESULT",
     "CLOUDMAKE_CONTEXT_ACCELERATOR",
+    "CLOUDMAKE_OCI_DEVICES_B64",
+    "CLOUDMAKE_OCI_IMAGE_B64",
+    "CLOUDMAKE_OCI_RUNTIME",
+    "CLOUDMAKE_OCI_RUNTIMES_B64",
     "CLOUDMAKE_OPERATION_STATE",
     "CLOUDMAKE_CHECKPOINT",
     "CLOUDMAKE_PROJECT_KEY",
@@ -116,6 +120,7 @@ RESERVED_ASSIGNMENTS = {
     "CLOUDMAKE_PROJECT_ARGS_B64",
     "CLOUDMAKE_PROJECT_ROOT",
     "CLOUDMAKE_RETRY_FOR_SECONDS",
+    "CLOUDMAKE_RUNNER",
     "CLOUDMAKE_RUN_ID",
     "CLOUDMAKE_STATE_ROOT",
     "CLOUDMAKE_TOOL_ROOT",
@@ -129,6 +134,11 @@ RESERVED_ASSIGNMENTS = {
     "REMOTE_TARGET_B64",
     "REMOTE_COLLECT_DIR_B64",
 }
+OCI_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+CDI_DEVICE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+$"
+)
+OCI_RUNTIME_CANDIDATES = {"podman", "docker", "nerdctl", "proot", "chroot"}
 
 
 class UsageError(RuntimeError):
@@ -300,6 +310,38 @@ def artifact_receipt(directory: Path) -> dict[str, Any] | None:
     }
 
 
+def oci_receipt_snapshot(state_root: Path) -> dict[Path, int]:
+    return {
+        path: path.stat().st_mtime_ns
+        for pattern in ("target-result.json", "oci-result.json", "oci-preflight.json")
+        for path in state_root.rglob(pattern)
+        if path.is_file()
+    }
+
+
+def newest_oci_receipt(
+    state_root: Path, previous: dict[Path, int]
+) -> dict[str, Any]:
+    candidates = sorted(
+        (
+            path
+            for pattern in ("target-result.json", "oci-result.json", "oci-preflight.json")
+            for path in state_root.rglob(pattern)
+            if path.is_file() and previous.get(path) != path.stat().st_mtime_ns
+        ),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            receipt = load_json(path, optional=False)
+        except Exception:
+            continue
+        if receipt.get("runner") == "oci":
+            return receipt
+    return {}
+
+
 def allocation_receipt(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -400,6 +442,10 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         "accelerator": None,
         "accelerator_set": False,
         "checkpoint": None,
+        "image": None,
+        "native_runner": False,
+        "devices": [],
+        "devices_set": False,
         "force": False,
         "host": None,
         "host_template": None,
@@ -463,6 +509,26 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         elif argument == "--no-persist":
             options["checkpoint"] = False
             index += 1
+        elif argument == "--image":
+            options["image"], index = take_value(arguments, index, argument)
+        elif argument.startswith("--image="):
+            options["image"] = argument.split("=", 1)[1]
+            index += 1
+        elif argument == "--native":
+            options["native_runner"] = True
+            index += 1
+        elif argument == "--device":
+            value, index = take_value(arguments, index, argument)
+            options["devices"].append(value)
+            options["devices_set"] = True
+        elif argument.startswith("--device="):
+            options["devices"].append(argument.split("=", 1)[1])
+            options["devices_set"] = True
+            index += 1
+        elif argument == "--no-devices":
+            options["devices"] = []
+            options["devices_set"] = True
+            index += 1
         elif argument == "--workspace":
             set_action(options, "workspace")
             options["workspace_action"], index = take_value(arguments, index, argument)
@@ -510,7 +576,9 @@ Every positional name is passed unchanged to the project Makefile. Cloudmake
 reserves no project target names.
 
 Project options: -b BACKEND, -C DIR, -j N, --host HOST, --gpu[=TYPE], --cpu,
-                 --persist, --no-persist, --retry-for=DURATION, --verbose
+                 --persist, --no-persist, --image REF@sha256:DIGEST,
+                 --device CDI_NAME, --no-devices, --native,
+                 --retry-for=DURATION, --verbose
 Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
                   --sync-dry-run, --status, --environment, --fetch, --open,
                   --shell, --stop
@@ -523,18 +591,50 @@ Persistence modes: Colab notebook=encrypted checkpoint; local/persistent SSH=nat
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
 Environment: --environment records observed VM facts, not format compatibility.
+Runner: --image selects OCI/CDI Make; --native restores native Make. Selection
+        is local and per project unless -b is an explicit one-off override.
 Information: --help, --version, --history, --host-templates,
              --host-template NAME
 """
 
 
+def backend_oci_runtimes(backend: str) -> list[str]:
+    path = TOOL_ROOT / "backends" / f"{backend}.mk"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise UsageError(f"cannot read backend definition {path}: {error}") from error
+    match = re.search(
+        r"^BACKEND_OCI_RUNTIMES\s*:?=\s*([^#\n]*?)\s*$", source, re.MULTILINE
+    )
+    if match is None:
+        raise UsageError(f"backend {backend!r} does not declare OCI runtime options")
+    values = match.group(1).split()
+    if values == ["none"]:
+        return []
+    if not values or len(values) != len(set(values)):
+        raise UsageError(f"backend {backend!r} has invalid OCI runtime options")
+    invalid = [value for value in values if value not in OCI_RUNTIME_CANDIDATES]
+    if invalid:
+        raise UsageError(
+            f"backend {backend!r} has unknown OCI runtime option(s): "
+            + ", ".join(invalid)
+        )
+    return values
+
+
 def show_backends() -> None:
-    print("BACKEND             LIFECYCLE  PERSISTENCE  TRANSPORT                   HOST CLIENT")
+    print(
+        f"{'BACKEND':22} {'LIFECYCLE':10} {'PERSISTENCE':12} "
+        f"{'TRANSPORT':36} {'OCI RUNTIMES':34} HOST CLIENT"
+    )
     for name, (lifecycle, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
+        runtimes = backend_oci_runtimes(name)
+        runtime_text = ",".join(runtimes) if runtimes else "unsupported"
         print(
-            f"{name:19} {lifecycle:10} {PERSISTENCE_MODES[name]:12} "
-            f"{transport:27} {client} ({installed})"
+            f"{name:22} {lifecycle:10} {PERSISTENCE_MODES[name]:12} "
+            f"{transport:36} {runtime_text:34} {client} ({installed})"
         )
 
 
@@ -748,12 +848,15 @@ def manage_workspace(
         options["backend"] is not None
         or options["accelerator_set"]
         or options["checkpoint"] is not None
+        or options["image"] is not None
+        or options["native_runner"]
+        or options["devices_set"]
         or options["host"] is not None
         or options["global"]
     ):
         raise UsageError(
             "workspace management cannot be combined with backend, host, accelerator, "
-            "persistence, or global selection options"
+            "persistence, runner, or global selection options"
         )
     operation = options["workspace_action"]
     if operation not in {"show", "attach", "purge"}:
@@ -914,6 +1017,112 @@ def resolve_preferences(
     return backend, None, False, ssh_host, checkpoint, workspace_id
 
 
+def validate_runner_selection(
+    image: Any, devices: Any
+) -> tuple[str, str | None, list[str]]:
+    if image is None:
+        if devices:
+            raise UsageError("CDI devices require an OCI image selection")
+        return "native", None, []
+    if not isinstance(image, str) or OCI_IMAGE.fullmatch(image) is None:
+        raise UsageError(
+            "--image requires an immutable OCI reference of the form "
+            "REGISTRY/IMAGE@sha256:<64 lowercase hex digits>"
+        )
+    if not isinstance(devices, list) or not all(isinstance(item, str) for item in devices):
+        raise UsageError("configured CDI devices must be a string list")
+    for device in devices:
+        if CDI_DEVICE.fullmatch(device) is None:
+            raise UsageError(
+                f"invalid CDI device {device!r}; expected vendor.example/class=device"
+            )
+    if len(set(devices)) != len(devices):
+        raise UsageError("duplicate CDI device selections are not allowed")
+    return "oci", image, devices
+
+
+def validate_backend_oci_selection(
+    *, backend: str, runner: str, devices: list[str], accelerator: Any
+) -> list[str]:
+    runtimes = backend_oci_runtimes(backend)
+    if runner == "native":
+        return runtimes
+    if not runtimes:
+        raise UsageError(f"backend {backend!r} does not support the managed OCI runner")
+    native = {"podman", "docker", "nerdctl"}
+    if devices and not native.intersection(runtimes):
+        raise UsageError(
+            f"backend {backend!r} OCI runtime options cannot apply CDI devices"
+        )
+    if accelerator and not native.intersection(runtimes):
+        raise UsageError(
+            f"backend {backend!r} OCI runtime options are CPU-only; "
+            "select --cpu or --native"
+        )
+    return runtimes
+
+
+def resolve_runner_preferences(
+    options: dict[str, Any], project: Path, config_home: Path, key: str
+) -> tuple[str, str | None, list[str]]:
+    if options["native_runner"] and options["image"] is not None:
+        raise UsageError("--native cannot be combined with --image")
+    if options["native_runner"] and options["devices_set"]:
+        raise UsageError("--native cannot be combined with --device or --no-devices")
+    project_config = load_json(config_home / "projects" / f"{key}.json")
+    shared_config = load_json(project / ".cloudmake.json")
+    global_config = load_json(config_home / "config.json")
+    if options["native_runner"]:
+        return "native", None, []
+
+    configured_image: Any = None
+    configured_devices: Any = []
+    for config in (project_config, shared_config, global_config):
+        if "image" in config:
+            configured_image = config["image"]
+            configured_devices = config.get("devices", [])
+            break
+    image = options["image"] if options["image"] is not None else configured_image
+    if options["devices_set"]:
+        devices = options["devices"]
+    elif options["image"] is not None:
+        # A new image selection must not silently inherit device requirements
+        # from the previously selected image.
+        devices = []
+    else:
+        devices = configured_devices
+    return validate_runner_selection(image, devices)
+
+
+def persist_invocation_runner(
+    *,
+    project: Path,
+    config_home: Path,
+    key: str,
+    runner: str,
+    image: str | None,
+    devices: list[str],
+) -> None:
+    path = config_home / "projects" / f"{key}.json"
+    saved = load_json(path)
+    if runner == "native":
+        saved.pop("image", None)
+        saved.pop("devices", None)
+    else:
+        saved["image"] = image
+        saved["devices"] = devices
+    saved["project"] = os.fspath(project)
+    atomic_json(path, saved)
+    detail = "runner=native" if runner == "native" else f"runner=oci image={image}"
+    if devices:
+        detail += f" devices={','.join(devices)}"
+    print(
+        f"[cloudmake] selected {detail} for project={project.name}; "
+        "subsequent targets reuse this selection.",
+        flush=True,
+    )
+
+
 def validate_project(project: Path) -> Path:
     resolved = project.expanduser().resolve()
     if not resolved.is_dir():
@@ -991,6 +1200,10 @@ def engine_command(
     checkpoint: bool = False,
     colab_session: str | None = None,
     operation_state: Path | None = None,
+    runner: str = "native",
+    image: str | None = None,
+    devices: list[str] | None = None,
+    oci_runtimes: list[str] | None = None,
 ) -> int:
     make = shutil.which("make")
     if make is None:
@@ -1012,7 +1225,19 @@ def engine_command(
         f"CLOUDMAKE_RETRY_FOR_SECONDS={retry_seconds or 0}",
         f"BACKEND={backend}",
         f"PYTHON_BIN={sys.executable}",
+        f"CLOUDMAKE_RUNNER={runner}",
     ]
+    if runner == "oci":
+        if image is None:
+            raise UsageError("internal OCI runner selection has no image")
+        variables.extend(
+            [
+                f"CLOUDMAKE_OCI_IMAGE_B64={encoded_value(image)}",
+                f"CLOUDMAKE_OCI_DEVICES_B64={encoded_arguments(devices or [])}",
+                f"CLOUDMAKE_OCI_RUNTIMES_B64={encoded_arguments(oci_runtimes or [])}",
+                "CLOUDMAKE_OCI_RUNTIME=auto",
+            ]
+        )
     if run_id is not None:
         variables.append(f"CLOUDMAKE_RUN_ID={run_id}")
     if allocation_result is not None:
@@ -1121,6 +1346,65 @@ def local_make_command(
     if verbose:
         print("+", " ".join(command), file=sys.stderr)
     return subprocess.run(command, cwd=project, check=False).returncode
+
+
+def local_oci_command(
+    *,
+    project: Path,
+    image: str,
+    devices: list[str],
+    oci_runtimes: list[str],
+    target: str,
+    assignments: list[str],
+    jobs: str | None,
+    state_root: Path,
+    cache_home: Path,
+    run_id: str,
+    verbose: bool,
+) -> tuple[int, dict[str, Any]]:
+    parallel = jobs or "4"
+    if not parallel.isdigit() or int(parallel) < 1:
+        raise UsageError("-j requires a positive integer")
+    result = state_root / "oci" / run_id / "result.json"
+    common = [
+        sys.executable,
+        os.fspath(TOOL_ROOT / "tools" / "oci_runner.py"),
+        "--image",
+        image,
+        "--runtime",
+        "auto",
+        "--source",
+        os.fspath(project),
+        "--cache",
+        os.fspath(cache_home / "oci"),
+        "--makefile",
+        "Makefile",
+    ]
+    for runtime in oci_runtimes:
+        common.extend(["--runtime-candidate", runtime])
+    for device in devices:
+        common.extend(["--device", device])
+    print(
+        f"[cloudmake] backend=local runner=oci image={image} resource=local",
+        flush=True,
+    )
+    command = [
+        *common,
+        "--mode",
+        "run",
+        "--target-b64",
+        encoded_value(target),
+        "--arguments-b64",
+        encoded_arguments(assignments),
+        "--jobs",
+        parallel,
+        "--result",
+        os.fspath(result),
+    ]
+    if verbose:
+        print("+", " ".join(command), file=sys.stderr)
+    exit_code = subprocess.run(command, cwd=project, check=False).returncode
+    return exit_code, load_json(result)
 
 
 def collect_local_artifacts(
@@ -1238,6 +1522,12 @@ def run(arguments: list[str]) -> int:
                 "persistent workspaces must be enabled or disabled per project, "
                 "not with --global"
             )
+        if options["global"] and (
+            options["image"] is not None
+            or options["native_runner"]
+            or options["devices_set"]
+        ):
+            raise UsageError("OCI runner selection is per project, not global")
         backend = options["use_backend"]
         accelerator_set = options["accelerator_set"]
         accelerator = options["accelerator"]
@@ -1303,6 +1593,26 @@ def run(arguments: list[str]) -> int:
                 and not options["global"]
             ):
                 saved.setdefault("workspace_id", key)
+        runner, image, devices = resolve_runner_preferences(
+            options, project, config_home, key
+        )
+        effective_accelerator = (
+            accelerator
+            if accelerator_set
+            else saved.get("accelerator", global_config.get("accelerator", ""))
+        )
+        validate_backend_oci_selection(
+            backend=backend,
+            runner=runner,
+            devices=devices,
+            accelerator=effective_accelerator,
+        )
+        if runner == "native":
+            saved.pop("image", None)
+            saved.pop("devices", None)
+        else:
+            saved["image"] = image
+            saved["devices"] = devices
         if not options["global"]:
             saved["project"] = os.fspath(project)
         atomic_json(path, saved)
@@ -1321,9 +1631,15 @@ def run(arguments: list[str]) -> int:
             if options["checkpoint"] is not None
             else ""
         )
+        runner_note = (
+            ", runner=native"
+            if runner == "native"
+            else f", runner=oci, image={image}"
+        )
+        device_note = f", devices={','.join(devices)}" if devices else ""
         print(
             f"Saved {scope} backend={backend}{host_note}{accelerator_note}"
-            f"{session_note}{checkpoint_note}; "
+            f"{session_note}{checkpoint_note}{runner_note}{device_note}; "
             "subsequent targets reuse this selection."
         )
         if (
@@ -1357,6 +1673,9 @@ def run(arguments: list[str]) -> int:
         checkpoint,
         workspace_id,
     ) = resolve_preferences(project, options, config_home, key)
+    runner, image, devices = resolve_runner_preferences(
+        options, project, config_home, key
+    )
     if options["host"] is not None and backend != "host-ssh":
         raise UsageError("--host is valid only with the ssh backend")
     if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
@@ -1366,6 +1685,9 @@ def run(arguments: list[str]) -> int:
     if accelerator and backend not in GPU_BACKENDS:
         raise UsageError(f"backend {backend!r} does not support accelerator requests")
     persistence_mode = validate_persistence(backend, checkpoint)
+    oci_runtimes = validate_backend_oci_selection(
+        backend=backend, runner=runner, devices=devices, accelerator=accelerator
+    )
     managed_checkpoint = checkpoint and persistence_mode == "checkpoint"
     if action == "environment" and backend not in {"local", "colab-notebook"}:
         raise UsageError(
@@ -1375,6 +1697,15 @@ def run(arguments: list[str]) -> int:
         raise UsageError(
             "--persist/--no-persist is valid only with --use, --start, "
             "a project target, or --collect"
+        )
+    if (
+        options["image"] is not None
+        or options["native_runner"]
+        or options["devices_set"]
+    ) and action not in {None, "collect", "start"}:
+        raise UsageError(
+            "runner selection is valid only with --use, --start, a project target, "
+            "or --collect"
         )
     if retry_seconds is not None and backend not in CAPACITY_RETRY_BACKENDS:
         raise UsageError(
@@ -1436,6 +1767,19 @@ def run(arguments: list[str]) -> int:
             key=key,
             enabled=checkpoint,
             mode=persistence_mode,
+        )
+    if (
+        (options["image"] is not None or options["native_runner"] or options["devices_set"])
+        and options["backend"] is None
+        and engine_target in {"dispatch", "collect", "start"}
+    ):
+        persist_invocation_runner(
+            project=project,
+            config_home=config_home,
+            key=key,
+            runner=runner,
+            image=image,
+            devices=devices,
         )
     state_root = state_home / "projects" / key
     colab_session = (
@@ -1499,6 +1843,10 @@ def run(arguments: list[str]) -> int:
             checkpoint=managed_checkpoint,
             colab_session=colab_session,
             operation_state=operation_state,
+            runner=runner,
+            image=image,
+            devices=devices,
+            oci_runtimes=oci_runtimes,
         )
         if operation_allocation_path is not None:
             receipt = allocation_receipt(operation_allocation_path)
@@ -1539,6 +1887,7 @@ def run(arguments: list[str]) -> int:
 
     run_id = uuid.uuid4().hex
     manifest_before = source_manifest_snapshot(state_root, backend)
+    oci_before = oci_receipt_snapshot(state_root) if runner == "oci" else {}
     runs = state_root / "runs"
     allocation_path = (
         runs / f".{run_id}.allocation.json"
@@ -1568,6 +1917,12 @@ def run(arguments: list[str]) -> int:
             "mode": persistence_mode if checkpoint else "disabled",
             "workspace_id": workspace_id if managed_checkpoint else None,
         },
+        "runner": {
+            "kind": runner,
+            "image": image if runner == "oci" else None,
+            "devices": devices if runner == "oci" else [],
+            "runtime_candidates": oci_runtimes if runner == "oci" else [],
+        },
     }
     if ssh_host is not None:
         record["host"] = ssh_host
@@ -1577,20 +1932,45 @@ def run(arguments: list[str]) -> int:
     operation_state = state_root / "operations" / f"{run_id}.json"
     try:
         if backend == "local":
-            print_local_execution_context(accelerator, accelerator_set)
-            exit_code = local_make_command(
-                project=project,
-                target=remote_target,
-                assignments=assignments,
-                jobs=options["jobs"],
-                verbose=options["verbose"],
-            )
-            if exit_code:
-                print(
-                    f"[cloudmake] target {remote_target!r} failed with exit status "
-                    f"{exit_code}",
-                    file=sys.stderr,
+            if runner == "native":
+                print_local_execution_context(accelerator, accelerator_set)
+                exit_code = local_make_command(
+                    project=project,
+                    target=remote_target,
+                    assignments=assignments,
+                    jobs=options["jobs"],
+                    verbose=options["verbose"],
                 )
+                runner_receipt: dict[str, Any] = {}
+            else:
+                assert image is not None
+                exit_code, runner_receipt = local_oci_command(
+                    project=project,
+                    image=image,
+                    devices=devices,
+                    oci_runtimes=oci_runtimes,
+                    target=remote_target,
+                    assignments=assignments,
+                    jobs=options["jobs"],
+                    state_root=state_root,
+                    cache_home=cache_home,
+                    run_id=run_id,
+                    verbose=options["verbose"],
+                )
+                record["runner"].update(
+                    {
+                        name: runner_receipt[name]
+                        for name in ("runtime", "digest", "image_inspection")
+                        if name in runner_receipt
+                    }
+                )
+            if exit_code:
+                if runner == "native" or runner_receipt.get("status") == "target-failed":
+                    print(
+                        f"[cloudmake] target {remote_target!r} failed with exit status "
+                        f"{exit_code}",
+                        file=sys.stderr,
+                    )
             if exit_code == 0 and engine_target == "collect":
                 exit_code = collect_local_artifacts(
                     project=project,
@@ -1622,6 +2002,10 @@ def run(arguments: list[str]) -> int:
                 checkpoint=managed_checkpoint,
                 colab_session=colab_session,
                 operation_state=operation_state,
+                runner=runner,
+                image=image,
+                devices=devices,
+                oci_runtimes=oci_runtimes,
             )
     except BaseException:
         if allocation_path is not None:
@@ -1693,6 +2077,15 @@ def run(arguments: list[str]) -> int:
         ):
             if field in lifecycle:
                 record[field] = lifecycle[field]
+    if runner == "oci":
+        runner_receipt = newest_oci_receipt(state_root, oci_before)
+        record["runner"].update(
+            {
+                name: runner_receipt[name]
+                for name in ("runtime", "digest", "image_inspection")
+                if name in runner_receipt
+            }
+        )
     if engine_target == "collect" and exit_code == 0:
         record["artifacts"] = artifact_receipt(project / "artifacts")
     atomic_json(record_path, record)

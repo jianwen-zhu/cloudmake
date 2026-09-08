@@ -4,6 +4,7 @@ BACKEND_ACCESS_CLASS := notebook-batch
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := batch
 BACKEND_CAPABILITIES := sync execute status open artifacts gpu batch
+BACKEND_OCI_RUNTIMES := none
 
 KAGGLE_BIN ?= kaggle
 KAGGLE_USERNAME ?=

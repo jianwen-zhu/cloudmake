@@ -157,7 +157,7 @@ roles.
 
 ## Design
 
-Cloudmake 2.0 implements opt-in persistent workspaces that preserve
+Cloudmake 2.0 introduced opt-in persistent workspaces that preserve
 project-generated state across ephemeral accelerator VMs without changing the
 project's Make interface.
 The storage-neutral lifecycle, safety boundary, and acceptance gate are recorded
@@ -165,13 +165,13 @@ in [Stateful workspaces](docs/stateful-workspaces.md). When persistence is not
 enabled, state still lasts only as long as the selected reusable VM and its
 workspace survive.
 
-This is the first step toward a remote-workstation experience built from
-replaceable cloud compute. Cloudmake 2.0 adds durable mutable workspaces while
-retaining native Make execution. Cloudmake 2.1 is planned to add one managed
-non-native runner—registry-backed OCI images with CDI device requirements—so
-immutable tools and mutable project state remain separate. Backend, runner,
-persistence, and source acquisition are independent axes; the frozen boundary
-is documented in [Execution environments and OCI roadmap](docs/execution-environments.md).
+This is the path toward a remote-workstation experience built from replaceable
+cloud compute. Cloudmake 2.0 adds durable mutable workspaces. Cloudmake 2.1 adds
+one managed non-native runner—registry-backed OCI images with CDI device
+requirements—so immutable tools and mutable project state remain separate.
+Native Make remains the default. Backend, runner, persistence, and source
+acquisition are independent axes; the contract is documented in
+[Execution environments and OCI runner](docs/execution-environments.md).
 
 ### Tool repository and project repository are separate
 
@@ -532,6 +532,7 @@ output. Fields that a backend cannot know reliably are omitted:
 [cloudmake] backend=colab-notebook accelerator=T4 session=tilelang-lab resource=started
 [cloudmake] backend=colab-notebook accelerator=T4 session=tilelang-lab resource=reused
 [cloudmake] backend=local resource=local
+[cloudmake] backend=local runner=oci image=registry.example/tools@sha256:... resource=local
 ```
 
 `resource=started` means this invocation created or started the resource;
@@ -562,6 +563,10 @@ Common options:
 | `--gpu`, `--gpu=TYPE` | Select the default or a named GPU where supported; save it for the selected project unless `-b` is an explicit one-off override. |
 | `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
 | `--persist`, `--no-persist` | Enable or disable the selected backend's persistent-workspace mode and save the choice for later targets. The older `--checkpoint` and `--no-checkpoint` spellings remain compatible aliases. |
+| `--image REF@sha256:DIGEST` | Select a digest-pinned OCI image as the project's Make execution environment. |
+| `--device CDI_NAME` | Request a CDI qualified device such as `nvidia.com/gpu=all`; repeat for multiple devices. |
+| `--no-devices` | Clear saved CDI requests while retaining the selected image. |
+| `--native` | Clear the saved OCI image and return the project to native Make execution. |
 | `--retry-for DURATION` | Retry only positively classified temporary allocation capacity, for example `30s`, `15m`, or `2h`. |
 | `--verbose` | Show provider and transfer commands. |
 
@@ -609,6 +614,10 @@ cloudmake -b ssh --host lab-gpu benchmark
 
 # Explicitly release a reusable Colab session.
 cloudmake -b colab --stop
+
+# Select a digest-pinned tool image once; verify is project-provided.
+cloudmake --use local --image registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+cloudmake verify
 ```
 
 ## Backend prerequisites
@@ -633,6 +642,11 @@ using the same vocabulary as Colab. There is no provider interface, separate
 shell, or fetch operation.
 Use `--collect DIR TARGET` when a uniform `artifacts/` materialization is useful
 locally as well as remotely.
+
+The local backend also supports the managed OCI runner when Podman, Docker,
+nerdctl, or the `skopeo` + `umoci` + PRoot fallback is installed. Cloudmake
+still invokes the project's unchanged Make target, but obtains its tool
+environment from the selected image.
 
 ### Colab native notebook backend
 
@@ -733,10 +747,63 @@ cloudmake --environment
 This starts or reuses the selected session, but does not synchronize or execute
 the project. It reports observed machine, privilege, filesystem, namespace,
 device, and accelerator facts and retains a machine-readable profile.
-Cloudmake 2.0 does not infer application-format compatibility from those facts
-or from an installed client executable. Observations are not provider guarantees
-and may change on a replacement VM. The local backend supports the same command
-for comparison.
+The observation command alone does not infer application-format compatibility
+from those facts or from an installed client executable. Observations are not
+provider guarantees and may change on a replacement VM. The OCI runner performs
+its own execution preflight on every target invocation. The local backend
+supports the same observation command for comparison.
+
+`cloudmake --backends` also shows the ordered OCI runtime options declared by
+each backend. Host-oriented backends can declare several choices for dynamic
+probing; managed notebook backends can declare one constrained adapter or
+explicitly declare OCI unsupported.
+
+#### OCI/CDI execution
+
+Cloudmake 2.1 separates immutable tools from mutable project state. Select an
+OCI image by exact digest, optionally request devices using standard CDI names,
+and continue invoking project-provided targets normally:
+
+```sh
+cloudmake --use ssh --host lab-gpu \
+  --image registry.example/eda/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --device nvidia.com/gpu=all
+cloudmake route DESIGN=gcd
+```
+
+The runner selection is saved in Cloudmake's local per-project configuration;
+it does not modify the repository. `--native` returns to direct Make execution,
+and `--no-devices` clears device requests without changing the image. A new
+image does not inherit devices from the old image. `--start --image ...` saves
+the choice and starts compute, but image preparation waits until the first
+project target so it is validated on the actual execution VM.
+
+Before target submission Cloudmake pulls or materializes the exact digest,
+checks the image platform, applies CDI requests through a native runtime, and
+runs a bounded `make --version` preflight. An incompatible image, missing Make,
+or unavailable device is reported as infrastructure failure and the requested
+target is not run. After preflight, Make is submitted exactly once and ordinary
+target failures retain their exit status and output.
+
+Local and SSH backends prefer Podman, Docker, then nerdctl, with a PRoot
+fallback for CPU images. Colab uses a separate restricted chroot adapter because
+its managed VM does not provide a generally usable native container surface.
+That adapter materializes the OCI rootfs, mounts it read-only with
+`nosuid,nodev`, supplies a fresh writable `/tmp`, binds only the project
+workspace plus a read-only `/proc` and a small standard-device allowlist, and
+runs Make as a non-root identity. CDI is rejected for
+`colab-notebook`, and its managed OCI profile is CPU-only, rather than silently
+allocating an inaccessible accelerator. Kaggle OCI execution is
+unsupported in 2.1 and is rejected before provider contact.
+
+The registry remains authoritative for immutable layers. Runtime image caches
+are disposable VM-local state and are not copied into persistent-workspace
+checkpoints. The target sees the image's OCI environment, not the host's
+environment or credentials. The Colab adapter shares the VM kernel and network
+and is not a strong sandbox for untrusted images. Details, backend coverage,
+security boundaries, and the ORFS validation ladder are in the
+[OCI/CDI runner guide](docs/oci-runner.md) and
+[execution-environment contract](docs/execution-environments.md).
 
 #### Persistent workspace modes
 
@@ -1257,7 +1324,7 @@ documents before using private source or diagnosing a failure:
 - [Colab session resilience design](docs/colab-session-resilience.md)
 - [Security model](docs/security.md)
 - [Cloudmake 2.0 stateful-workspace design](docs/stateful-workspaces.md)
-- [Execution environments and OCI roadmap](docs/execution-environments.md)
+- [Execution environments and OCI runner](docs/execution-environments.md)
 - [Project contract](docs/project-contract.md)
 - [Backend contract](docs/backend-contract.md)
 - [Security reporting](SECURITY.md)

@@ -68,10 +68,48 @@ not advertise a shell merely because its provider has a browser terminal.
 `environment-profile` is separate from these Cloudmake backend capabilities.
 It means the backend can observe the selected execution VM and report the
 machine, privilege, filesystem, isolation, device, and accelerator evidence
-defined in [Execution environments and OCI roadmap](execution-environments.md).
+defined in [Execution environments and OCI runner](execution-environments.md).
 It does not imply support for a particular application format or runner.
 Observed properties are not provider guarantees and must not be cached as if
 they were promises for a replacement VM.
+
+`oci-runner` is an execution capability, not a persistence mode. A supporting
+transport must place the Cloudmake OCI runner beside its own control files,
+select an available implementation on the execution VM, perform image/Make/CDI
+preflight before target submission, and retrieve the terminal runner receipt.
+The requested target may execute at most once. Native execution must remain
+byte-for-byte compatible when `CLOUDMAKE_RUNNER=native`; adding OCI support may
+not impose an image, runtime dependency, or changed Make command on existing
+users. A backend that cannot provide the OCI runner rejects the selection before
+provider contact.
+
+All implementations present the project at `/workspace`, use only the OCI
+image environment plus explicit Cloudmake command arguments, and distinguish a
+runner-infrastructure receipt from the requested Make target's exit status. A
+restricted adapter without a native OCI runtime must additionally validate its
+mount operations on the actual VM, disable setuid/file-capability elevation,
+drop the target to a non-root identity, and document any shared host namespaces.
+Observed privilege or an installed command makes such an adapter only a
+candidate; it is not a compatibility guarantee.
+
+Every backend must also declare an ordered `BACKEND_OCI_RUNTIMES` list. Use
+`none` when OCI is unsupported. The supported runtime vocabulary is `podman`,
+`docker`, `nerdctl`, `proot`, and `chroot`. For example:
+
+```make
+# A host whose installed execution surface must be discovered dynamically.
+BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
+
+# A managed notebook with one provider-qualified adapter.
+BACKEND_OCI_RUNTIMES := chroot
+```
+
+The declaration describes mechanisms the backend permits, not commands proven
+to work on every instance. Cloudmake rejects selections that no declared option
+can satisfy, then probes the actual VM in declaration order. An installed but
+unready native runtime is skipped so another declared option can qualify. The
+image-specific preflight remains the final authority and never causes target
+replay.
 
 `checkpoint-persistence` means Cloudmake transfers a managed workspace through
 an independent durable checkpoint store. `native-persistence` means the

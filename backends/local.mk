@@ -5,7 +5,8 @@ BACKEND_TRANSPORT := local
 BACKEND_ACCESS_CLASS := local
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := local
-BACKEND_CAPABILITIES := sync execute status artifacts environment-profile native-persistence
+BACKEND_CAPABILITIES := sync execute status artifacts environment-profile native-persistence oci-runner
+BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
 
 MAKE_BIN ?= make
 

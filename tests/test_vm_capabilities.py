@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-from conftest import PROJECT_ROOT
+from conftest import PROJECT_ROOT, run_command
 
 
 TOOL = PROJECT_ROOT / "tools" / "vm_capabilities.py"
@@ -63,9 +63,58 @@ def test_profile_is_machine_readable_and_renderable(tmp_path: Path, capsys) -> N
     assert "environment os=linux arch=x86_64" in output
     assert "capabilities filesystem=unknown exec=yes symlink=yes" in output
     assert "nix" not in output.lower()
-    assert "oci" not in output.lower()
+    assert "oci-clients=none cdi-devices=0 restricted-chroot=unknown" in output
     assert "sif" not in output.lower()
     assert "evidence=observed (not a provider guarantee)" in output
+
+
+def test_cdi_probe_records_only_standard_qualified_names(tmp_path: Path) -> None:
+    module = load("vm_capabilities_cdi")
+    static = tmp_path / "etc-cdi"
+    dynamic = tmp_path / "run-cdi"
+    static.mkdir()
+    dynamic.mkdir()
+    (static / "nvidia.json").write_text(
+        json.dumps(
+            {
+                "cdiVersion": "1.0.0",
+                "kind": "nvidia.com/gpu",
+                "devices": [{"name": "0"}, {"name": "all"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (dynamic / "invalid.json").write_text("{broken", encoding="utf-8")
+
+    result = module.cdi_record((static, dynamic))
+
+    assert result["devices"] == ["nvidia.com/gpu=0", "nvidia.com/gpu=all"]
+    assert result["files"] == 2
+    assert result["json_invalid"] == 1
+    serialized = json.dumps(result)
+    assert "containerEdits" not in serialized
+    assert "env" not in serialized
+
+
+def test_restricted_chroot_probe_is_only_a_preflight_candidate(monkeypatch) -> None:
+    module = load("vm_capabilities_restricted_chroot")
+    monkeypatch.setattr(module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        module,
+        "effective_capabilities",
+        lambda: {"sys_chroot": True, "sys_admin": True},
+    )
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(module.Path, "exists", lambda self: True)
+
+    result = module.restricted_chroot_record()
+
+    assert result["status"] == "candidate"
+    assert result["runtime_preflight_required"] is True
+    assert result["profile"]["rootfs"] == "bind-ro-nosuid-nodev"
+    assert result["profile"]["project"] == "bind-rw-nosuid-nodev"
+    assert result["profile"]["tmp"] == "fresh-bind-rw-nosuid-nodev"
+    assert result["profile"]["proc"] == "bind-ro-nosuid-nodev-noexec"
 
 
 def test_remote_entrypoint_ignores_jupyter_kernel_arguments(
@@ -81,15 +130,29 @@ def test_remote_entrypoint_ignores_jupyter_kernel_arguments(
         "argv",
         [
             "colab_kernel_launcher.py",
-            "--workspace",
-            str(workspace),
-            "--result",
-            str(result),
             "-f",
             "/root/.local/share/jupyter/runtime/kernel.json",
         ],
     )
 
+    monkeypatch.setattr(module, "DEFAULT_RESULT", result)
+    monkeypatch.setattr(module, "DEFAULT_WORKSPACE", workspace)
+
     assert module.main() == 0
     assert json.loads(result.read_text(encoding="utf-8")) == value
     assert "environment-profile=" in capsys.readouterr().out
+
+
+def test_local_mode_and_remote_probe_reject_unknown_arguments(tmp_path: Path) -> None:
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(profile()), encoding="utf-8")
+
+    for arguments in (
+        ["--render", str(profile_path), "-f", "kernel.json"],
+        ["--unexpected"],
+    ):
+        result = run_command(
+            [sys.executable, TOOL, *arguments], cwd=tmp_path, check=False
+        )
+        assert result.returncode == 2
+        assert "error:" in result.stdout

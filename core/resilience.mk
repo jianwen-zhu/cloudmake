@@ -12,6 +12,11 @@ CLOUDMAKE_ADOPT ?= 0
 CLOUDMAKE_PROJECT_ROOT ?= $(PROJECT_DIR)
 CLOUDMAKE_PROJECT_ARGS_B64 ?= W10=
 CLOUDMAKE_CONTEXT_ACCELERATOR ?=
+CLOUDMAKE_RUNNER ?= native
+CLOUDMAKE_OCI_IMAGE_B64 ?=
+CLOUDMAKE_OCI_DEVICES_B64 ?= W10=
+CLOUDMAKE_OCI_RUNTIMES_B64 ?= W10=
+CLOUDMAKE_OCI_RUNTIME ?= auto
 CLOUDMAKE_RUN_ID ?=
 CLOUDMAKE_OPERATION_STATE ?= $(CLOUDMAKE_STATE_ROOT)/operations/$(if $(CLOUDMAKE_RUN_ID),$(CLOUDMAKE_RUN_ID),manual).json
 SOURCE_WARN_MB ?= 25
@@ -34,17 +39,22 @@ CLOUDMAKE_RECORD_STATE = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/run_state.p
 BACKEND_API_VERSION ?=
 BACKEND_LIFECYCLE ?=
 BACKEND_CAPABILITIES ?=
+BACKEND_OCI_RUNTIMES ?=
 BACKEND_RESOURCE_ID ?= default
 BACKEND_CONTEXT_RESOURCE_LABEL ?= resource
 BACKEND_CONTEXT_RESOURCE ?= $(BACKEND_RESOURCE_ID)
 BACKEND_CONTEXT_ACCELERATOR ?= $(CLOUDMAKE_CONTEXT_ACCELERATOR)
 BACKEND_CONTEXT_RESOURCE_STATE ?=
+BACKEND_CONTEXT_RUNNER ?= $(if $(filter-out native,$(CLOUDMAKE_RUNNER)),$(CLOUDMAKE_RUNNER),)
 
 # A compact, backend-neutral execution banner. Callers may set the shell
 # variable CLOUDMAKE_RESOURCE_STATE when they discover started/reused state at
 # runtime; otherwise the backend's static state is used.
 CLOUDMAKE_PRINT_CONTEXT = \
 	printf '[cloudmake] backend=%s' '$(BACKEND)'; \
+	if test -n '$(BACKEND_CONTEXT_RUNNER)'; then \
+		printf ' runner=%s' '$(BACKEND_CONTEXT_RUNNER)'; \
+	fi; \
 	if test -n '$(BACKEND_CONTEXT_ACCELERATOR)'; then \
 		printf ' accelerator=%s' '$(BACKEND_CONTEXT_ACCELERATOR)'; \
 	fi; \
@@ -63,6 +73,17 @@ $(error Backend "$(BACKEND)" uses API $(BACKEND_API_VERSION); cloudmake supports
 endif
 ifeq ($(filter $(BACKEND_LIFECYCLE),local session batch),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_LIFECYCLE "$(BACKEND_LIFECYCLE)")
+endif
+ifeq ($(strip $(BACKEND_OCI_RUNTIMES)),)
+$(error Backend "$(BACKEND)" does not declare BACKEND_OCI_RUNTIMES)
+endif
+ifneq ($(filter-out none podman docker nerdctl proot chroot,$(BACKEND_OCI_RUNTIMES)),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_OCI_RUNTIMES "$(BACKEND_OCI_RUNTIMES)")
+endif
+ifneq ($(filter none,$(BACKEND_OCI_RUNTIMES)),)
+ifneq ($(words $(BACKEND_OCI_RUNTIMES)),1)
+$(error Backend "$(BACKEND)" must declare OCI runtime "none" alone)
+endif
 endif
 
 CLOUDMAKE_LOCK_FILE := $(CLOUDMAKE_STATE_ROOT)/locks/$(BACKEND)/$(BACKEND_RESOURCE_ID).lock
@@ -90,6 +111,7 @@ backend-info: backend-contract
 	@echo 'lifecycle=$(BACKEND_LIFECYCLE)'
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'
+	@echo 'oci-runtimes=$(BACKEND_OCI_RUNTIMES)'
 
 ifeq ($(BACKEND_TRANSPORT),local)
 sync-dry-run: backend-contract

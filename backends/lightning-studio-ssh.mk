@@ -5,7 +5,8 @@ BACKEND_TRANSPORT := ssh
 BACKEND_ACCESS_CLASS := quota-tier
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
-BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel persistent-storage native-persistence
+BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel persistent-storage native-persistence oci-runner
+BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
 
 LIGHTNING_STUDIO ?=
 LIGHTNING_TEAMSPACE ?=

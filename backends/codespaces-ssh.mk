@@ -3,7 +3,8 @@ BACKEND_TRANSPORT := ssh
 BACKEND_ACCESS_CLASS := quota-tier
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
-BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts cancel native-persistence
+BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts cancel native-persistence oci-runner
+BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
 
 # Required: the permanent Codespaces name shown by `gh codespace list`.
 CODESPACE ?=

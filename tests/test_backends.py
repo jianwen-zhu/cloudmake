@@ -224,6 +224,30 @@ elif command == "exec":
             print("Connection was lost while installing preparation receipt.")
             raise SystemExit(1)
         shutil.copyfile(remote / "cloud-build-prepared", remote / ".cloudmake-prepared")
+    elif script.name == "colab_oci_prepare.py":
+        if os.environ.get("FAKE_COLAB_OCI_PREFLIGHT_FAIL"):
+            payload = {
+                "schema": 1,
+                "mode": "preflight",
+                "status": "infrastructure-failed",
+                "error": "image architecture is incompatible",
+            }
+        else:
+            control = (remote / "cloudmake-oci-control").read_text(encoding="utf-8").splitlines()
+            image = base64.urlsafe_b64decode(control[0]).decode()
+            payload = {
+                "schema": 1,
+                "mode": "preflight",
+                "status": "ready",
+                "runner": "oci",
+                "runtime": "chroot",
+                "image": image,
+                "digest": image.rsplit("@", 1)[1],
+                "devices": [],
+            }
+        (remote / "oci-preflight.json").write_text(
+            json.dumps(payload) + "\n", encoding="utf-8"
+        )
     elif script.suffix == ".ipynb" and (remote / "cloud-build-target").exists():
         control = (remote / "cloud-build-target").read_text(encoding="utf-8").splitlines()
         target_b64 = control[0]
@@ -241,11 +265,20 @@ elif command == "exec":
         target_exit = int(os.environ.get("FAKE_COLAB_TARGET_EXIT", "0"))
         if os.environ.get("FAKE_COLAB_TARGET_OUTPUT"):
             print(os.environ["FAKE_COLAB_TARGET_OUTPUT"])
+        payload = {"schema": 1, "target": target, "exit_code": target_exit}
+        if len(control) in (7, 8) and control[5]:
+            image = base64.urlsafe_b64decode(control[5]).decode()
+            payload.update(
+                runner="oci",
+                runtime="chroot",
+                image=image,
+                digest=image.rsplit("@", 1)[1],
+                status="succeeded" if target_exit == 0 else "target-failed",
+            )
         (remote / "target-result.json").write_text(
-            json.dumps({"schema": 1, "target": target, "exit_code": target_exit}) + "\n",
-            encoding="utf-8",
+            json.dumps(payload) + "\n", encoding="utf-8"
         )
-        if target_exit == 0 and len(control) == 5 and control[4]:
+        if target_exit == 0 and len(control) in (5, 7, 8) and control[4]:
             payload = remote / "artifact-payload"
             payload.mkdir(exist_ok=True)
             (payload / "hello").write_text("fake artifact\n", encoding="utf-8")
@@ -502,6 +535,26 @@ if "tar -C" in joined and ".cloudmake-artifacts.tar.gz" in joined:
             member = tarfile.TarInfo("hello")
             member.size = len(payload)
             archive.addfile(member, io.BytesIO(payload))
+if (
+    ".cloudmake-oci-runner.py" in joined
+    and "--mode run" in joined
+    and not os.environ.get("FAKE_SSH_OCI_NO_RECEIPT")
+):
+    remote = Path(os.environ["FAKE_REMOTE"])
+    remote.mkdir(parents=True, exist_ok=True)
+    (remote / "ssh-oci-result.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "runner": "oci",
+                "runtime": "podman",
+                "status": "succeeded",
+                "target": "route",
+                "exit_code": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
 if "printf 'running" in joined:
     print("running")
 ''',
@@ -518,6 +571,11 @@ with Path(os.environ["FAKE_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(["rsync", *sys.argv[1:]]) + "\n")
 if any(".cloudmake-artifacts.tar.gz" in argument for argument in sys.argv[1:]):
     source = Path(os.environ["FAKE_REMOTE"]) / "ssh-artifacts.tar.gz"
+    destination = Path(sys.argv[-1])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+elif any(".cloudmake-oci-result.json" in argument for argument in sys.argv[1:]):
+    source = Path(os.environ["FAKE_REMOTE"]) / "ssh-oci-result.json"
     destination = Path(sys.argv[-1])
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
@@ -545,9 +603,9 @@ def test_launcher_runs_external_project_through_colab_native(
     assert "Makefile" in names
     assert "source.txt" in names
     assert "Makefile.build" not in names
-    target_b64, jobs, makefile, encoded, collect = (remote / "cloud-build-target").read_text(
-        encoding="utf-8"
-    ).splitlines()
+    target_b64, jobs, makefile, encoded, collect, image, devices, runtimes = (
+        remote / "cloud-build-target"
+    ).read_text(encoding="utf-8").splitlines()
     assert (base64.urlsafe_b64decode(target_b64).decode(), makefile) == (
         "release candidate's [gpu]",
         "Makefile",
@@ -555,6 +613,9 @@ def test_launcher_runs_external_project_through_colab_native(
     assert int(jobs) > 0
     assert json.loads(base64.urlsafe_b64decode(encoded)) == ["SIZE=large"]
     assert collect == ""
+    assert image == ""
+    assert json.loads(base64.urlsafe_b64decode(devices)) == []
+    assert json.loads(base64.urlsafe_b64decode(runtimes)) == []
     assert not (project / ".cloud-state").exists()
     assert list((tmp_path / "state").rglob("source.tar.gz"))
 
@@ -811,6 +872,90 @@ def test_ssh_collect_fetches_artifacts_transactionally(
 
 
 @pytest.mark.integration
+def test_ssh_oci_mode_requires_runner_plumbing_not_host_make(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    project = external_project(tmp_path / "external-ssh-oci")
+    env = launcher_environment(fake_bin, tmp_path)
+    image = "registry.example/eda/tools@sha256:" + "b" * 64
+
+    result = run_command(
+        [LAUNCHER, "-b", "ssh", "--host", "lab-gpu", "--image", image, "route"],
+        cwd=project,
+        env=env,
+    )
+
+    events = calls(Path(env["FAKE_LOG"]))
+    prerequisite_probes = [
+        event for event in events if event[0] == "ssh" and "command -v" in " ".join(event)
+    ]
+    joined = "\n".join(" ".join(event) for event in prerequisite_probes)
+    assert "command -v 'python3'" in joined
+    assert "command -v 'rsync'" in joined
+    assert "command -v 'tar'" in joined
+    assert "command -v 'make'" not in joined
+    assert any(
+        event[0] == "rsync" and any("oci_runner.py" in value for value in event)
+        for event in events
+    )
+    assert "backend=host-ssh runner=oci" in result.stdout
+
+
+@pytest.mark.integration
+def test_ssh_oci_success_continues_to_artifact_collection(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    project = external_project(tmp_path / "external-ssh-oci-collect")
+    env = launcher_environment(fake_bin, tmp_path)
+    image = "registry.example/eda/tools@sha256:" + "c" * 64
+
+    run_command(
+        [
+            LAUNCHER,
+            "-b",
+            "ssh",
+            "--host",
+            "lab-gpu",
+            "--image",
+            image,
+            "--collect",
+            "dist",
+            "export-release",
+        ],
+        cwd=project,
+        env=env,
+    )
+
+    assert (project / "artifacts" / "hello").read_text(encoding="utf-8") == (
+        "fake ssh artifact\n"
+    )
+
+
+@pytest.mark.integration
+def test_ssh_oci_missing_terminal_receipt_is_infrastructure_failure(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    project = external_project(tmp_path / "external-ssh-oci-no-receipt")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["FAKE_SSH_OCI_NO_RECEIPT"] = "1"
+    image = "registry.example/eda/tools@sha256:" + "d" * 64
+
+    result = run_command(
+        [LAUNCHER, "-b", "ssh", "--host", "lab-gpu", "--image", image, "route"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "OCI infrastructure failure: invalid runner receipt" in result.stdout
+    assert "target 'route' failed" not in result.stdout
+
+
+@pytest.mark.integration
 def test_ssh_collect_rejects_unsafe_artifact_and_preserves_previous_output(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -980,6 +1125,82 @@ def test_colab_launcher_reports_context_reuse_and_expected_target_failure_cleanl
     assert provenance["provider_state"] == "failed"
     assert provenance["target_submission"] == "submitted"
     assert provenance["retry_safe"] is False
+
+
+@pytest.mark.integration
+def test_colab_oci_runner_preflights_before_submitting_target(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "external-oci-project")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["COLAB_SESSION"] = "oci-project"
+    image = "registry.example/orfs@sha256:" + "a" * 64
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--image", image, "route"],
+        cwd=project,
+        env=env,
+    )
+
+    events = calls(Path(env["FAKE_LOG"]), "colab")
+    preflight = [
+        event
+        for event in events
+        if event[1] == "exec"
+        and event[event.index("-f") + 1].endswith("colab_oci_prepare.py")
+    ]
+    target = [
+        event
+        for event in events
+        if event[1] == "exec"
+        and event[event.index("-f") + 1].endswith("runner.ipynb")
+    ]
+    assert len(preflight) == 1
+    assert len(target) == 1
+    assert events.index(preflight[0]) < events.index(target[0])
+    assert "backend=colab-notebook runner=oci" in result.stdout
+    assert "target 'route' failed" not in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["runner"]["kind"] == "oci"
+    assert provenance["runner"]["image"] == image
+    assert provenance["runner"]["devices"] == []
+    assert provenance["runner"]["runtime"] == "chroot"
+    assert provenance["runner"]["digest"] == "sha256:" + "a" * 64
+
+
+@pytest.mark.integration
+def test_colab_oci_preflight_failure_never_submits_target(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "external-oci-failure")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_OCI_PREFLIGHT_FAIL"] = "1"
+    image = "registry.example/build@sha256:" + "b" * 64
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--image", image, "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "OCI preflight failed; the target was not submitted" in result.stdout
+    events = calls(Path(env["FAKE_LOG"]), "colab")
+    assert not any(
+        event[1] == "exec"
+        and event[event.index("-f") + 1].endswith("runner.ipynb")
+        for event in events
+        if "-f" in event
+    )
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["phase"] == "runner_preflight"
+    assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
 
 @pytest.mark.integration
 def test_colab_default_path_has_no_checkpoint_or_drive_side_effects(
@@ -2286,6 +2507,14 @@ def test_backend_contract_declares_lifecycle_and_capabilities(
         assert "checkpoint-persistence" not in result.stdout
     else:
         assert persistence_capability in result.stdout
+    expected_oci = (
+        "none"
+        if backend == "kaggle-notebook"
+        else "chroot"
+        if backend == "colab-notebook"
+        else "podman docker nerdctl proot"
+    )
+    assert f"oci-runtimes={expected_oci}" in result.stdout
 
 
 @pytest.mark.integration

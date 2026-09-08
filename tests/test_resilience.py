@@ -593,6 +593,66 @@ def test_remote_make_command_preserves_an_encoded_target_as_one_argument(
     assert not any(value.startswith("CLOUD_BACKEND=") for value in command)
 
 
+def test_remote_make_command_constructs_digest_pinned_oci_dispatch(
+    tmp_path: Path,
+) -> None:
+    image = "registry.example/orfs@sha256:" + "a" * 64
+    encoded_image = base64.urlsafe_b64encode(image.encode()).decode()
+    encoded_target = base64.urlsafe_b64encode(b"route").decode()
+    encoded_devices = base64.urlsafe_b64encode(
+        json.dumps(["nvidia.com/gpu=all"]).encode()
+    ).decode()
+    encoded_runtimes = base64.urlsafe_b64encode(
+        json.dumps(["podman", "docker", "nerdctl", "proot"]).encode()
+    ).decode()
+
+    result = run_command(
+        [
+            sys.executable,
+            REMOTE_MAKE_COMMAND,
+            "--source",
+            "/workspace/source",
+            "--makefile",
+            "Makefile",
+            "--jobs",
+            "8",
+            "--target-b64",
+            encoded_target,
+            "--runner",
+            "oci",
+            "--oci-image-b64",
+            encoded_image,
+            "--oci-devices-b64",
+            encoded_devices,
+            "--oci-runtimes-b64",
+            encoded_runtimes,
+            "--oci-tool",
+            "/workspace/.cloudmake-oci-runner.py",
+            "--oci-cache",
+            "/workspace/.cloudmake-oci-cache",
+            "--oci-result",
+            "/workspace/.cloudmake-oci-result.json",
+        ],
+        cwd=tmp_path,
+    )
+
+    command = shlex.split(result.stdout)
+    assert command[:3] == [
+        "python3",
+        "/workspace/.cloudmake-oci-runner.py",
+        "--mode",
+    ]
+    assert command[command.index("--image") + 1] == image
+    assert command[command.index("--device") + 1] == "nvidia.com/gpu=all"
+    candidates = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "--runtime-candidate"
+    ]
+    assert candidates == ["podman", "docker", "nerdctl", "proot"]
+    assert command[command.index("--target-b64") + 1] == encoded_target
+
+
 def test_remote_collect_command_uses_a_safe_project_relative_directory(
     tmp_path: Path,
 ) -> None:

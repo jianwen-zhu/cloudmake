@@ -107,7 +107,36 @@ Source reconciliation preserves generated link objects without resolving them;
 local source still wins every conflict. Artifact collection resolves its
 requested directory and refuses it if a generated link escapes the project.
 The reasoning and execution boundaries are documented in
-[Execution environments and OCI roadmap](execution-environments.md).
+[Execution environments and OCI runner](execution-environments.md).
+
+## OCI runner credential and isolation boundary
+
+OCI images are selected only by immutable digest. Registry authentication stays
+with the installed official runtime or registry client; Cloudmake does not read,
+copy, serialize, or log its credential store. Source archives, runner control
+files, notebooks, persistent-workspace snapshots, and provenance contain the
+non-secret image reference and selected CDI names, never registry credentials.
+
+Native OCI containers receive no host environment variables from Cloudmake.
+The PRoot fallback and Colab restricted-chroot adapter start project Make
+through `env -i`, using only environment entries from the image's validated OCI
+runtime configuration plus safe `PATH` and `HOME` defaults when absent. The
+Colab adapter mounts its image root read-only with `nosuid,nodev`, supplies a
+fresh writable `/tmp`, mounts only the project workspace writable with
+`nosuid,nodev`, binds `/proc` read-only with
+`nosuid,nodev,noexec`, individually binds a standard character-device
+allowlist, and drops to a non-root identity. It does not expose `/sys`, a broad
+`/dev`, credential directories, or unrelated host paths.
+
+That adapter shares the managed VM kernel and network and is not a strong
+sandbox for untrusted images. The official OCI client itself may use its own
+runtime-local registry authentication to pull an image; Cloudmake does not
+transport a host credential store to an ephemeral VM. Client custody is
+distinct from target-environment injection.
+
+CDI requirements are passed only to a native runtime capable of resolving them.
+The Colab chroot profile rejects CDI before provider contact. Missing or
+ambiguous device support fails preflight and never degrades silently to CPU.
 
 The selected checkpoint engine is restic because content-defined chunking,
 snapshot encryption, integrity checks, and interruption handling are backup

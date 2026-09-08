@@ -137,6 +137,146 @@ def test_help_documents_opt_in_checkpoint_selection(
     assert engine_calls(log) == []
 
 
+def test_help_documents_digest_pinned_oci_runner_selection(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, "--help")
+
+    assert "--image REF@sha256:DIGEST" in result.stdout
+    assert "--device CDI_NAME" in result.stdout
+    assert "--native" in result.stdout
+    assert "OCI/CDI Make" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_oci_selection_persists_and_is_encoded_for_later_targets(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    image = "registry.example/orfs@sha256:" + "a" * 64
+
+    selected = invoke(
+        project,
+        environment,
+        "--use",
+        "ssh",
+        "--host",
+        "lab-gpu",
+        "--image",
+        image,
+        "--device",
+        "nvidia.com/gpu=all",
+    )
+    invoke(project, environment, "route")
+
+    assert "runner=oci" in selected.stdout
+    assert "subsequent targets reuse this selection" in selected.stdout
+    call = engine_calls(log)[0]
+    assert_assignment(call, "CLOUDMAKE_RUNNER", "oci")
+    encoded_image = next(
+        value.split("=", 1)[1]
+        for value in call
+        if value.startswith("CLOUDMAKE_OCI_IMAGE_B64=")
+    )
+    assert base64.urlsafe_b64decode(encoded_image).decode() == image
+    encoded_devices = next(
+        value.split("=", 1)[1]
+        for value in call
+        if value.startswith("CLOUDMAKE_OCI_DEVICES_B64=")
+    )
+    assert json.loads(base64.urlsafe_b64decode(encoded_devices).decode()) == [
+        "nvidia.com/gpu=all"
+    ]
+
+
+def test_native_clears_saved_oci_runner_without_changing_make_surface(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    image = "registry.example/build@sha256:" + "b" * 64
+    invoke(project, environment, "--use", "colab", "--image", image)
+
+    selected = invoke(project, environment, "--native", "verify")
+    again = invoke(project, environment, "verify")
+
+    assert "selected runner=native" in selected.stdout
+    for call in engine_calls(log):
+        assert_assignment(call, "CLOUDMAKE_RUNNER", "native")
+        assert not any(value.startswith("CLOUDMAKE_OCI_IMAGE_B64=") for value in call)
+    assert "selected runner" not in again.stdout
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--image", "registry.example/build:latest", "build"),
+        (
+            "--image",
+            "registry.example/build@sha256:" + "a" * 64,
+            "--device",
+            "gpu",
+            "build",
+        ),
+        ("--device", "nvidia.com/gpu=all", "build"),
+    ],
+)
+def test_invalid_oci_selection_is_rejected_before_provider_contact(
+    tmp_path: Path, fake_bin: Path, arguments: tuple[str, ...]
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, *arguments, check=False)
+
+    assert result.returncode == 2
+    assert engine_calls(log) == []
+
+
+def test_colab_restricted_oci_profile_rejects_cdi_before_allocation(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    image = "registry.example/build@sha256:" + "c" * 64
+
+    result = invoke(
+        project,
+        environment,
+        "-b",
+        "colab",
+        "--image",
+        image,
+        "--device",
+        "nvidia.com/gpu=all",
+        "build",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "cannot apply CDI devices" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_colab_restricted_oci_profile_rejects_saved_gpu_before_allocation(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    image = "registry.example/build@sha256:" + "d" * 64
+    invoke(project, environment, "--use", "colab", "--gpu=T4")
+
+    result = invoke(project, environment, "--image", image, "build", check=False)
+
+    assert result.returncode == 2
+    assert "OCI runtime options are CPU-only" in result.stdout
+    assert engine_calls(log) == []
+
+
 def test_backends_reports_persistence_mode_for_every_backend(
     tmp_path: Path, fake_bin: Path
 ) -> None:
@@ -146,12 +286,16 @@ def test_backends_reports_persistence_mode_for_every_backend(
     result = invoke(project, environment, "--backends")
 
     assert "PERSISTENCE" in result.stdout
+    assert "OCI RUNTIMES" in result.stdout
     rows = {
         line.split()[0]: line.split()
         for line in result.stdout.splitlines()[1:]
         if line.split()
     }
     assert rows["colab-notebook"][2] == "checkpoint"
+    assert "chroot" in rows["colab-notebook"]
+    assert "unsupported" in rows["kaggle-notebook"]
+    assert "podman,docker,nerdctl,proot" in rows["host-ssh"]
     for backend in (
         "local",
         "codespaces-ssh",
@@ -825,6 +969,69 @@ def test_local_backend_is_a_direct_make_passthrough_with_provenance(
     assert record["source"] == {"mode": "local-working-tree"}
     assert record["assignments"][0]["name"] == "SIZE"
     assert "large" not in latest.read_text(encoding="utf-8")
+
+
+def test_local_oci_runner_preflights_then_submits_target_once(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, engine_log = contract_environment(tmp_path, fake_bin)
+    runtime_log = tmp_path / "oci-runtime.jsonl"
+    write_executable(
+        fake_bin / "podman",
+        r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import platform
+import sys
+with Path(os.environ["OCI_RUNTIME_LOG"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(sys.argv[1:]) + "\n")
+if sys.argv[1:3] == ["image", "inspect"]:
+    architecture = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine(), platform.machine())
+    print(json.dumps([{"RepoDigests": [sys.argv[-1]], "Os": "linux", "Architecture": architecture}]))
+''',
+    )
+    environment["OCI_RUNTIME_LOG"] = str(runtime_log)
+    image = "registry.example/build@sha256:" + "d" * 64
+
+    result = invoke(
+        project,
+        environment,
+        "-b",
+        "local",
+        "--image",
+        image,
+        "-j2",
+        "benchmark",
+        "SIZE=small",
+    )
+
+    calls = [
+        json.loads(line) for line in runtime_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert calls[0] == ["info"]
+    assert calls[1] == ["pull", image]
+    assert calls[2] == ["image", "inspect", image]
+    submissions = [call for call in calls if call and call[0] == "run"]
+    assert len(submissions) == 2
+    assert submissions[0][-1] == "--version"
+    assert submissions[1][-6:] == [
+        "-f",
+        "Makefile",
+        "SIZE=small",
+        "-j2",
+        "--",
+        "benchmark",
+    ]
+    assert engine_calls(engine_log) == []
+    assert "backend=local runner=oci image=" in result.stdout
+    assert "runner=oci runtime=podman" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["runner"]["kind"] == "oci"
+    assert provenance["runner"]["runtime"] == "podman"
+    assert provenance["runner"]["image"] == image
 
 
 def test_explicit_gpu_selection_persists_and_is_reused_by_later_targets(

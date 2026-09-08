@@ -1,17 +1,17 @@
-# Execution environments and OCI roadmap
+# Execution environments and OCI runner
 
-This document freezes the boundary between Cloudmake 2.0 persistent workspaces
-and the planned Cloudmake 2.1 OCI/CDI execution surface. It is normative for
-those releases; research experiments do not expand the supported interface.
+This document defines the boundary between Cloudmake 2.0 persistent workspaces
+and the Cloudmake 2.1 OCI/CDI execution surface. It is normative for those
+releases; research experiments do not expand the supported interface.
 
 ## Orthogonal model
 
 A Cloudmake execution is the composition of four independent choices:
 
-| Axis | Cloudmake 2.0 | Planned extension |
+| Axis | Native/default surface | Managed extension |
 | --- | --- | --- |
 | Compute backend | local, Colab, Kaggle, SSH, Codespaces, Lightning | additional provider adapters |
-| Runner | native Make | OCI/CDI Make |
+| Runner | native Make | OCI/CDI Make (2.1) |
 | Persistence | off or persistent workspace | additional durable-store adapters |
 | Source | synchronized local tree | Git/registry-backed source acquisition |
 
@@ -55,7 +55,12 @@ or executing the project. The compact output and retained JSON profile record:
   extended-attribute behavior;
 - active user-namespace and private bind-mount probes;
 - cgroup generation and writability;
-- `/dev/fuse`, `/dev/kvm`, and NVIDIA visibility.
+- `/dev/fuse`, `/dev/kvm`, and NVIDIA visibility;
+- installed OCI clients and fallback tools;
+- prerequisites for Cloudmake's restricted chroot adapter, reported only as a
+  candidate pending active runner preflight; and
+- CDI JSON specification names observed in standard static and dynamic
+  directories (YAML files are counted but left to the runtime to validate).
 
 Active probes are bounded child processes. Filesystem probes use and remove a
 temporary directory beneath the selected workspace. Namespace and bind-mount
@@ -70,7 +75,7 @@ instead of inferring support from the presence of a client executable.
 
 ## Cloudmake 2.1: managed OCI/CDI runner
 
-The next capability step adds exactly one managed non-native runner: OCI with
+Cloudmake 2.1 adds exactly one managed non-native runner: OCI with
 device requirements expressed through CDI where applicable. OCI is selected
 because it provides a widely used, registry-backed, content-addressed image
 format plus standardized runtime configuration. CDI adds a standard vocabulary
@@ -84,11 +89,13 @@ OCI and CDI do not by themselves prove that a VM can run an image:
 - the host kernel, architecture, driver, privileges, namespaces, mounts,
   cgroups, and chosen runtime still determine whether execution is possible.
 
-Cloudmake therefore has three validation layers:
+Cloudmake therefore uses three validation layers:
 
-1. inspect and pin the image manifest and configuration by digest;
-2. compare declared OCI/CDI requirements with observed VM facts; and
-3. ask the selected runtime to perform a bounded preflight before dispatching
+1. require and inspect an immutable image reference by digest;
+2. record relevant observed VM and CDI facts without turning them into a
+   provider guarantee; and
+3. ask the selected runtime to pull/materialize the exact image and perform a
+   bounded Make-and-device preflight before dispatching
    the project target.
 
 A positively incompatible requirement fails before Make. Missing or ambiguous
@@ -96,6 +103,88 @@ evidence is reported honestly; Cloudmake must not claim compatibility based
 only on an installed `docker`, `podman`, or other client. Once preflight passes,
 Cloudmake invokes the requested project Make target exactly once inside the
 image, preserving the same target and assignment syntax as native execution.
+The image must contain `make`; Cloudmake overrides its entry point and working
+directory so the command remains `make -f Makefile ... -- TARGET` in the
+project mounted at `/workspace`.
+
+Select an image once for a project, then run ordinary targets:
+
+```sh
+cloudmake --use local \
+  --image registry.example/team/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+cloudmake verify
+```
+
+For a runtime-managed accelerator, add one or more standard CDI qualified
+device names:
+
+```sh
+cloudmake --image registry.example/team/cuda@sha256:DIGEST \
+  --device nvidia.com/gpu=all benchmark
+```
+
+`DIGEST` above is explanatory; the real CLI requires 64 lowercase hexadecimal
+digits. `--native` clears the project's saved image and device selection.
+`--no-devices` retains the image while clearing its saved devices. A new
+`--image` never inherits devices from an older image. Runner preferences are
+stored in Cloudmake's local per-project configuration; they do not modify the
+project. An explicit `-b` remains a one-invocation backend override. `--start`
+selects and starts compute but deliberately does not pull the image: image
+preflight happens immediately before a project target, when the execution VM
+is known.
+
+### Backend and runtime profiles
+
+| Backend | OCI execution | Runtime selection | CDI |
+| --- | --- | --- | --- |
+| `local` | supported | Podman, Docker, nerdctl, then PRoot fallback | passed to native runtime; rejected by PRoot |
+| `host-ssh`, `codespaces-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | passed to native runtime; rejected by PRoot |
+| `colab-notebook` | CPU images supported | `skopeo` + `umoci` materialization and restricted chroot adapter | rejected before provider contact |
+| `kaggle-notebook` | unsupported | none | rejected before provider contact |
+
+These choices are backend declarations rather than launcher special cases:
+
+```make
+BACKEND_OCI_RUNTIMES := podman docker nerdctl proot  # local and SSH hosts
+BACKEND_OCI_RUNTIMES := chroot                       # Colab notebook
+BACKEND_OCI_RUNTIMES := none                         # Kaggle notebook
+```
+
+The list is ordered and may contain multiple dynamically qualified options.
+Cloudmake first filters it against static requirements such as CDI, then probes
+the selected VM. For example, if Podman is installed but its machine or daemon
+is unavailable, Docker may qualify next. This readiness fallback occurs before
+image preparation and target submission; Cloudmake never switches runtimes and
+replays a project target after submission.
+
+Cloudmake installs only `skopeo` and `umoci` as its own transient runner
+plumbing on a Colab VM when needed; `chroot`, `mount`, and `umount` must be part
+of the managed VM base. It does not install the project's compiler or tool
+suite; those belong to the selected image. The adapter bind-mounts the
+materialized rootfs read-only with `nosuid,nodev`, supplies a fresh writable
+`/tmp`, binds the project workspace writable with `nosuid,nodev`, exposes `/proc` read-only with
+`nosuid,nodev,noexec`, and individually binds a small allowlist of standard
+character devices. It then enters the rootfs and drops to a non-root identity
+before Make. These mounts are created only for preflight or target execution
+and are removed afterward.
+
+Changes outside `/workspace` disappear with the invocation; the cached image
+root remains immutable. This restricted adapter is compatibility plumbing, not a strong sandbox. It
+shares the Colab VM kernel and network namespace, has no CDI injection, and
+does not emulate all OCI runtime isolation. Images used on this path must be
+trusted. It does not bind `/sys`, a broad `/dev`, host credential directories,
+or paths outside the project workspace.
+
+Native runtimes receive CDI qualified names through their standard device
+surface. Their bounded preflight is authoritative: a missing CDI specification,
+driver, runtime feature, unsupported image architecture, or `make` executable
+fails before the requested target is submitted. A static host/image architecture
+mismatch is recorded but is not alone a failure because a native runtime may
+provide configured emulation. The PRoot and Colab chroot profiles cannot
+safely inject CDI devices, so Cloudmake rejects either combination rather than
+silently running on the CPU.
+For the same reason, the Colab OCI profile rejects a saved or explicit GPU
+allocation request; use native Make for Colab GPU work in 2.1.
 
 The supported product surface remains intentionally small:
 
@@ -105,7 +194,7 @@ OCI/CDI Make
 ```
 
 Nix may build an OCI image upstream; Cloudmake does not need to know. Apptainer,
-SIF, Nix closures, PRoot, and other mechanisms may still appear inside ordinary
+SIF, Nix closures, and other mechanisms may still appear inside ordinary
 project recipes, but Cloudmake neither selects nor validates them as managed
 runners. OCI must be validated as OCI; conversion to SIF is not OCI evidence.
 
@@ -113,14 +202,18 @@ runners. OCI must be validated as OCI; conversion to SIF is not OCI evidence.
 
 An OCI registry is the authority for immutable image content. The image is
 referenced by digest and pulled or materialized on each fresh VM. A reused VM
-may use its runtime's local layer cache. Google Drive or another workspace
+may use its runtime's content-addressed local image cache. Google Drive or another workspace
 store remains the authority only for mutable project state.
 
-Cloudmake must not copy registry layers into every workspace checkpoint. A
-future optional image cache may reduce repeated pulls, but it is a separate,
-discardable optimization whose absence cannot affect correctness. Registry and
-runtime credentials remain with their official clients; they are never placed
-in project source, checkpoint metadata, or provenance.
+Cloudmake does not copy registry layers into workspace checkpoints. The runtime
+cache is separate, discardable VM state whose absence cannot affect
+correctness. Registry and runtime credentials remain with their official
+clients; they are never placed in project source, checkpoint metadata, or
+provenance. Cloudmake passes no host environment variables into native OCI
+containers. Its PRoot and restricted chroot paths start project Make with a
+clean environment populated only from validated OCI image configuration plus
+safe `PATH`/`HOME` defaults. Image references, observed platform facts,
+selected CDI names, runtime name, and outcome are non-secret provenance.
 
 ## Filesystem safety
 
@@ -152,7 +245,7 @@ The releases validate ORFS in two independent steps:
    native targets, publishes a successful stage boundary, destroys the Colab
    VM, restores the workspace, and continues without rebuilding durable state.
    Cloudmake does not interpret target names or `.odb` files.
-2. **2.1 OCI acceptance:** Cloudmake directly executes the pinned
+2. **2.1 OCI acceptance:** Cloudmake directly executes a pinned
    `openroad/orfs` OCI digest through its managed OCI runner, first without
    persistence and then composed with the already accepted 2.0 workspace.
 

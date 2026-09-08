@@ -5,7 +5,8 @@ BACKEND_TRANSPORT := ssh
 BACKEND_ACCESS_CLASS := user-managed
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
-BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts native-persistence
+BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts native-persistence oci-runner
+BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
 
 SSH_HOST ?=
 export SSH_HOST

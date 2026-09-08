@@ -8,6 +8,8 @@ COLAB_SYNC_RESULT := $(COLAB_STATE_DIR)/sync-result.sha256
 COLAB_TARGET_FILE := $(COLAB_STATE_DIR)/target
 COLAB_TARGET_RESULT := $(COLAB_STATE_DIR)/target-result.json
 COLAB_ENVIRONMENT_PROFILE := $(COLAB_STATE_DIR)/environment-profile.json
+COLAB_OCI_CONTROL := $(COLAB_STATE_DIR)/oci-control
+COLAB_OCI_PREFLIGHT := $(COLAB_STATE_DIR)/oci-preflight.json
 COLAB_RESOURCE_STATE := $(COLAB_STATE_DIR)/resource-state
 COLAB_ARTIFACT_ARCHIVE := $(COLAB_STATE_DIR)/artifacts.tar.gz
 COLAB_RUN_NOTEBOOK := $(COLAB_STATE_DIR)/runner.ipynb
@@ -31,6 +33,10 @@ COLAB_REMOTE_PREPARED := $(COLAB_REMOTE_ROOT)/.cloudmake-prepared
 COLAB_REMOTE_TARGET := /content/cloud-build-target
 COLAB_REMOTE_TARGET_RESULT := /content/.cloud-build/target-result.json
 COLAB_REMOTE_ENVIRONMENT_PROFILE := /content/.cloud-build/vm-capabilities.json
+COLAB_REMOTE_OCI_CONTROL := /content/cloudmake-oci-control
+COLAB_REMOTE_OCI_RUNNER := /content/cloudmake-oci-runner.py
+COLAB_REMOTE_OCI_PREFLIGHT := /content/.cloud-build/oci-preflight.json
+COLAB_REMOTE_OCI_CACHE := /content/.cloud-build/oci-cache
 COLAB_REMOTE_ARTIFACTS := /content/.cloud-build/artifacts.tar.gz
 
 COLAB_INVOCATION_ID := $(if $(CLOUDMAKE_RUN_ID),$(CLOUDMAKE_RUN_ID),manual)
@@ -44,6 +50,7 @@ COLAB_ACCELERATOR := $(if $(strip $(COLAB_GPU)),--gpu $(COLAB_GPU),)
 
 .PHONY: help start status stop sync collect dispatch fetch shell open environment \
 	_colab-start _colab-sync _colab-prepare _colab-execute _colab-collect _colab-fetch \
+	_colab-oci-prepare \
 	_colab-fetch-ready _colab-open _colab-stop _colab-start-ready \
 	_colab-checkpoint-restore _colab-checkpoint-publish _colab-environment workspace-purge
 
@@ -407,14 +414,55 @@ _colab-prepare: _colab-sync | $(COLAB_STATE_DIR)
 	$(CLOUDMAKE_RECORD_STATE) --phase preparation --provider-state ready \
 		--preparation-state succeeded --target-submission not_submitted --retry-safe true
 
-_colab-execute: _colab-prepare | $(COLAB_STATE_DIR)
+_colab-oci-prepare: _colab-prepare | $(COLAB_STATE_DIR)
+	@if test '$(CLOUDMAKE_RUNNER)' != oci; then exit 0; fi; \
+	printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+		'$(CLOUDMAKE_OCI_IMAGE_B64)' '$(CLOUDMAKE_OCI_DEVICES_B64)' \
+		'$(COLAB_REMOTE_ROOT)/src' '$(COLAB_REMOTE_OCI_CACHE)' '$(PROJECT_MAKEFILE)' \
+		'$(CLOUDMAKE_OCI_RUNTIMES_B64)' \
+		> '$(COLAB_OCI_CONTROL).tmp'; \
+	mv '$(COLAB_OCI_CONTROL).tmp' '$(COLAB_OCI_CONTROL)'; \
+	$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
+		'$(COLAB_OCI_CONTROL)' '$(COLAB_REMOTE_OCI_CONTROL)'; \
+	$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
+		'$(CLOUDMAKE_TOOL_ROOT)/tools/oci_runner.py' '$(COLAB_REMOTE_OCI_RUNNER)'; \
+	$(COLAB_BIN) rm -s '$(COLAB_SESSION)' \
+		'$(COLAB_REMOTE_OCI_PREFLIGHT)' >/dev/null 2>&1 || :; \
+	$(CLOUDMAKE_RECORD_STATE) --phase runner_preflight --provider-state ready \
+		--target-submission not_submitted --retry-safe true; \
+	$(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
+		-f '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_oci_prepare.py'; \
+	rm -f '$(COLAB_OCI_PREFLIGHT)' '$(COLAB_OCI_PREFLIGHT).tmp'; \
+	if ! $(COLAB_BIN) download -s '$(COLAB_SESSION)' \
+		'$(COLAB_REMOTE_OCI_PREFLIGHT)' '$(COLAB_OCI_PREFLIGHT).tmp'; then \
+		$(CLOUDMAKE_RECORD_STATE) --phase runner_preflight --provider-state unknown \
+			--target-submission not_submitted --retry-safe true \
+			--failure-code oci_preflight_receipt_unavailable; \
+		echo '[colab] OCI preflight receipt is unavailable; the target was not submitted.' >&2; \
+		exit 70; \
+	fi; \
+	mv '$(COLAB_OCI_PREFLIGHT).tmp' '$(COLAB_OCI_PREFLIGHT)'; \
+	if ! $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/oci_result.py' \
+		--result '$(COLAB_OCI_PREFLIGHT)' --expect ready; then \
+		$(CLOUDMAKE_RECORD_STATE) --phase runner_preflight --provider-state failed \
+			--target-submission not_submitted --retry-safe true \
+			--failure-code oci_preflight_failed; \
+		echo '[colab] OCI preflight failed; the target was not submitted.' >&2; \
+		exit 70; \
+	fi; \
+	$(CLOUDMAKE_RECORD_STATE) --phase runner_preflight --provider-state ready \
+		--target-submission not_submitted --retry-safe true
+
+_colab-execute: _colab-oci-prepare | $(COLAB_STATE_DIR)
 	@set -e; target_b64='$(REMOTE_TARGET_B64)'; \
 		if test -z "$$target_b64"; then \
 			target_b64="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/encode_value.py' '$(REMOTE_TARGET)' )"; \
 		fi; \
-		printf '%s\n%s\n%s\n%s\n%s\n' \
+		printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
 			"$$target_b64" '$(JOBS)' '$(PROJECT_MAKEFILE)' \
 			'$(CLOUDMAKE_PROJECT_ARGS_B64)' '$(REMOTE_COLLECT_DIR_B64)' \
+			'$(CLOUDMAKE_OCI_IMAGE_B64)' '$(CLOUDMAKE_OCI_DEVICES_B64)' \
+			'$(CLOUDMAKE_OCI_RUNTIMES_B64)' \
 			> '$(COLAB_TARGET_FILE).tmp'
 	@mv '$(COLAB_TARGET_FILE).tmp' '$(COLAB_TARGET_FILE)'
 	@cp '$(COLAB_NOTEBOOK)' '$(COLAB_RUN_NOTEBOOK).tmp'
@@ -463,8 +511,14 @@ _colab-execute: _colab-prepare | $(COLAB_STATE_DIR)
 	fi; \
 	exit $$download_status
 	@mv '$(COLAB_TARGET_RESULT).tmp' '$(COLAB_TARGET_RESULT)'
-	@set +e; $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/target_result.py' \
-		--result '$(COLAB_TARGET_RESULT)'; code=$$?; \
+	@set +e; \
+	if test '$(CLOUDMAKE_RUNNER)' = oci; then \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/oci_result.py' \
+			--result '$(COLAB_TARGET_RESULT)' --expect terminal; \
+	else \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/target_result.py' \
+			--result '$(COLAB_TARGET_RESULT)'; \
+	fi; code=$$?; \
 	if test $$code -eq 0; then provider=succeeded; else provider=failed; fi; \
 	$(CLOUDMAKE_RECORD_STATE) --phase target_execution --provider-state $$provider \
 		--target-submission submitted --retry-safe false; exit $$code
