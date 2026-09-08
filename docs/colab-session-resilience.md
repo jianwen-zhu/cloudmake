@@ -1,6 +1,6 @@
-# Colab session resilience design (v0.9)
+# Colab session resilience design (v0.9.1)
 
-This design applies specifically to the stateless v0.9 Colab notebook backend.
+This design applies specifically to the stateless v0.9.1 Colab notebook backend.
 It improves the safety of reusable live sessions without introducing durable
 workspaces, checkpoints, or cross-VM restoration.
 

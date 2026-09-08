@@ -5,6 +5,8 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+## 0.9.1 - 2026-09-07
+
 - Derive the default native Colab session from stable local project identity,
   while preserving explicit `COLAB_SESSION` values and existing v0.9
   `cuda-build` state, with an explicit per-project command to persist migration.

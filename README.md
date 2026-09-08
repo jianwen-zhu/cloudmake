@@ -385,14 +385,19 @@ drivers the project itself requires.
 
 ### 2. Install cloudmake
 
-Install the launcher from the tool checkout:
+The stable stateless maintenance release is Cloudmake 0.9.1. Install its
+launcher from the versioned tool checkout:
 
 ```sh
-git clone <cloudmake-repository-url>
+git clone --branch v0.9.1 --depth 1 https://github.com/jianwen-zhu/cloudmake.git
 cd cloudmake
 make install
-cloudmake --version
+~/.local/bin/cloudmake --version
 ```
+
+The final command must print `cloudmake 0.9.1`. For an immutable deployment,
+also verify that the checkout's `HEAD` is the published 0.9.1 release commit
+listed with the release artifact and tag.
 
 Installation creates an unprivileged launcher under `~/.local/bin/cloudmake`
 and installs its self-contained runtime under `~/.local/libexec/cloudmake/`.
