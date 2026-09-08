@@ -27,7 +27,7 @@ CDI_DEVICE = re.compile(
 )
 RUNTIMES = ("auto", "podman", "docker", "nerdctl", "proot", "crun")
 HIGH_LEVEL_RUNTIMES = ("podman", "docker", "nerdctl")
-CDI_RUNTIMES = (*HIGH_LEVEL_RUNTIMES, "crun")
+CDI_RUNTIMES = (*HIGH_LEVEL_RUNTIMES, "proot", "crun")
 STANDARD_DEVICES = ("null", "zero", "full", "random", "urandom")
 CDI_DIRECTORIES = (Path("/etc/cdi"), Path("/var/run/cdi"))
 EX_SOFTWARE = getattr(os, "EX_SOFTWARE", 70)
@@ -124,7 +124,7 @@ def run_checked(
 
 def runtime_readiness(candidate: str) -> tuple[bool, str]:
     if candidate == "proot":
-        required = ("skopeo", "umoci", "proot")
+        required = ("skopeo", "umoci", "proot", "setpriv")
     elif candidate == "crun":
         if os.geteuid() != 0:
             return False, "requires a root managed-VM adapter"
@@ -378,10 +378,10 @@ def absolute_container_path(value: Any, description: str) -> str:
 
 
 def cdi_specifications(directories: list[Path]) -> dict[str, tuple[dict[str, Any], Path]]:
-    """Load the strict JSON subset consumed by the direct crun adapter.
+    """Load the strict JSON subset consumed by direct managed-VM adapters.
 
     Higher-level runtimes remain responsible for their own CDI implementation.
-    The direct adapter fails closed on fields it cannot faithfully translate.
+    Each direct adapter fails closed on fields it cannot faithfully translate.
     """
     resolved: dict[str, tuple[dict[str, Any], Path]] = {}
     yaml_present = False
@@ -440,7 +440,7 @@ def cdi_specifications(directories: list[Path]) -> dict[str, tuple[dict[str, Any
                         if key not in {"env", "deviceNodes", "mounts"}:
                             raise RunnerError(
                                 f"CDI field {key!r} used by {qualified!r} is unsupported "
-                                "by the Colab crun profile"
+                                "by Cloudmake's direct OCI adapter profile"
                             )
                         if not isinstance(value, list):
                             raise RunnerError(f"CDI field {key!r} for {qualified!r} must be a list")
@@ -450,7 +450,7 @@ def cdi_specifications(directories: list[Path]) -> dict[str, tuple[dict[str, Any
                 resolved[qualified] = (combined, path)
     if not resolved and yaml_present:
         raise RunnerError(
-            "the Colab crun profile requires JSON CDI specifications; "
+            "Cloudmake's direct OCI adapters require JSON CDI specifications; "
             "a YAML-only CDI installation was found"
         )
     return resolved
@@ -584,40 +584,73 @@ def chown_workspace(source: Path, uid: int, gid: int) -> None:
 
 
 def proot_identity_prefix(source: Path, owner: str | None) -> tuple[list[str], str]:
+    setpriv = shutil.which("setpriv")
+    if setpriv is None:
+        raise RunnerError("PRoot execution requires setpriv to enforce noNewPrivileges")
     if os.geteuid() != 0:
         if owner is not None:
             raise RunnerError("a PRoot workspace owner may be supplied only by a root VM adapter")
-        return [], f"{os.getuid()}:{os.getgid()}"
+        return [setpriv, "--no-new-privs"], f"{os.getuid()}:{os.getgid()}"
     if owner is None:
         raise RunnerError(
             "PRoot cannot safely translate an OCI root while running as root; "
             "the backend must select an unprivileged workspace owner"
         )
     uid, gid = workspace_owner(owner)
-    setpriv = shutil.which("setpriv")
-    if setpriv is None:
-        raise RunnerError("root PRoot execution requires the setpriv command")
     chown_workspace(source, uid, gid)
-    return [setpriv, f"--reuid={uid}", f"--regid={gid}", "--clear-groups"], owner
+    return [
+        setpriv,
+        "--no-new-privs",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--bounding-set=-all",
+        f"--reuid={uid}",
+        f"--regid={gid}",
+        "--clear-groups",
+    ], owner
 
 
 def proot_base_command(
-    bundle: Path, source: Path, identity_prefix: list[str] | None = None
+    bundle: Path,
+    source: Path,
+    identity_prefix: list[str] | None = None,
+    cdi_bindings: list[tuple[str, str]] | None = None,
+    environment: list[str] | None = None,
 ) -> list[str]:
-    return [
+    command = [
         *(identity_prefix or []),
         "proot",
         "-r",
         str(bundle / "rootfs"),
         "-b",
         f"{source}:/workspace",
+    ]
+    for host, container in cdi_bindings or []:
+        command.extend(["-b", f"{host}:{container}"])
+    command.extend([
         "-w",
         "/workspace",
         "/usr/bin/env",
         "-i",
-        *oci_process_environment(bundle),
+        *(environment or oci_process_environment(bundle)),
         "make",
+    ])
+    return command
+
+
+def proot_cdi_configuration(
+    bundle: Path, devices: list[str], directories: list[Path]
+) -> tuple[list[tuple[str, str]], list[str], list[str]]:
+    payload: dict[str, Any] = {
+        "process": {"env": oci_process_environment(bundle)},
+        "mounts": [],
+    }
+    sources = apply_cdi_edits(payload, devices, directories)
+    bindings = [
+        (str(item["source"]), str(item["destination"]))
+        for item in payload["mounts"]
     ]
+    return bindings, list(payload["process"]["env"]), sources
 
 
 def safe_runtime_directory(rootfs: Path, name: str) -> Path:
@@ -864,18 +897,25 @@ def prepare(
     if not source.is_dir():
         raise RunnerError(f"project workspace is unavailable: {source}")
     if runtime == "proot":
-        if devices:
-            raise RunnerError(
-                "the PRoot OCI fallback cannot apply CDI device edits; select a "
-                "CDI-capable native runtime"
-            )
         bundle, image = materialize_bundle(
             reference=reference, digest=digest, cache_root=cache
         )
         identity_prefix, identity = proot_identity_prefix(
             source, rootless_workspace_owner
         )
-        return proot_base_command(bundle, source, identity_prefix), image, identity
+        bindings: list[tuple[str, str]] = []
+        environment = oci_process_environment(bundle)
+        if devices:
+            bindings, environment, _ = proot_cdi_configuration(
+                bundle, devices, cdi_directories or []
+            )
+        return (
+            proot_base_command(
+                bundle, source, identity_prefix, bindings, environment
+            ),
+            image,
+            identity,
+        )
 
     if runtime == "crun":
         if rootless_workspace_owner is None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import tarfile
 from pathlib import Path
 
@@ -67,6 +68,26 @@ def test_codespaces_anchor_provides_common_ssh_transport_prerequisites() -> None
     assert configuration["remoteUser"] == "vscode"
     for command in ("make", "rsync", "tar"):
         assert command in dockerfile
+
+
+def test_api1_backend_lifecycle_remains_a_compatible_session_reuse_input(
+    tmp_path: Path,
+) -> None:
+    descriptor = tmp_path / "legacy-backend.mk"
+    descriptor.write_text(
+        "BACKEND := legacy\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_LIFECYCLE := batch\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_OCI_RUNTIMES := none\n"
+        "BACKEND_TRANSPORT := legacy\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(["make", "-f", descriptor, "backend-info"], cwd=tmp_path)
+
+    assert "session-reuse=no" in result.stdout
 
 
 def calls(log: Path, program: str | None = None) -> list[list[str]]:
@@ -374,8 +395,22 @@ elif arguments[:2] == ["kernels", "list"]:
     if os.environ.get("FAKE_KAGGLE_AUTH_FAIL"):
         print("Kaggle authentication expired")
         raise SystemExit(1)
-    print("ref,title")
+    if "--format" in arguments and arguments[arguments.index("--format") + 1] == "json":
+        if os.environ.get("FAKE_KAGGLE_LIST_INVALID"):
+            print("not-json")
+            raise SystemExit(0)
+        search = arguments[arguments.index("--search") + 1]
+        print(json.dumps([
+            {"ref": f"tester/{search}-a"},
+            {"ref": f"tester/{search}-b"},
+            {"ref": "tester/unrelated"},
+        ]))
+    else:
+        print("ref,title")
 elif arguments[:2] == ["kernels", "push"]:
+    if os.environ.get("FAKE_KAGGLE_PUSH_FAIL"):
+        print("provider submission failed")
+        raise SystemExit(1)
     print("Kernel version submitted")
 elif arguments[:2] == ["kernels", "status"]:
     print(os.environ.get("FAKE_KAGGLE_STATUS", "complete"))
@@ -385,12 +420,45 @@ elif arguments[:2] == ["kernels", "output"]:
     pattern = arguments[arguments.index("--file-pattern") + 1]
     if "cloud-build" in pattern:
         (output / "cloud-build.log").write_text("fake kaggle log\n", encoding="utf-8")
+    elif "cloudmake-target-result" in pattern:
+        exit_code = int(os.environ.get("FAKE_KAGGLE_TARGET_EXIT", "0"))
+        infrastructure_failure = os.environ.get("FAKE_KAGGLE_INFRA_FAIL")
+        (output / "cloudmake-target-result.json").write_text(
+            json.dumps(
+                {"schema": 1, "status": "infrastructure-failed", "error": infrastructure_failure, "phase": "runner_preflight", "target_submission": "not_submitted", "retry_safe": True}
+                if infrastructure_failure
+                else {"schema": 1, "status": "succeeded" if exit_code == 0 else "target-failed", "exit_code": exit_code, "target": "fake", "runner": "native", "phase": "target_execution", "target_submission": "submitted", "retry_safe": False}
+            ) + "\n",
+            encoding="utf-8",
+        )
+    elif "cloudmake-checkpoint-result" in pattern:
+        dispatch_path = output.parent / "dispatch.json"
+        dispatch = json.loads(dispatch_path.read_text()) if dispatch_path.is_file() else {}
+        snapshot = (
+            "tester/wrong-slot"
+            if os.environ.get("FAKE_KAGGLE_CHECKPOINT_MISMATCH")
+            else dispatch.get("kernel_ref")
+        )
+        (output / "cloudmake-checkpoint-result.json").write_text(
+            json.dumps({"schema": 1, "operation": "publish", "status": "succeeded", "outcome": "published", "workspace_id": dispatch.get("workspace_id"), "snapshot": snapshot, "files": 1, "bytes": 10, "sha256": "0" * 64}) + "\n",
+            encoding="utf-8",
+        )
+    elif "cloudmake-oci-result" in pattern:
+        (output / "cloudmake-oci-result.json").write_text(
+            json.dumps({"schema": 1, "mode": "run", "status": "succeeded", "runner": "oci", "runtime": "proot", "digest": "sha256:" + "0" * 64, "exit_code": 0}) + "\n",
+            encoding="utf-8",
+        )
     elif "artifacts" in pattern:
         payload = output / "hello"
         payload.write_text("fake artifact\n", encoding="utf-8")
         with tarfile.open(output / "artifacts.tar.gz", "w:gz") as archive:
             archive.add(payload, arcname="hello")
         payload.unlink()
+elif arguments[:2] == ["kernels", "delete"]:
+    if os.environ.get("FAKE_KAGGLE_DELETE_FAIL"):
+        print("provider delete failed")
+        raise SystemExit(1)
+    print("Kernel deleted")
 else:
     raise SystemExit(f"unsupported fake kaggle command: {arguments}")
 ''',
@@ -673,13 +741,12 @@ def test_launcher_prepares_external_project_for_kaggle_batch(
     runners = list((tmp_path / "state").rglob("runner.ipynb"))
     assert len(runners) == 1
     serialized = runners[0].read_text(encoding="utf-8")
-    assert base64.urlsafe_b64encode(b"benchmark").decode() in serialized
-    assert base64.urlsafe_b64encode(b"Makefile").decode() in serialized
-    assert base64.urlsafe_b64encode(
-        json.dumps(
-            ["SIZE=large"], separators=(",", ":")
-        ).encode()
-    ).decode() in serialized
+    match = re.search(r"control[.]write_bytes\(base64[.]b64decode\('([^']+)'\)\)", serialized)
+    assert match is not None
+    control = json.loads(base64.b64decode(match.group(1)))
+    assert control["target"] == "benchmark"
+    assert control["makefile"] == "Makefile"
+    assert control["project_arguments"] == ["SIZE=large"]
     assert not (project / ".cloud-state").exists()
 
 
@@ -2254,6 +2321,333 @@ def test_kaggle_submits_every_target_but_reuses_local_snapshot(
 
 
 @pytest.mark.integration
+def test_kaggle_checkpoint_alternates_private_output_slots_without_session_reuse(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env.update({
+        "KAGGLE_USERNAME": "tester",
+        "KAGGLE_POLL_SECONDS": "0.01",
+        "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+        "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
+        "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+    })
+
+    first = run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"], cwd=prototype, env=env
+    )
+    assert "checkpoint=published" in first.stdout
+    head = next((tmp_path / "state").rglob("checkpoint/head.json"))
+    first_head = json.loads(head.read_text())
+    assert first_head["slot"] == "a"
+    assert first_head["kernel_ref"].endswith("-a")
+
+    second = run_command([LAUNCHER, "-b", "kaggle", "test"], cwd=prototype, env=env)
+    assert "checkpoint=published" in second.stdout
+    second_head = json.loads(head.read_text())
+    assert second_head["slot"] == "b"
+    assert second_head["kernel_ref"].endswith("-b")
+    metadata = json.loads(next((tmp_path / "state").rglob("kernel-metadata.json")).read_text())
+    assert metadata["is_private"] is True
+    assert metadata["kernel_sources"] == [first_head["kernel_ref"]]
+    assert metadata["id"] == second_head["kernel_ref"]
+    assert sum(
+        call[1:3] == ["kernels", "push"]
+        for call in calls(Path(env["FAKE_LOG"]), "kaggle")
+    ) == 2
+    provenance = json.loads(next((tmp_path / "state").rglob("runs/latest.json")).read_text())
+    assert provenance["phase"] == "checkpoint_publication"
+    assert provenance["provider_state"] == "succeeded"
+    assert provenance["target_submission"] == "submitted"
+    assert provenance["retry_safe"] is False
+
+
+@pytest.mark.integration
+def test_kaggle_checkpoint_records_target_failure_once_without_advancing_head(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env.update({
+        "KAGGLE_USERNAME": "tester",
+        "KAGGLE_POLL_SECONDS": "0.01",
+        "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+        "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
+        "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+        "FAKE_KAGGLE_TARGET_EXIT": "2",
+    })
+
+    result = run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"],
+        cwd=prototype, env=env, check=False,
+    )
+    assert result.returncode == 2
+    assert "checkpoint=unchanged reason=target-failed" in result.stdout
+    assert not list((tmp_path / "state").rglob("checkpoint/head.json"))
+    assert sum(
+        call[1:3] == ["kernels", "push"]
+        for call in calls(Path(env["FAKE_LOG"]), "kaggle")
+    ) == 1
+    provenance = json.loads(next((tmp_path / "state").rglob("runs/latest.json")).read_text())
+    assert provenance["phase"] == "target_execution"
+    assert provenance["provider_state"] == "failed"
+    assert provenance["target_submission"] == "submitted"
+    assert provenance["retry_safe"] is False
+
+
+@pytest.mark.integration
+def test_kaggle_infrastructure_failure_never_advances_checkpoint_head(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env.update({
+        "KAGGLE_USERNAME": "tester",
+        "KAGGLE_POLL_SECONDS": "0.01",
+        "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+        "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
+        "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+        "FAKE_KAGGLE_INFRA_FAIL": "checkpoint restore failed",
+    })
+
+    result = run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"],
+        cwd=prototype, env=env, check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Kaggle infrastructure failure: checkpoint restore failed" in result.stdout
+    assert not list((tmp_path / "state").rglob("checkpoint/head.json"))
+    assert sum(
+        call[1:3] == ["kernels", "push"]
+        for call in calls(Path(env["FAKE_LOG"]), "kaggle")
+    ) == 1
+    provenance = json.loads(next((tmp_path / "state").rglob("runs/latest.json")).read_text())
+    assert provenance["phase"] == "runner_preflight"
+    assert provenance["provider_state"] == "failed"
+    assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
+
+
+@pytest.mark.integration
+def test_kaggle_ambiguous_provider_submission_is_never_marked_retry_safe(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env.update({
+        "KAGGLE_USERNAME": "tester",
+        "KAGGLE_POLL_SECONDS": "0.01",
+        "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+        "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
+        "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+        "FAKE_KAGGLE_PUSH_FAIL": "1",
+    })
+
+    result = run_command(
+        [LAUNCHER, "-b", "kaggle", "build"], cwd=prototype, env=env, check=False
+    )
+
+    assert result.returncode != 0
+    provenance = json.loads(next((tmp_path / "state").rglob("runs/latest.json")).read_text())
+    assert provenance["phase"] == "provider_submission"
+    assert provenance["provider_state"] == "unknown"
+    assert provenance["target_submission"] == "ambiguous"
+    assert provenance["retry_safe"] is False
+    assert provenance["failure_code"] == "provider_submission_failed"
+    assert not any(
+        call[1:3] == ["kernels", "output"]
+        for call in calls(Path(env["FAKE_LOG"]), "kaggle")
+    )
+
+
+@pytest.mark.integration
+def test_kaggle_mismatched_checkpoint_receipt_does_not_replace_head(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env.update({
+        "KAGGLE_USERNAME": "tester",
+        "KAGGLE_POLL_SECONDS": "0.01",
+        "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+        "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
+        "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+    })
+    run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"], cwd=prototype, env=env
+    )
+    head = next((tmp_path / "state").rglob("checkpoint/head.json"))
+    before = head.read_bytes()
+    env["FAKE_KAGGLE_CHECKPOINT_MISMATCH"] = "1"
+
+    result = run_command(
+        [LAUNCHER, "-b", "kaggle", "test"], cwd=prototype, env=env, check=False
+    )
+
+    assert result.returncode != 0
+    assert "checkpoint receipt does not match this dispatch" in result.stdout
+    assert head.read_bytes() == before
+
+
+@pytest.mark.integration
+def test_kaggle_checkpoint_requires_private_kernel_before_provider_contact(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update({"KAGGLE_USERNAME": "tester", "KAGGLE_PRIVATE": "false"})
+
+    result = run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"],
+        cwd=prototype, env=env, check=False,
+    )
+
+    assert result.returncode == 2
+    assert "require KAGGLE_PRIVATE=true" in result.stdout
+    assert calls(Path(env["FAKE_LOG"]), "kaggle") == []
+
+
+@pytest.mark.integration
+def test_kaggle_generated_notebook_does_not_embed_provider_credentials(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = launcher_environment(fake_bin, tmp_path)
+    sentinel = "kaggle-secret-sentinel-8b8e318a"
+    env.update({
+        "KAGGLE_USERNAME": "tester",
+        "KAGGLE_KEY": sentinel,
+        "KAGGLE_POLL_SECONDS": "0.01",
+    })
+
+    run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"], cwd=prototype, env=env
+    )
+
+    notebook = next((tmp_path / "state").rglob("runner.ipynb"))
+    assert sentinel not in notebook.read_text(encoding="utf-8")
+
+
+@pytest.mark.integration
+def test_kaggle_workspace_purge_deletes_only_exact_slots(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update({"KAGGLE_USERNAME": "tester", "KAGGLE_POLL_SECONDS": "0.01"})
+    run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"], cwd=prototype, env=env
+    )
+    workspace_record = next((tmp_path / "state/workspaces").glob("*.json"))
+    workspace_id = json.loads(workspace_record.read_text())["workspace_id"]
+
+    result = run_command(
+        [LAUNCHER, "--force", "--workspace", "purge", workspace_id],
+        cwd=prototype, env=env,
+    )
+
+    assert "persistent-workspace=" + workspace_id + " purged and detached" in result.stdout
+    deletes = [
+        call for call in calls(Path(env["FAKE_LOG"]), "kaggle")
+        if call[1:3] == ["kernels", "delete"]
+    ]
+    assert {call[-1] for call in deletes} == {
+        f"tester/cloudmake-ws-{workspace_id}-a",
+        f"tester/cloudmake-ws-{workspace_id}-b",
+    }
+    assert not workspace_record.exists()
+
+
+@pytest.mark.integration
+def test_kaggle_workspace_purge_failure_preserves_local_head_and_record(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update({"KAGGLE_USERNAME": "tester", "KAGGLE_POLL_SECONDS": "0.01"})
+    run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"], cwd=prototype, env=env
+    )
+    workspace_record = next((tmp_path / "state/workspaces").glob("*.json"))
+    workspace_id = json.loads(workspace_record.read_text())["workspace_id"]
+    head = next((tmp_path / "state").rglob("checkpoint/head.json"))
+    env["FAKE_KAGGLE_DELETE_FAIL"] = "1"
+
+    result = run_command(
+        [LAUNCHER, "--force", "--workspace", "purge", workspace_id],
+        cwd=prototype, env=env, check=False,
+    )
+
+    assert result.returncode != 0
+    assert workspace_record.exists()
+    assert head.exists()
+
+
+@pytest.mark.integration
+def test_kaggle_workspace_purge_rejects_invalid_provider_listing(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update({"KAGGLE_USERNAME": "tester", "KAGGLE_POLL_SECONDS": "0.01"})
+    run_command(
+        [LAUNCHER, "-b", "kaggle", "--persist", "build"], cwd=prototype, env=env
+    )
+    workspace_record = next((tmp_path / "state/workspaces").glob("*.json"))
+    workspace_id = json.loads(workspace_record.read_text())["workspace_id"]
+    head = next((tmp_path / "state").rglob("checkpoint/head.json"))
+    env["FAKE_KAGGLE_LIST_INVALID"] = "1"
+
+    result = run_command(
+        [LAUNCHER, "--force", "--workspace", "purge", workspace_id],
+        cwd=prototype, env=env, check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Kaggle kernel listing is unavailable or invalid" in result.stdout
+    assert workspace_record.exists()
+    assert head.exists()
+
+
+@pytest.mark.integration
+def test_kaggle_oci_selection_uses_qualified_proot_profile_and_enables_pull_access(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_kaggle(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env.update({
+        "KAGGLE_USERNAME": "tester",
+        "KAGGLE_POLL_SECONDS": "0.01",
+        "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+        "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
+        "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+    })
+    image = "registry.example/science/tools@sha256:" + "a" * 64
+
+    result = run_command(
+        [LAUNCHER, "-b", "kaggle", "--image", image, "build"],
+        cwd=prototype, env=env,
+    )
+
+    assert result.returncode == 0
+    metadata = json.loads(next((tmp_path / "state").rglob("kernel-metadata.json")).read_text())
+    assert metadata["enable_internet"] is True
+    runner = next((tmp_path / "state").rglob("runner.ipynb")).read_text()
+    match = re.search(r"control[.]write_bytes\(base64[.]b64decode\('([^']+)'\)\)", runner)
+    assert match is not None
+    control = json.loads(base64.b64decode(match.group(1)))
+    assert control["runner"] == "oci"
+    assert control["image"] == image
+    assert control["runtime_candidates"] == ["proot"]
+    provenance = json.loads(next((tmp_path / "state").rglob("runs/latest.json")).read_text())
+    assert provenance["runner"]["runtime_candidates"] == ["proot"]
+    assert provenance["runner"]["runtime"] == "proot"
+    assert provenance["runner"]["status"] == "succeeded"
+
+
+@pytest.mark.integration
 def test_kaggle_collect_and_fetch_return_artifact(
     prototype: Path, fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -2476,32 +2870,32 @@ def test_engine_defines_no_project_target_shortcuts(
 
 
 @pytest.mark.parametrize(
-    ("backend", "lifecycle", "capability", "persistence_capability"),
+    ("backend", "session_reuse", "capability", "persistence_capability"),
     [
-        ("local", "local", "execute", "native-persistence"),
-        ("colab-notebook", "session", "incremental-sync", "checkpoint-persistence"),
-        ("kaggle-notebook", "batch", "batch", None),
-        ("codespaces-ssh", "session", "shell", "native-persistence"),
-        ("colab-ssh", "session", "gpu", None),
-        ("host-ssh", "session", "incremental-sync", "native-persistence"),
+        ("local", "yes", "execute", "native-persistence"),
+        ("colab-notebook", "yes", "incremental-sync", "checkpoint-persistence"),
+        ("kaggle-notebook", "no", "gpu", "checkpoint-persistence"),
+        ("codespaces-ssh", "yes", "shell", "native-persistence"),
+        ("colab-ssh", "yes", "gpu", None),
+        ("host-ssh", "yes", "incremental-sync", "native-persistence"),
         (
             "lightning-studio-ssh",
-            "session",
+            "yes",
             "persistent-storage",
             "native-persistence",
         ),
     ],
 )
-def test_backend_contract_declares_lifecycle_and_capabilities(
+def test_backend_contract_declares_session_reuse_and_capabilities(
     prototype: Path,
     backend: str,
-    lifecycle: str,
+    session_reuse: str,
     capability: str,
     persistence_capability: str | None,
 ) -> None:
     result = run_command(["make", f"BACKEND={backend}", "backend-info"], cwd=prototype)
     assert "api=1" in result.stdout
-    assert f"lifecycle={lifecycle}" in result.stdout
+    assert f"session-reuse={session_reuse}" in result.stdout
     assert capability in result.stdout
     if persistence_capability is None:
         assert "native-persistence" not in result.stdout
@@ -2509,7 +2903,7 @@ def test_backend_contract_declares_lifecycle_and_capabilities(
     else:
         assert persistence_capability in result.stdout
     expected_oci = (
-        "none"
+        "proot"
         if backend == "kaggle-notebook"
         else "crun"
         if backend == "colab-notebook"

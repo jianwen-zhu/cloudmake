@@ -64,12 +64,16 @@ def test_notebooks_expose_the_same_target_contract_without_credentials() -> None
     ):
         serialized = path.read_text(encoding="utf-8")
         assert "CONVENTIONAL_TARGETS" not in serialized
-        assert "run_make(REQUESTED_TARGET)" in serialized
-        assert "COLLECT_DIR" in serialized
+        if path == COLAB_NOTEBOOK:
+            assert "run_make(REQUESTED_TARGET)" in serialized
+            assert "COLLECT_DIR" in serialized
+            assert "MAKEFILE" in serialized
+        else:
+            assert "kaggle_remote.py" in serialized
+            assert "cloudmake-target-result.json" in serialized
         assert "CLOUD_BACKEND=" not in serialized
         assert "BUILD_DIR=" not in serialized
         assert "OUTPUT_DIR=" not in serialized
-        assert "MAKEFILE" in serialized
         assert "github.com" not in serialized.lower()
         assert "gist" not in serialized.lower()
         assert "token" not in serialized.lower()
@@ -285,83 +289,18 @@ def test_colab_notebook_dispatches_oci_target_through_remote_runner_once(
     assert receipt["status"] == "succeeded"
 
 
-@pytest.mark.parametrize("target", ["build", "test", "run", "package"])
-def test_kaggle_notebook_executes_each_make_target(tmp_path: Path, target: str) -> None:
-    root = tmp_path / "kaggle" / "build"
-    working = tmp_path / "kaggle" / "working"
-    working.mkdir(parents=True)
-    encoded = base64.b64encode(source_archive()).decode("ascii")
-
-    namespace = execute_code_cells(
-        load_notebook(KAGGLE_NOTEBOOK),
-        {
-            "__SOURCE_ARCHIVE_B64__": encoded,
-            "__REQUESTED_TARGET_B64__": base64.urlsafe_b64encode(target.encode()).decode(),
-            "__JOBS__": "2",
-            "__MAKEFILE_B64__": base64.urlsafe_b64encode(b"Makefile.build").decode(),
-            "__PROJECT_ARGUMENTS_B64__": base64.urlsafe_b64encode(b"[]").decode(),
-            "__COLLECT_DIR_B64__": "",
-            "/tmp/cloud-build": str(root),
-            "/kaggle/working": str(working),
-        },
-    )
-
-    assert namespace["REQUESTED_TARGET"] == target
-    assert (root / "src" / "build" / "hello").is_file()
-    assert (working / "cloud-build.log").is_file()
-    assert not (working / "artifacts.tar.gz").exists()
+def test_kaggle_notebook_delegates_to_self_contained_receipted_runner() -> None:
+    serialized = KAGGLE_NOTEBOOK.read_text(encoding="utf-8")
+    assert "__SOURCE_ARCHIVE_B64__" in serialized
+    assert "__KAGGLE_CONTROL_B64__" in serialized
+    assert "__KAGGLE_REMOTE_HELPER_B64__" in serialized
+    assert "__OCI_RUNNER_HELPER_B64__" in serialized
+    assert "cloudmake-target-result.json" in serialized
+    assert "receipt.get('status') == 'infrastructure-failed'" in serialized
 
 
-def test_kaggle_notebook_collects_artifacts_only_when_explicitly_requested(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "kaggle" / "build"
-    working = tmp_path / "kaggle" / "working"
-    working.mkdir(parents=True)
-
-    execute_code_cells(
-        load_notebook(KAGGLE_NOTEBOOK),
-        {
-            "__SOURCE_ARCHIVE_B64__": base64.b64encode(source_archive()).decode("ascii"),
-            "__REQUESTED_TARGET_B64__": base64.urlsafe_b64encode(b"package").decode(),
-            "__JOBS__": "2",
-            "__MAKEFILE_B64__": base64.urlsafe_b64encode(b"Makefile.build").decode(),
-            "__PROJECT_ARGUMENTS_B64__": base64.urlsafe_b64encode(b"[]").decode(),
-            "__COLLECT_DIR_B64__": base64.urlsafe_b64encode(b"output").decode(),
-            "/tmp/cloud-build": str(root),
-            "/kaggle/working": str(working),
-        },
-    )
-
-    artifact = working / "artifacts.tar.gz"
-    assert artifact.is_file()
-    with tarfile.open(artifact, "r:gz") as archive:
-        assert "hello" in {name.removeprefix("./") for name in archive.getnames()}
-
-
-def test_kaggle_notebook_data_filter_rejects_path_traversal(tmp_path: Path) -> None:
-    memory = io.BytesIO()
-    with tarfile.open(fileobj=memory, mode="w:gz") as archive:
-        info = tarfile.TarInfo("../escape.txt")
-        payload = b"unsafe"
-        info.size = len(payload)
-        archive.addfile(info, io.BytesIO(payload))
-    root = tmp_path / "kaggle" / "build"
-    working = tmp_path / "kaggle" / "working"
-    working.mkdir(parents=True)
-
-    with pytest.raises((tarfile.TarError, OSError, ValueError)):
-        execute_code_cells(
-            load_notebook(KAGGLE_NOTEBOOK),
-            {
-                "__SOURCE_ARCHIVE_B64__": base64.b64encode(memory.getvalue()).decode("ascii"),
-                "__REQUESTED_TARGET_B64__": base64.urlsafe_b64encode(b"build").decode(),
-                "__JOBS__": "1",
-                "__MAKEFILE_B64__": base64.urlsafe_b64encode(b"Makefile.build").decode(),
-                "__PROJECT_ARGUMENTS_B64__": base64.urlsafe_b64encode(b"[]").decode(),
-                "__COLLECT_DIR_B64__": "",
-                "/tmp/cloud-build": str(root),
-                "/kaggle/working": str(working),
-            },
-        )
-    assert not (tmp_path / "kaggle" / "escape.txt").exists()
+def test_kaggle_notebook_does_not_raise_for_expected_target_failure() -> None:
+    serialized = KAGGLE_NOTEBOOK.read_text(encoding="utf-8")
+    assert "target-failed" not in serialized
+    assert "check_returncode" not in serialized
+    assert "CalledProcessError" not in serialized

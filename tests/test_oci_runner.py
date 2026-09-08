@@ -207,18 +207,39 @@ def test_invalid_reference_is_rejected_before_runtime_contact(
     assert json.loads(result.read_text(encoding="utf-8"))["status"] == "infrastructure-failed"
 
 
-def test_proot_fallback_rejects_cdi_instead_of_ignoring_it(tmp_path: Path) -> None:
+def test_proot_adapter_translates_cdi_device_to_least_privileged_bind(
+    tmp_path: Path,
+) -> None:
     module = load("oci_runner_proot_cdi")
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(
+        json.dumps({"process": {"env": ["PATH=/usr/bin"]}}), encoding="utf-8"
+    )
+    cdi = tmp_path / "cdi"
+    cdi.mkdir()
+    (cdi / "device.json").write_text(
+        json.dumps({
+            "cdiVersion": "0.6.0",
+            "kind": "nvidia.com/gpu",
+            "devices": [{
+                "name": "all",
+                "containerEdits": {
+                    "env": ["VISIBLE_GPU=yes"],
+                    "deviceNodes": [{"path": "/dev/null", "hostPath": "/dev/null"}],
+                },
+            }],
+        }),
+        encoding="utf-8",
+    )
 
-    with pytest.raises(module.RunnerError, match="cannot apply CDI"):
-        module.prepare(
-            runtime="proot",
-            reference=IMAGE,
-            digest="sha256:" + "a" * 64,
-            source=tmp_path,
-            devices=["nvidia.com/gpu=all"],
-            cache=tmp_path / "cache",
-        )
+    bindings, environment, sources = module.proot_cdi_configuration(
+        bundle, ["nvidia.com/gpu=all"], [cdi]
+    )
+
+    assert bindings == [("/dev/null", "/dev/null")]
+    assert "VISIBLE_GPU=yes" in environment
+    assert sources == [str(cdi / "device.json")]
 
 
 def test_dynamic_runtime_probe_tries_multiple_backend_options(monkeypatch) -> None:
@@ -241,7 +262,7 @@ def test_dynamic_runtime_probe_tries_multiple_backend_options(monkeypatch) -> No
     assert probes == ["podman", "docker"]
 
 
-def test_dynamic_runtime_probe_skips_non_cdi_fallbacks(monkeypatch) -> None:
+def test_dynamic_runtime_probe_can_select_proot_cdi_adapter(monkeypatch) -> None:
     module = load("oci_runner_cdi_runtime_options")
     monkeypatch.setattr(module.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
@@ -254,7 +275,7 @@ def test_dynamic_runtime_probe_skips_non_cdi_fallbacks(monkeypatch) -> None:
         "auto", ["proot", "docker"], requires_cdi=True
     )
 
-    assert selected == "docker"
+    assert selected == "proot"
 
 
 def test_dynamic_runtime_probe_selects_direct_crun_for_cdi(monkeypatch) -> None:
@@ -394,7 +415,7 @@ def test_direct_crun_adapter_rejects_unimplemented_cdi_edits(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(module.RunnerError, match="unsupported by the Colab crun"):
+    with pytest.raises(module.RunnerError, match="unsupported by Cloudmake's direct OCI"):
         module.apply_cdi_edits(
             {"process": {"env": []}, "mounts": []},
             ["vendor.example/gpu=all"],
@@ -504,6 +525,10 @@ def test_root_proot_requires_and_drops_to_backend_selected_identity(
 
     assert prefix == [
         "/usr/bin/setpriv",
+        "--no-new-privs",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--bounding-set=-all",
         "--reuid=65534",
         "--regid=65534",
         "--clear-groups",
@@ -511,6 +536,21 @@ def test_root_proot_requires_and_drops_to_backend_selected_identity(
     assert identity == "65534:65534"
     assert (source / "file", 65534, 65534) in ownership
     assert (source, 65534, 65534) in ownership
+
+
+def test_nonroot_proot_enforces_no_new_privileges(tmp_path: Path, monkeypatch) -> None:
+    module = load("oci_runner_nonroot_no_new_privileges")
+    source = tmp_path / "source"
+    source.mkdir()
+    monkeypatch.setattr(module.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(module.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(module.os, "getgid", lambda: 100)
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    prefix, identity = module.proot_identity_prefix(source, None)
+
+    assert prefix == ["/usr/bin/setpriv", "--no-new-privs"]
+    assert identity == "1000:100"
 
 
 def test_terminal_receipt_distinguishes_target_exit_70_from_infrastructure(

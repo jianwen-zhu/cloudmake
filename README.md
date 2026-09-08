@@ -112,6 +112,27 @@ The design has seven goals:
 7. Support reusable sessions, batch notebooks, and SSH VMs without pretending
    that their lifecycles are identical.
 
+Application-bundle execution follows a related portability rule: Cloudmake
+reduces an OCI workload to the least-privileged surface needed for automated
+computation. The normal contract is an immutable tool image, a writable project
+workspace, temporary storage, and only explicitly requested CDI devices. It is
+not general-purpose container hosting. Cloudmake does not add privileged mode,
+arbitrary host mounts, host credentials, service management, port publishing,
+or nested-container facilities merely to imitate an unrestricted Docker host.
+
+This narrow surface protects both sides of the execution boundary. Users avoid
+exposing credentials and unrelated host state to an image; managed-compute
+providers are not asked for capabilities, writable kernel control surfaces, or
+devices unrelated to the computation. Requiring fewer privileged host features
+also lets more managed platforms qualify as Cloudmake backends.
+
+Least privilege describes the authority granted to the workload, not a promise
+of strong isolation. A restricted backend may need to share parts of its VM
+kernel or namespaces, in which case Cloudmake documents that boundary and may
+accept only trusted images. Every additional mount, capability, device,
+namespace exception, credential, or host integration must be justified by the
+backend, an explicit CDI request, or the core Make execution contract.
+
 ## What Cloudmake does not do
 
 Cloudmake is deliberately a narrow host-side dispatcher and transfer layer
@@ -131,6 +152,10 @@ boundary:
    Make, and retrieves selected output. It does not absorb the responsibilities
    of build systems, source control, secrets managers, infrastructure
    provisioners, schedulers, IDEs, or deployment platforms.
+4. **Grant only computational authority.** OCI execution supplies the minimum
+   mounts, writable paths, process authority, and explicitly requested devices
+   needed to run the project target. It does not grow into a general container
+   hosting or machine-administration surface.
 
 The detailed exclusions follow from those principles:
 
@@ -170,6 +195,14 @@ they never acquire accidental meaning. In particular, an OCI registry and its
 disposable image cache are not a project checkpoint, durable storage does not
 select a runner, and selecting an accelerator does not silently change the
 project command.
+
+Session reuse is one backend property rather than a collection of overlapping
+lifecycle labels. A backend declaring `session-reuse=yes` can amortize setup
+across several targets; `session-reuse=no` means every target receives a new
+execution environment. Terms such as “batch” and “fresh per target” describe
+that same fact rather than separate capabilities. Adding checkpoint restore may
+make the logical workspace durable, but it does not change session reuse or hide
+the fixed per-target startup, restore, and publication cost.
 
 Execution composes those services with a fourth independent choice: the source
 of the project. Today the local working tree is authoritative; future source
@@ -797,18 +830,22 @@ target is not run. After preflight, Make is submitted exactly once and ordinary
 target failures retain their exit status and output.
 
 Local and SSH backends prefer Podman, Docker, then nerdctl, with a PRoot
-fallback for CPU images. Colab declares exactly one provider-qualified OCI
+fallback. Colab declares exactly one provider-qualified OCI
 runtime: Cloudmake's `crun` adapter. It materializes the digest-pinned rootfs,
 uses the namespace and cgroup profile established by live qualification, and
 applies NVIDIA devices and host driver libraries from a generated CDI
 specification. Make runs as UID/GID 65534 with no capabilities and
 `noNewPrivileges`; the image root is read-only while `/workspace` and a fresh
-`/tmp` are writable. Kaggle OCI execution is unsupported in 2.1 and is rejected
-before provider contact.
+`/tmp` are writable. Kaggle declares its PRoot materialization adapter. It
+requires no container daemon or privileged namespace operations, maps the
+supported CDI subset to explicit PRoot binds and image-environment edits, and
+fails before Make if the requested device or registry/network surface is absent.
 
-The registry remains authoritative for immutable layers. Runtime image caches
-are disposable VM-local state and are not copied into persistent-workspace
-checkpoints. The target sees the image's OCI environment, not the host's
+The registry remains authoritative for immutable layers. Colab and host runtime
+caches are disposable. Kaggle includes its materialized image and downloaded
+runner packages in the private workspace checkpoint so every fresh VM does not
+repeat a large registry pull; that cache remains reconstructible and is not an
+image authority. The target sees the image's OCI environment, not the host's
 environment or credentials. The Colab adapter shares the VM's PID and network
 namespaces and uses the host `/proc` because Colab cannot mount the procfs and
 cgroup combination expected by stock container profiles. It is not a strong
@@ -820,7 +857,9 @@ boundaries, and the ORFS validation ladder are in the
 [OCI/CDI runner guide](docs/oci-runner.md) and
 [execution-environment contract](docs/execution-environments.md). Colab's exact
 tested runtime boundary is recorded in
-[Colab OCI/CDI qualification](docs/colab-oci-qualification.md).
+[Colab OCI/CDI qualification](docs/colab-oci-qualification.md); Kaggle's is
+recorded separately in
+[Kaggle checkpoint and OCI qualification](docs/kaggle-oci-qualification.md).
 
 #### Persistent workspace modes
 
@@ -840,7 +879,7 @@ The flag has an explicit backend-dependent implementation:
 | `host-ssh` | `native` | Use the existing remote SSH workspace; Cloudmake does not copy it to another store. |
 | `codespaces-ssh` | `native` | Use the Codespace's `/workspaces` storage across stop/start while that Codespace exists. |
 | `lightning-studio-ssh` | `native` | Use the Studio's provider-persistent workspace while that Studio exists. |
-| `kaggle-notebook` | `unsupported` | Reject before provider contact because every target receives a fresh batch VM. |
+| `kaggle-notebook` | `checkpoint` | Alternate two private kernel-output slots; restore the last completed workspace cloud-to-cloud and publish its successor after Make. |
 | `colab-ssh` | `unsupported` | Reject because this transport has no cross-VM checkpoint store for the ephemeral Colab VM. |
 
 Native mode is intentionally a Cloudmake data-movement no-op: it records and
@@ -945,9 +984,16 @@ and the CPU, memory, disk, OS, and GPU properties last observed during a
 snapshot operation. `--workspace attach` allows a moved or newly cloned project
 to resume that durable state explicitly; attachment transfers the local mapping
 so one locally known project owns the workspace at a time. `--workspace purge`
-is deliberately destructive and therefore requires both the exact ID and `--force`. Listing,
-showing, and attaching do not contact Colab; purging uses a Colab runtime because
-the official Drive mount remains the only storage-authentication surface.
+is deliberately destructive and therefore requires both the exact ID and
+`--force`. Listing, showing, and attaching do not contact a provider. Purging
+uses the owning adapter: a Colab runtime for its Drive repository, or the Kaggle
+API for the two exact private output slots.
+
+Managed checkpoint stores have backend-distinct workspace identities. Existing
+Colab IDs remain unchanged for compatibility; selecting Kaggle derives and
+remembers a separate ID for the same project. Switching back restores the prior
+backend's mapping rather than treating unrelated Drive and Kaggle state as one
+checkpoint.
 
 ### Kaggle notebook backend
 
@@ -977,7 +1023,30 @@ Prerequisites:
 Cloudmake generates a private notebook in its local state, embeds the compressed
 source snapshot, submits it with `kaggle kernels push`, waits for completion, and
 downloads logs or artifacts through the notebook-output API. The project does not
-need a GitHub repository or Gist.
+need a GitHub repository or Gist. `session-reuse=no` remains true even when
+persistence is selected: each target still pays Kaggle scheduling and VM startup.
+
+Enable persistence exactly as on another managed backend:
+
+```sh
+cloudmake --use kaggle --persist
+# provision and verify are project-provided targets.
+cloudmake provision
+cloudmake verify
+```
+
+Cloudmake alternates two private kernel slugs derived from the workspace ID.
+Each new version attaches the last completed slot as a `kernel_source`, restores
+its checkpoint inside Kaggle infrastructure, reconciles current local source,
+runs Make once, and publishes the next slot. The laptop downloads only logs and
+small receipts. Ordinary nonzero Make results are receipted, but neither target
+failure nor infrastructure failure advances the checkpoint head. This matches
+the same successful-target boundary used by Colab. `--workspace show`, `attach`, and destructive
+`--force --workspace purge ID` apply to Kaggle workspaces too.
+
+Kaggle checkpoints are private provider outputs, not end-to-end encrypted
+archives. Kaggle can inspect them under its service boundary. Kaggle credentials
+remain only in the host CLI and are never embedded in the notebook or checkpoint.
 
 Although the generated notebook is private, its versions retain uploaded source
 in the Kaggle account's version history. Do not include credentials, private keys,
@@ -1028,6 +1097,14 @@ cloudmake -b kaggle --gpu=NvidiaTeslaT4 PROJECT_TARGET
 
 `start` only verifies authentication, and `stop` is a no-op because Kaggle ends
 the batch VM automatically.
+
+For an OCI tool bundle, select an immutable image normally. Cloudmake enables
+notebook internet for the registry pull, transiently prepares `skopeo`, `umoci`,
+PRoot, and `setpriv`, and caches their packages plus the materialized image inside a selected
+Kaggle checkpoint. The adapter does not claim Docker isolation. With
+`--device nvidia.com/gpu=all`, it generates a CDI document from the actually
+attached NVIDIA nodes and driver libraries; absent or incomplete attachment is
+an infrastructure failure, never a silent CPU fallback.
 
 ### GitHub Codespaces SSH backend
 
@@ -1264,7 +1341,7 @@ The three service-adapter roles are visible in each backend's contract:
 | --- | --- | --- | --- | --- |
 | `local` | Existing local process | Native tree; no transfer | Podman, Docker, nerdctl, or CPU PRoot | None |
 | `colab-notebook` | Reusable named Colab session | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
-| `kaggle-notebook` | Fresh Kaggle batch VM per target | Unsupported | Unsupported | Source embedded in private notebook |
+| `kaggle-notebook` | Fresh Kaggle VM per target (`session-reuse=no`) | Alternating private kernel-output checkpoint | Qualified PRoot OCI materializer; NVIDIA CDI subset | Source embedded in private notebook |
 | `codespaces-ssh` | Reusable quota-backed VM over SSH | Provider workspace | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
 | `colab-ssh` | Reusable paid Colab VM over SSH | Unsupported | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
 | `host-ssh` | Existing user-managed SSH host | Host filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
@@ -1277,9 +1354,11 @@ find the adapter interface and extension checklist in the
 [backend contract](docs/backend-contract.md).
 
 The local backend is the no-transfer reference path. The Colab backend reuses a
-live session and skips source upload when the fingerprint is unchanged. The
-Kaggle backend reuses its local compressed snapshot when unchanged but still
-submits a fresh VM for every target. All SSH backends share the same rsync and
+live session and skips source upload when the fingerprint is unchanged. Kaggle
+reuses its local compressed snapshot when unchanged and can restore a
+provider-side logical workspace, but still submits a fresh VM for every target,
+represented once as `session-reuse=no`. Its scheduling, restore, and publication
+costs therefore remain non-amortized. All SSH backends share the same rsync and
 remote-Make transport.
 
 ## Reliability and security

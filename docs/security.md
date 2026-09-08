@@ -71,7 +71,7 @@ themselves.
 
 Cloudmake's `native` persistence mode uses only the backend's existing project
 storage and introduces no checkpoint key, durable-store credential, or transfer.
-The stronger custody rules in this section apply to the `colab-notebook`
+The encrypted-key custody rules below apply to the `colab-notebook`
 managed-checkpoint mode. Its active project workspace remains on the VM's fast
 local disk. Google Drive is only the destination of an encrypted backup
 repository; Make never runs in the mounted Drive directory.
@@ -110,6 +110,21 @@ The reasoning and execution boundaries are documented in
 [Execution environments and OCI runner](execution-environments.md).
 
 ## OCI runner credential and isolation boundary
+
+Cloudmake treats least privilege as a two-sided security and portability
+contract. It gives an OCI workload only the authority required for automated
+computation: its immutable userspace, explicit writable workspace and temporary
+paths, and devices requested through CDI. It does not add privileged mode,
+arbitrary host mounts, host credential inheritance, service management, port
+publishing, or nested containers merely for compatibility with an unrestricted
+container-hosting interface.
+
+This reduces exposure of user data and credentials while avoiding requests for
+provider capabilities, writable kernel control surfaces, and unrelated devices.
+Every exception must be justified by the backend, explicit device request, or
+core Make execution contract. Least privilege limits authority but does not
+prove strong isolation; the backend's documented kernel and namespace sharing
+remains part of the trust decision.
 
 OCI images are selected only by immutable digest. Registry authentication stays
 with the installed official runtime or registry client; Cloudmake does not read,
@@ -228,6 +243,34 @@ captured output across success, failure, cancellation, traceback, and
 interrupted publication paths. That gate and the live replacement-VM acceptance
 have passed; future backends must satisfy the same contract rather than weaken
 it.
+
+### Kaggle provider-private checkpoints
+
+Kaggle uses a distinct provider-private checkpoint boundary. Cloudmake
+alternates two private kernel-output slots and connects the last completed slot
+to the next job through Kaggle's `kernel_sources` mechanism. The checkpoint
+payload never traverses the laptop, and the Kaggle CLI retains sole custody of
+Kaggle credentials; no credential or token is embedded in the notebook,
+control record, archive, receipt, or provenance. Unlike the Colab/Drive store,
+the payload is not end-to-end encrypted by Cloudmake. Kaggle and anyone granted
+access under the account's provider policy can inspect it. Enabling this mode
+therefore requires `KAGGLE_PRIVATE=true` and remains an explicit, off-by-default
+choice.
+
+Only a successful Make target may advance the locally recorded Kaggle
+checkpoint head. Target failure, infrastructure failure, missing output, a
+mismatched workspace or slot receipt, and checkpoint digest failure leave the
+previous head unchanged. Each restore validates the exact workspace identity,
+source slot, and streaming SHA-256 before extraction. Archive traversal,
+special files, and unsafe hard links are rejected; symbolic-link objects and
+valid hard links are restored without following them outside the staged tree.
+
+Kaggle's PRoot OCI adapter provides compatibility, not a security boundary. It
+runs a trusted image userspace as UID/GID 65534 with a clean image-derived
+environment, the project workspace, and only CDI-requested host device/library
+bindings. It does not add container namespaces, privileged mode, arbitrary
+mounts, credential inheritance, or port publishing. The outer Kaggle VM remains
+the isolation boundary.
 
 ## Source hygiene
 

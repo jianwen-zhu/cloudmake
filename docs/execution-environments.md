@@ -32,6 +32,35 @@ The axes must remain independent. In particular:
 - a project Make target remains the unit of dispatch under either runner; and
 - source acquisition does not become container-image construction.
 
+## Least-privileged computational execution
+
+Cloudmake's OCI positioning is **least-privileged OCI execution for automated
+computational workloads**, not general-purpose container hosting. A normal
+runner needs an immutable userspace, the project workspace, temporary storage,
+and explicitly selected devices. It does not need privileged mode, arbitrary
+host mounts, host credential inheritance, service management, published ports,
+or nested containers.
+
+This is both a security and portability contract:
+
+- users should not expose credentials or unrelated host state to the selected
+  image;
+- providers should not have to grant capabilities, writable kernel control
+  surfaces, or devices unrelated to the computation; and
+- backends that cannot support an unrestricted Docker host may still qualify a
+  smaller, actively validated OCI execution profile.
+
+Every additional mount, capability, device, namespace exception, credential,
+or host integration must be justified by the backend, an explicit CDI request,
+or the core Make execution contract. Convenience alone is insufficient.
+Cloudmake inherits ordinary network reachability from the backend but does not
+become a network configurator or port-publishing service.
+
+Least privilege concerns workload authority; it is not synonymous with strong
+container isolation. If a managed backend must share the VM kernel, namespaces,
+or host interfaces, its qualification must say so and may restrict execution to
+trusted images. The outer provider VM remains the ultimate security boundary.
+
 This model is the path from short-lived cloud compute to a remote-workstation
 experience: replaceable compute, reproducible professional tool bundles,
 durable mutable work, and portable source are composed without pretending they
@@ -147,17 +176,17 @@ is known.
 
 | Backend | OCI execution | Runtime selection | CDI |
 | --- | --- | --- | --- |
-| `local` | supported | Podman, Docker, nerdctl, then PRoot fallback | passed to native runtime; rejected by PRoot |
-| `host-ssh`, `codespaces-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | passed to native runtime; rejected by PRoot |
+| `local` | supported | Podman, Docker, nerdctl, then PRoot fallback | native CDI or validated PRoot bind/environment translation |
+| `host-ssh`, `codespaces-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | native CDI or validated PRoot translation |
 | `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one provider-qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
-| `kaggle-notebook` | unsupported | none | rejected before provider contact |
+| `kaggle-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and PRoot | qualified NVIDIA `all` device translated from generated CDI; fail closed when absent |
 
 These choices are backend declarations rather than launcher special cases:
 
 ```make
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot  # local and SSH hosts
 BACKEND_OCI_RUNTIMES := crun                         # Colab notebook
-BACKEND_OCI_RUNTIMES := none                         # Kaggle notebook
+BACKEND_OCI_RUNTIMES := proot                        # Kaggle notebook
 ```
 
 The list is ordered and may contain multiple dynamically qualified options.
@@ -188,10 +217,11 @@ surface. Their bounded preflight is authoritative: a missing CDI specification,
 driver, runtime feature, unsupported image architecture, or `make` executable
 fails before the requested target is submitted. A static host/image architecture
 mismatch is recorded but is not alone a failure because a native runtime may
-provide configured emulation. PRoot cannot safely inject CDI devices, so
-Cloudmake rejects that combination rather than silently running on the CPU.
-The Colab adapter supports the qualified NVIDIA CDI path and rejects missing or
-ambiguous device evidence before Make.
+provide configured emulation. The PRoot adapter translates the strict CDI
+mount, device-node, and environment subset it can faithfully represent and
+rejects hooks, ownership overrides, and unknown edits. Colab and Kaggle generate
+their NVIDIA CDI evidence from the actually attached VM and reject missing or
+ambiguous devices before Make rather than silently running on CPU.
 
 The supported product surface remains intentionally small:
 
@@ -205,6 +235,38 @@ SIF, Nix closures, and other mechanisms may still appear inside ordinary
 project recipes, but Cloudmake neither selects nor validates them as managed
 runners. OCI must be validated as OCI; conversion to SIF is not OCI evidence.
 
+## Kaggle as the no-reuse validation
+
+Kaggle is the deliberate counterpoint to Colab in Cloudmake's backend model.
+Colab can amortize source, image, and workspace preparation across targets in a
+reused session. Kaggle assigns fresh compute to every notebook version and
+therefore declares `session-reuse=no`. “Batch” and “fresh per target” are
+descriptions of that single property, not independent capabilities. Whether
+Kaggle releases the underlying VM is provider implementation behavior and does
+not require a Cloudmake `release` property.
+
+Kaggle composes two independent adapters without changing that reuse property:
+
+1. a persistence adapter that alternates private notebook-output slots, restores
+   the locally recorded last-good slot through a provider-side `kernel_source`,
+   and publishes its successor without exposing Kaggle credentials; and
+2. a least-privileged PRoot OCI adapter that materializes a Linux image without
+   a daemon or privileged namespaces and translates its supported CDI subset.
+
+This preserves incremental Make *state*, not cheap incremental
+dispatch. Every target still pays for a fresh VM, source staging,
+workspace restore, OCI materialization when uncached, and successful checkpoint
+publication. Cloudmake must identify those costs as properties of the backend
+rather than compensate with implicit target aggregation or a scheduler.
+
+The persistence gate proves provider-side restore and publication without a
+laptop round trip for the checkpoint payload, deterministic version selection,
+private ownership, receipt-validated checkpoint advancement, and absence of
+Kaggle credentials from generated notebooks, output, provenance, and
+checkpoints. Only successful Make invocations publish a new checkpoint; target
+and infrastructure failures leave the last-good head unchanged. Kaggle storage
+quotas and retention are provider limits, not new Cloudmake ceilings.
+
 ## Image and checkpoint storage
 
 An OCI registry is the authority for immutable image content. The image is
@@ -212,9 +274,11 @@ referenced by digest and pulled or materialized on each fresh VM. A reused VM
 may use its runtime's content-addressed local image cache. Google Drive or another workspace
 store remains the authority only for mutable project state.
 
-Cloudmake does not copy registry layers into workspace checkpoints. The runtime
-cache is separate, discardable VM state whose absence cannot affect
-correctness. Registry and runtime credentials remain with their official
+Colab and ordinary host runtime caches remain separate and discardable. Kaggle
+places downloaded runner packages and its materialized OCI cache inside the
+private workspace checkpoint because `session-reuse=no` would otherwise force a
+large pull every target. The registry remains authoritative, and deletion of
+that cache affects cost rather than correctness. Registry and runtime credentials remain with their official
 clients; they are never placed in project source, checkpoint metadata, or
 provenance. Cloudmake passes no host environment variables into native OCI
 containers. Its PRoot and Colab `crun` paths start project Make with a clean

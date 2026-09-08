@@ -3,7 +3,7 @@
 BACKEND_TRANSPORT := colab-native
 BACKEND_ACCESS_CLASS := notebook
 BACKEND_API_VERSION := 1
-BACKEND_LIFECYCLE := session
+BACKEND_SESSION_REUSE := yes
 BACKEND_CAPABILITIES := sync execute status incremental-sync open artifacts gpu cancel capacity-retry persistent-workspace checkpoint-persistence environment-profile oci-runner
 BACKEND_OCI_RUNTIMES := crun
 

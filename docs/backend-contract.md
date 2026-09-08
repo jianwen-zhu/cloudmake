@@ -37,7 +37,7 @@ User aliases are short; canonical names identify transport explicitly:
 | --- | --- | --- | --- |
 | `local` | `local` | Direct project Make invocation | `native` |
 | `colab` | `colab-notebook` | Native Colab contents and kernel APIs | `checkpoint` |
-| `kaggle` | `kaggle-notebook` | Private Kaggle notebook version | `unsupported` |
+| `kaggle` | `kaggle-notebook` | Private Kaggle notebook version | `checkpoint` |
 | `codespaces` | `codespaces-ssh` | SSH and rsync | `native` |
 | `colab-ssh` | `colab-ssh` | SSH and rsync | `unsupported` |
 | `ssh` | `host-ssh` | User-managed SSH and rsync | `native` |
@@ -52,7 +52,7 @@ Each backend declares:
 
 - the supported backend API version;
 - a canonical backend name;
-- a lifecycle: `local`, `session`, or `batch`;
+- whether its execution environment is reusable across target invocations;
 - an ordered set of capabilities, including any persistence and bundle-runtime
   roles;
 - an ordered OCI runtime list, or `none`; and
@@ -107,6 +107,9 @@ BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
 
 # A managed notebook with one provider-qualified adapter.
 BACKEND_OCI_RUNTIMES := crun
+
+# A fresh managed VM with a least-privileged materialization adapter.
+BACKEND_OCI_RUNTIMES := proot
 ```
 
 The declaration describes mechanisms the backend permits, not commands proven
@@ -133,18 +136,41 @@ keeps persistence disabled by default for backward compatibility and passes
 `CLOUDMAKE_CHECKPOINT=1` to the internal engine only for the managed checkpoint
 mode. This variable never enters the project Make assignment namespace.
 
-## Lifecycle semantics
+Kaggle implements checkpoint persistence through two alternating private
+kernel-output slots. The next slot attaches only the locally recorded last-good
+slot as a provider-side `kernel_source`; a small validated publication receipt
+atomically advances the local head. The checkpoint payload is not downloaded to
+the host. The backend remains `session-reuse=no`, and provider-private output is
+not represented as end-to-end encrypted storage.
 
-A `local` backend has no compute lifecycle or synchronization boundary. Public
-project-target execution invokes the project Makefile directly; lifecycle and
-synchronization operations report explicit no-op or readiness semantics. It is
-the reference behavior that remote backends must preserve.
+Workspace identities are scoped to their persistence adapter. The launcher may
+remember several backend-to-workspace mappings for one project, but exactly one
+is active with the selected backend. A backend switch must never reinterpret a
+Drive repository ID as a Kaggle output slot (or vice versa), and must preserve
+released Colab workspace IDs during local configuration migration.
 
-A `session` backend may start or reuse a named VM. It must reconcile cached
-identity with live provider state before use and expose a meaningful `stop`
-operation. For an externally managed host such as `host-ssh`, `start` means
-validate the existing execution surface and `stop` must explicitly preserve the
-machine rather than claiming lifecycle authority Cloudmake does not have.
+## Session-reuse semantics
+
+Every backend declares exactly one `BACKEND_SESSION_REUSE` value: `yes` or
+`no`. It is the only descriptor field for this behavior. “Batch,” “fresh per
+target,” and provider-managed release are not additional capabilities. API-1
+backends that still declare `BACKEND_LIFECYCLE=local|session|batch` remain
+accepted as a compatibility input, but new descriptors must use the direct
+boolean property.
+
+A `local` backend declares `session-reuse=yes` because successive targets see
+the same machine and working tree, even though it has no remote compute
+lifecycle or synchronization boundary. Public project-target execution invokes
+the project Makefile directly; lifecycle and synchronization operations report
+explicit no-op or readiness semantics. It is the reference behavior that
+remote backends must preserve.
+
+A remote backend with `session-reuse=yes` may start or reuse a named VM. It must
+reconcile cached identity with live provider state before use and expose honest
+`start` and `stop` behavior. For an externally managed host such as `host-ssh`,
+`start` means validate the existing execution surface and `stop` must explicitly
+preserve the machine rather than claiming lifecycle authority Cloudmake does
+not have.
 
 Native Colab derives its default resource identifier from stable local project
 identity. An explicit `COLAB_SESSION` remains exact, and existing local state
@@ -154,9 +180,18 @@ intentional shared-session escape hatch guarded by normal ownership checks.
 `COLAB_SESSION=NAME cloudmake --use colab` persists a deliberate per-project
 replacement; a one-off environment override is not persisted.
 
-A `batch` backend submits a fresh job for each operational target. `start` may
-validate readiness, but it must not pretend to create a reusable VM. `stop` may
-be a documented no-op when the provider ends jobs automatically.
+A backend with `session-reuse=no` submits a fresh execution environment for
+each operational target. `start` may validate readiness, but it must not
+pretend to create a reusable VM. `stop` may be a documented no-op when the
+provider ends jobs automatically; that is transport behavior and does not need
+a separate `release` descriptor.
+
+Such a backend may independently add checkpoint persistence. Restoring a
+logical workspace does not change `session-reuse=no`; source staging,
+checkpoint restoration, bundle preparation, and checkpoint publication still
+have a fixed cost for every project target and must remain visible in context
+and provenance. An implementation must not retain a workload credential merely
+to imitate reuse.
 
 Capacity retry is an opt-in backend allocation capability, not a wrapper around
 an engine operation. A backend supporting `--retry-for` must positively classify
@@ -280,11 +315,12 @@ project state or a source archive.
 
 ## Adding a remote provider backend
 
-A new remote provider backend should first choose its honest lifecycle and
-transport. Reuse a shared transport when its synchronization and execution
-semantics match; add a new transport only when the provider surface genuinely
-differs. The built-in local backend is the reference adapter described above,
-not a template for provider lifecycle code.
+A new remote provider backend should first declare whether its execution
+environment can be reused and choose its honest transport. Reuse a shared
+transport when its synchronization and execution semantics match; add a new
+transport only when the provider surface genuinely differs. The built-in local
+backend is the reference adapter described above, not a template for provider
+lifecycle code.
 
 The implementation is complete when it has:
 

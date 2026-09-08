@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -11,6 +12,15 @@ from conftest import PROJECT_ROOT, run_command
 
 SCRIPT = PROJECT_ROOT / "tools" / "kaggle_prepare.py"
 TEMPLATE = PROJECT_ROOT / "notebooks" / "kaggle.ipynb"
+
+
+def embedded_control(output: Path) -> dict:
+    match = re.search(
+        r"control[.]write_bytes\(base64[.]b64decode\('([^']+)'\)\)",
+        output.read_text(encoding="utf-8"),
+    )
+    assert match is not None
+    return json.loads(base64.b64decode(match.group(1)))
 
 
 def prepare(
@@ -88,8 +98,9 @@ def test_prepare_embeds_archive_and_replaces_control_tokens(tmp_path: Path) -> N
     assert "__MAKEFILE_B64__" not in serialized
     assert "__PROJECT_ARGUMENTS_B64__" not in serialized
     assert "__COLLECT_DIR_B64__" not in serialized
-    assert base64.urlsafe_b64encode(b"test").decode("ascii") in serialized
-    assert "'7'" in serialized
+    control = embedded_control(output)
+    assert control["target"] == "test"
+    assert control["jobs"] == 7
     assert all(cell.get("outputs", []) == [] for cell in notebook["cells"] if cell["cell_type"] == "code")
     assert all(cell.get("execution_count") is None for cell in notebook["cells"] if cell["cell_type"] == "code")
     assert metadata.exists()
@@ -100,8 +111,7 @@ def test_prepare_embeds_explicit_artifact_collection_directory(tmp_path: Path) -
     result, _, output, _ = prepare(tmp_path, collect_dir="dist/release")
 
     assert result.returncode == 0, result.stdout
-    encoded = base64.urlsafe_b64encode(b"dist/release").decode()
-    assert f"COLLECT_DIR_B64 = '{encoded}'" in output.read_text(encoding="utf-8")
+    assert embedded_control(output)["collect_dir"] == "dist/release"
 
 
 @pytest.mark.parametrize(

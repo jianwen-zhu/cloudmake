@@ -144,9 +144,13 @@ internals:
   failed target, OS credential-store key reuse, and encrypted-envelope
   non-disclosure;
 - persistence-mode behavior across every backend: checkpoint transfer on native
-  Colab, no-transfer native storage on local and durable SSH workspaces, early
-  rejection on ephemeral Kaggle/Colab SSH, legacy option aliases, and disabled-
-  by-default target compatibility;
+  Colab and private-output checkpoint chaining on Kaggle, no-transfer native
+  storage on local and durable SSH workspaces, early rejection on Colab SSH,
+  legacy option aliases, and disabled-by-default target compatibility;
+- Kaggle alternating-slot publication, fresh-VM restore and source
+  reconciliation, failed-head protection, exact-slot purge, credential
+  non-disclosure, OCI preflight, cached materialization, strict PRoot CDI
+  translation, and safe large/checkpoint filesystem handling;
 - stable workspace identity independent of project path, local metadata
   list/show, explicit attachment, force-gated purge, and restore capacity checks
   against the allocated VM rather than a fixed Cloudmake ceiling;

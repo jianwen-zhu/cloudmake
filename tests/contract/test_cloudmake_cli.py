@@ -133,7 +133,8 @@ def test_help_documents_opt_in_checkpoint_selection(
     assert "local and per project" in result.stdout
     assert "not format compatibility" in result.stdout
     assert "local/persistent SSH=native" in result.stdout
-    assert "ephemeral batch/Colab SSH=unsupported" in result.stdout
+    assert "Kaggle=private-output" in result.stdout
+    assert "Colab SSH=unsupported" in result.stdout
     assert engine_calls(log) == []
 
 
@@ -294,7 +295,9 @@ def test_backends_reports_persistence_mode_for_every_backend(
     }
     assert rows["colab-notebook"][2] == "checkpoint"
     assert "crun" in rows["colab-notebook"]
-    assert "unsupported" in rows["kaggle-notebook"]
+    assert rows["kaggle-notebook"][1] == "no"
+    assert rows["kaggle-notebook"][2] == "checkpoint"
+    assert "proot" in rows["kaggle-notebook"]
     assert "podman,docker,nerdctl,proot" in rows["host-ssh"]
     for backend in (
         "local",
@@ -303,8 +306,7 @@ def test_backends_reports_persistence_mode_for_every_backend(
         "lightning-studio-ssh",
     ):
         assert rows[backend][2] == "native"
-    for backend in ("kaggle-notebook", "colab-ssh"):
-        assert rows[backend][2] == "unsupported"
+    assert rows["colab-ssh"][2] == "unsupported"
     assert engine_calls(log) == []
 
 
@@ -672,15 +674,14 @@ def test_workspace_purge_requires_force_and_detaches_local_metadata(
     assert "workspace_id" not in saved
 
 
-@pytest.mark.parametrize("backend", ["kaggle", "colab-ssh"])
-def test_persistence_is_rejected_for_an_ephemeral_backend_before_dispatch(
-    tmp_path: Path, fake_bin: Path, backend: str
+def test_persistence_is_rejected_for_colab_ssh_before_dispatch(
+    tmp_path: Path, fake_bin: Path
 ) -> None:
     project = make_project(tmp_path / "project")
     environment, log = contract_environment(tmp_path, fake_bin)
 
     result = invoke(
-        project, environment, "--use", backend, "--persist", check=False
+        project, environment, "--use", "colab-ssh", "--persist", check=False
     )
 
     assert result.returncode == 2
@@ -776,25 +777,34 @@ def test_persistence_remains_disabled_by_default_for_every_backend(
         assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "0")
 
 
-def test_switch_to_ephemeral_backend_requires_explicit_persistence_disable(
+def test_switch_between_checkpoint_backends_keeps_distinct_workspace_identities(
     tmp_path: Path, fake_bin: Path
 ) -> None:
     project = make_project(tmp_path / "switch-backend")
     environment, log = contract_environment(tmp_path, fake_bin)
     invoke(project, environment, "--use", "colab", "--persist")
+    config = next((tmp_path / "config" / "projects").glob("*.json"))
+    colab_workspace = json.loads(config.read_text())["workspace_id"]
 
-    refused = invoke(project, environment, "--use", "kaggle", check=False)
-    selected = invoke(
-        project, environment, "--use", "kaggle", "--no-persist"
-    )
+    selected = invoke(project, environment, "--use", "kaggle")
+    kaggle_config = json.loads(config.read_text())
+    kaggle_workspace = kaggle_config["workspace_id"]
     invoke(project, environment, "build")
 
-    assert refused.returncode == 2
-    assert "--no-persist" in refused.stdout
-    assert "persistent-workspace=disabled" in selected.stdout
+    assert "persistent-workspace=enabled mode=checkpoint" in selected.stdout
+    assert kaggle_workspace != colab_workspace
+    assert kaggle_config["workspace_ids"] == {
+        "colab-notebook": colab_workspace,
+        "kaggle-notebook": kaggle_workspace,
+    }
     call = engine_calls(log)[0]
     assert_assignment(call, "BACKEND", "kaggle-notebook")
-    assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "0")
+    assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "1")
+    assert_assignment(call, "CLOUDMAKE_WORKSPACE_ID", kaggle_workspace)
+
+    invoke(project, environment, "--use", "colab")
+    restored = json.loads(config.read_text())
+    assert restored["workspace_id"] == colab_workspace
 
 
 def test_use_ssh_persists_the_host_alias_outside_the_project(

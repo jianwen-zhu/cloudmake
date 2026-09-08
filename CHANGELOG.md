@@ -17,8 +17,8 @@ once a version is published as a GitHub release.
   selected runtime evidence in the existing single-run provenance while
   allowing the runtime preflight to prove configured architecture emulation.
 - Support native Podman, Docker, and nerdctl execution on local and SSH
-  backends, with a CPU-only PRoot compatibility fallback, and reject unsupported
-  Kaggle OCI and PRoot/CDI combinations before provider contact.
+  backends, with a least-privileged PRoot compatibility fallback and strict CDI
+  bind/environment translation.
 - Make ordered OCI runtime options an explicit backend property; dynamically
   probe multiple declared host runtimes and fall through when an installed
   client is not operational, without retrying after target submission.
@@ -28,6 +28,17 @@ once a version is published as a GitHub release.
   `noNewPrivileges`, and supports NVIDIA devices and host drivers through a
   generated CDI specification. Deliberately omit Colab `runc` and bare
   `chroot` alternatives to keep one accelerator-capable maintained profile.
+- Add a Kaggle persistent-workspace adapter that alternates two private
+  notebook-output slots, restores the last successful workspace entirely inside
+  Kaggle, reconciles current local source, and advances the local head only
+  after a successful Make target and validated publication receipt.
+- Add a Kaggle `skopeo` + `umoci` + PRoot OCI profile for trusted computational
+  images, including strict `nvidia.com/gpu=all` CDI translation from devices and
+  host drivers observed in the actual VM. Cache downloaded runner packages and
+  the materialized image in the private workspace so `session-reuse=no` does not
+  require a cold registry pull on every target.
+- Replace backend lifecycle labels with the orthogonal `session-reuse=yes|no`
+  property while retaining API-1 lifecycle declarations as compatibility input.
 - Distinguish target exit status from OCI infrastructure failure using private
   execution and terminal receipts, including when a project target itself exits
   with `EX_SOFTWARE`/70.

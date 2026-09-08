@@ -37,7 +37,10 @@ CLOUDMAKE_SAFE_EXTRACT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/safe_extrac
 CLOUDMAKE_RECORD_STATE = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/run_state.py' --file '$(CLOUDMAKE_OPERATION_STATE)'
 
 BACKEND_API_VERSION ?=
+# BACKEND_LIFECYCLE is accepted only as an API-1 compatibility input. New
+# descriptors declare the single behavior Cloudmake needs to know directly.
 BACKEND_LIFECYCLE ?=
+BACKEND_SESSION_REUSE ?= $(if $(filter batch,$(BACKEND_LIFECYCLE)),no,$(if $(filter local session,$(BACKEND_LIFECYCLE)),yes,))
 BACKEND_CAPABILITIES ?=
 BACKEND_OCI_RUNTIMES ?=
 BACKEND_RESOURCE_ID ?= default
@@ -71,8 +74,8 @@ endif
 ifneq ($(BACKEND_API_VERSION),$(CLOUDMAKE_BACKEND_API_VERSION))
 $(error Backend "$(BACKEND)" uses API $(BACKEND_API_VERSION); cloudmake supports $(CLOUDMAKE_BACKEND_API_VERSION))
 endif
-ifeq ($(filter $(BACKEND_LIFECYCLE),local session batch),)
-$(error Backend "$(BACKEND)" has invalid BACKEND_LIFECYCLE "$(BACKEND_LIFECYCLE)")
+ifeq ($(filter $(BACKEND_SESSION_REUSE),yes no),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_SESSION_REUSE "$(BACKEND_SESSION_REUSE)"; expected yes or no)
 endif
 ifeq ($(strip $(BACKEND_OCI_RUNTIMES)),)
 $(error Backend "$(BACKEND)" does not declare BACKEND_OCI_RUNTIMES)
@@ -108,7 +111,7 @@ ensure-owner: prerequisites
 backend-info: backend-contract
 	@echo 'backend=$(BACKEND)'
 	@echo 'api=$(BACKEND_API_VERSION)'
-	@echo 'lifecycle=$(BACKEND_LIFECYCLE)'
+	@echo 'session-reuse=$(BACKEND_SESSION_REUSE)'
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'
 	@echo 'oci-runtimes=$(BACKEND_OCI_RUNTIMES)'

@@ -50,13 +50,13 @@ ALIASES = {
     "lightning-studio-ssh": "lightning-studio-ssh",
 }
 BACKENDS = {
-    "local": ("local", "direct Make invocation", "make"),
-    "colab-notebook": ("session", "native notebook API", "colab"),
-    "kaggle-notebook": ("batch", "private notebook job", "kaggle"),
-    "codespaces-ssh": ("session", "SSH and rsync", "gh"),
-    "colab-ssh": ("session", "paid-tier SSH and rsync", "colab"),
-    "host-ssh": ("session", "user-managed SSH and rsync", "ssh"),
-    "lightning-studio-ssh": ("session", "persistent Studio SSH and rsync", "lightning"),
+    "local": ("yes", "direct Make invocation", "make"),
+    "colab-notebook": ("yes", "native notebook API", "colab"),
+    "kaggle-notebook": ("no", "private notebook job", "kaggle"),
+    "codespaces-ssh": ("yes", "SSH and rsync", "gh"),
+    "colab-ssh": ("yes", "paid-tier SSH and rsync", "colab"),
+    "host-ssh": ("yes", "user-managed SSH and rsync", "ssh"),
+    "lightning-studio-ssh": ("yes", "persistent Studio SSH and rsync", "lightning"),
 }
 EX_TEMPFAIL = getattr(os, "EX_TEMPFAIL", 75)
 GPU_BACKENDS = {
@@ -69,7 +69,7 @@ CAPACITY_RETRY_BACKENDS = {"colab-notebook"}
 PERSISTENCE_MODES = {
     "local": "native",
     "colab-notebook": "checkpoint",
-    "kaggle-notebook": "unsupported",
+    "kaggle-notebook": "checkpoint",
     "codespaces-ssh": "native",
     "colab-ssh": "unsupported",
     "host-ssh": "native",
@@ -313,7 +313,10 @@ def artifact_receipt(directory: Path) -> dict[str, Any] | None:
 def oci_receipt_snapshot(state_root: Path) -> dict[Path, int]:
     return {
         path: path.stat().st_mtime_ns
-        for pattern in ("target-result.json", "oci-result.json", "oci-preflight.json")
+        for pattern in (
+            "target-result.json", "oci-result.json", "oci-preflight.json",
+            "cloudmake-oci-result.json",
+        )
         for path in state_root.rglob(pattern)
         if path.is_file()
     }
@@ -325,7 +328,10 @@ def newest_oci_receipt(
     candidates = sorted(
         (
             path
-            for pattern in ("target-result.json", "oci-result.json", "oci-preflight.json")
+            for pattern in (
+                "target-result.json", "oci-result.json", "oci-preflight.json",
+                "cloudmake-oci-result.json",
+            )
             for path in state_root.rglob(pattern)
             if path.is_file() and previous.get(path) != path.stat().st_mtime_ns
         ),
@@ -370,7 +376,11 @@ def allocation_receipt(path: Path) -> dict[str, Any] | None:
 
 def checkpoint_receipts(state_root: Path, run_id: str) -> list[dict[str, Any]]:
     receipts: list[dict[str, Any]] = []
-    for path in sorted(state_root.glob(f"colab-notebook/*/checkpoint/{run_id}-*.json")):
+    paths = [
+        *state_root.glob(f"colab-notebook/*/checkpoint/{run_id}-*.json"),
+        *state_root.glob(f"kaggle-notebook/*/checkpoint/{run_id}-*.json"),
+    ]
+    for path in sorted(paths):
         try:
             payload = load_json(path, optional=False)
         except Exception:
@@ -390,6 +400,8 @@ def checkpoint_receipts(state_root: Path, run_id: str) -> list[dict[str, Any]]:
                 "current_profile",
                 "files",
                 "bytes",
+                "sha256",
+                "restore",
                 "runtime",
                 "error",
             )
@@ -586,8 +598,9 @@ Managed checkpoint workspaces: --workspaces; --workspace {{show,attach,purge}} [
                                (purge requires --force)
 Persistence selection: --persist/--no-persist are local and per project;
                        --checkpoint/--no-checkpoint remain compatible aliases.
-Persistence modes: Colab notebook=encrypted checkpoint; local/persistent SSH=native
-                   storage (no transfer); ephemeral batch/Colab SSH=unsupported.
+Persistence modes: Colab notebook=encrypted checkpoint; Kaggle=private-output
+                   checkpoint; local/persistent SSH=native storage (no transfer);
+                   Colab SSH=unsupported.
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
 Environment: --environment records observed VM facts, not format compatibility.
@@ -625,15 +638,15 @@ def backend_oci_runtimes(backend: str) -> list[str]:
 
 def show_backends() -> None:
     print(
-        f"{'BACKEND':22} {'LIFECYCLE':10} {'PERSISTENCE':12} "
+        f"{'BACKEND':22} {'SESSION REUSE':13} {'PERSISTENCE':12} "
         f"{'TRANSPORT':36} {'OCI RUNTIMES':34} HOST CLIENT"
     )
-    for name, (lifecycle, transport, client) in BACKENDS.items():
+    for name, (session_reuse, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
         runtimes = backend_oci_runtimes(name)
         runtime_text = ",".join(runtimes) if runtimes else "unsupported"
         print(
-            f"{name:22} {lifecycle:10} {PERSISTENCE_MODES[name]:12} "
+            f"{name:22} {session_reuse:13} {PERSISTENCE_MODES[name]:12} "
             f"{transport:36} {runtime_text:34} {client} ({installed})"
         )
 
@@ -642,9 +655,7 @@ def validate_persistence(backend: str, enabled: bool) -> str:
     mode = PERSISTENCE_MODES[backend]
     if enabled and mode == "unsupported":
         reason = (
-            "each target uses a fresh batch VM"
-            if backend == "kaggle-notebook"
-            else "the SSH-managed Colab VM is ephemeral and this transport has no "
+            "the SSH-managed Colab VM is ephemeral and this transport has no "
             "cross-VM checkpoint store"
         )
         raise UsageError(
@@ -725,6 +736,50 @@ def workspace_record_path(state_home: Path, workspace_id: str) -> Path:
     if not WORKSPACE_ID.fullmatch(workspace_id):
         raise UsageError("persistent workspace IDs are 24 lowercase hexadecimal characters")
     return state_home / "workspaces" / f"{workspace_id}.json"
+
+
+def default_workspace_id(project_id: str, backend: str) -> str:
+    # Preserve every released Colab workspace identity. Other managed stores
+    # get a distinct deterministic namespace so switching providers cannot
+    # conflate two unrelated checkpoint repositories.
+    if backend == "colab-notebook":
+        return project_id
+    return hashlib.sha256(f"{project_id}\0{backend}".encode("utf-8")).hexdigest()[:24]
+
+
+def configured_workspace_id(
+    project_config: dict[str, Any], project_id: str, backend: str
+) -> str:
+    configured = project_config.get("workspace_ids", {})
+    if not isinstance(configured, dict) or not all(
+        isinstance(name, str)
+        and isinstance(value, str)
+        and WORKSPACE_ID.fullmatch(value)
+        for name, value in configured.items()
+    ):
+        raise UsageError("configured persistent workspace map is invalid")
+    selected = configured.get(backend)
+    if selected is not None:
+        return selected
+    legacy = project_config.get("workspace_id")
+    configured_backend = project_config.get("backend")
+    if legacy is not None and configured_backend == backend:
+        if not isinstance(legacy, str) or WORKSPACE_ID.fullmatch(legacy) is None:
+            raise UsageError("configured persistent workspace ID is invalid")
+        return legacy
+    return default_workspace_id(project_id, backend)
+
+
+def remember_workspace_id(
+    saved: dict[str, Any], backend: str, workspace_id: str
+) -> None:
+    configured = saved.get("workspace_ids", {})
+    if not isinstance(configured, dict):
+        configured = {}
+    configured = dict(configured)
+    configured[backend] = workspace_id
+    saved["workspace_ids"] = configured
+    saved["workspace_id"] = workspace_id
 
 
 def load_workspace_record(state_home: Path, workspace_id: str) -> dict[str, Any]:
@@ -826,11 +881,27 @@ def detach_workspace_mappings(
         if keep is not None and path == keep:
             continue
         saved = load_json(path)
-        if saved.get("workspace_id") != workspace_id:
+        workspace_ids = saved.get("workspace_ids", {})
+        mapped = (
+            isinstance(workspace_ids, dict)
+            and workspace_id in workspace_ids.values()
+        )
+        active = saved.get("workspace_id") == workspace_id
+        if not active and not mapped:
             continue
-        saved.pop("workspace_id", None)
-        saved.pop("checkpoint", None)
-        saved["persistent_workspace"] = False
+        if isinstance(workspace_ids, dict):
+            remaining = {
+                name: value for name, value in workspace_ids.items()
+                if value != workspace_id
+            }
+            if remaining:
+                saved["workspace_ids"] = remaining
+            else:
+                saved.pop("workspace_ids", None)
+        if active:
+            saved.pop("workspace_id", None)
+            saved.pop("checkpoint", None)
+            saved["persistent_workspace"] = False
         atomic_json(path, saved)
 
 
@@ -862,9 +933,8 @@ def manage_workspace(
     if operation not in {"show", "attach", "purge"}:
         raise UsageError("--workspace requires one of: show, attach, purge")
     project_config = load_json(config_home / "projects" / f"{project_id}.json")
-    current = project_config.get("workspace_id", project_id)
-    if not isinstance(current, str) or not WORKSPACE_ID.fullmatch(current):
-        raise UsageError("configured persistent workspace ID is invalid")
+    configured_backend = canonical_backend(str(project_config.get("backend", "colab")))
+    current = configured_workspace_id(project_config, project_id, configured_backend)
     if operation == "show":
         if options["force"]:
             raise UsageError("--force is not used with --workspace show")
@@ -876,8 +946,9 @@ def manage_workspace(
         raise UsageError(f"--workspace {operation} requires one workspace ID")
     selected = positional[0]
     record = load_workspace_record(state_home, selected)
-    if record.get("backend") != "colab-notebook":
-        raise UsageError("only Colab persistent workspaces can currently be managed")
+    record_backend = record.get("backend")
+    if record_backend not in {"colab-notebook", "kaggle-notebook"}:
+        raise UsageError("the selected backend does not provide managed checkpoints")
     if operation == "attach":
         if options["force"]:
             raise UsageError("--force is not used with --workspace attach")
@@ -885,12 +956,13 @@ def manage_workspace(
         detach_workspace_mappings(config_home, selected, keep=config_path)
         saved = project_config
         saved.update(
-            backend="colab-notebook",
+            backend=record_backend,
             persistent_workspace=True,
             checkpoint=True,
             workspace_id=selected,
             project=os.fspath(project),
         )
+        remember_workspace_id(saved, record_backend, selected)
         saved_accelerator = record.get("accelerator")
         if isinstance(saved_accelerator, str):
             saved["accelerator"] = "" if saved_accelerator == "cpu" else saved_accelerator
@@ -899,7 +971,7 @@ def manage_workspace(
             state_home=state_home,
             workspace_id=selected,
             project=project,
-            backend="colab-notebook",
+            backend=record_backend,
             accelerator=(
                 saved_accelerator if isinstance(saved_accelerator, str) else None
             ),
@@ -911,20 +983,25 @@ def manage_workspace(
         )
         print(
             f"[cloudmake] attached project={project.name} to persistent-workspace={selected}; "
-            f"backend=colab-notebook{accelerator_note}; subsequent targets restore and update it."
+            f"backend={record_backend}{accelerator_note}; subsequent targets restore and update it."
         )
         return 0
     if not options["force"]:
+        detail = (
+            "the encrypted Drive repository and its local key"
+            if record_backend == "colab-notebook"
+            else "both private Kaggle checkpoint kernel slots"
+        )
         raise UsageError(
-            "purging permanently deletes the encrypted Drive repository and its local key; "
-            "rerun with --force --workspace purge WORKSPACE_ID"
+            f"purging permanently deletes {detail}; rerun with --force "
+            "--workspace purge WORKSPACE_ID"
         )
     purge_session = record.get("session")
     if not isinstance(purge_session, str) or not purge_session:
         purge_session = os.environ.get("COLAB_SESSION", "cuda-build")
     exit_code = engine_command(
         project=project,
-        backend="colab-notebook",
+        backend=record_backend,
         accelerator="",
         accelerator_set=True,
         ssh_host=None,
@@ -938,7 +1015,7 @@ def manage_workspace(
         assignments=[],
         retry_seconds=None,
         checkpoint=True,
-        colab_session=purge_session,
+        colab_session=purge_session if record_backend == "colab-notebook" else None,
     )
     if exit_code == 0:
         workspace_record_path(state_home, selected).unlink(missing_ok=True)
@@ -998,9 +1075,7 @@ def resolve_preferences(
     if not isinstance(checkpoint, bool):
         raise UsageError("configured persistent-workspace selection must be true or false")
 
-    workspace_id: Any = project_config.get("workspace_id", key)
-    if not isinstance(workspace_id, str) or not WORKSPACE_ID.fullmatch(workspace_id):
-        raise UsageError("configured persistent workspace ID is invalid")
+    workspace_id = configured_workspace_id(project_config, key, backend)
 
     if options["accelerator_set"]:
         return backend, options["accelerator"], True, ssh_host, checkpoint, workspace_id
@@ -1049,12 +1124,12 @@ def validate_backend_oci_selection(
         return runtimes
     if not runtimes:
         raise UsageError(f"backend {backend!r} does not support the managed OCI runner")
-    native = {"podman", "docker", "nerdctl", "crun"}
-    if devices and not native.intersection(runtimes):
+    cdi_capable = {"podman", "docker", "nerdctl", "proot", "crun"}
+    if devices and not cdi_capable.intersection(runtimes):
         raise UsageError(
             f"backend {backend!r} OCI runtime options cannot apply CDI devices"
         )
-    if accelerator and not native.intersection(runtimes):
+    if accelerator and not cdi_capable.intersection(runtimes):
         raise UsageError(
             f"backend {backend!r} OCI runtime options are CPU-only; "
             "select --cpu or --native"
@@ -1308,14 +1383,31 @@ def persist_invocation_accelerator(
 
 
 def persist_invocation_checkpoint(
-    *, project: Path, config_home: Path, key: str, enabled: bool, mode: str
+    *, project: Path, config_home: Path, key: str, backend: str,
+    workspace_id: str, enabled: bool, mode: str
 ) -> None:
     path = config_home / "projects" / f"{key}.json"
     saved = load_json(path)
     saved["persistent_workspace"] = enabled
     saved["checkpoint"] = enabled
     if enabled and mode == "checkpoint":
-        saved.setdefault("workspace_id", key)
+        configured = saved.get("workspace_ids", {})
+        if not isinstance(configured, dict):
+            configured = {}
+        configured = dict(configured)
+        saved_backend = saved.get("backend")
+        legacy = saved.get("workspace_id")
+        if (
+            isinstance(saved_backend, str)
+            and saved_backend in {"colab-notebook", "kaggle-notebook"}
+            and isinstance(legacy, str)
+            and WORKSPACE_ID.fullmatch(legacy)
+        ):
+            configured.setdefault(saved_backend, legacy)
+        configured[backend] = workspace_id
+        saved["workspace_ids"] = configured
+        if saved_backend in {None, backend}:
+            saved["workspace_id"] = workspace_id
     saved["project"] = os.fspath(project)
     atomic_json(path, saved)
     print(
@@ -1558,6 +1650,20 @@ def run(arguments: list[str]) -> int:
             else configured_persistence
         )
         persistence_mode = validate_persistence(backend, selected_persistence)
+        previous_backend = saved.get("backend")
+        legacy_workspace_id = saved.get("workspace_id")
+        if (
+            isinstance(previous_backend, str)
+            and previous_backend in {"colab-notebook", "kaggle-notebook"}
+            and isinstance(legacy_workspace_id, str)
+            and WORKSPACE_ID.fullmatch(legacy_workspace_id)
+        ):
+            workspace_ids = saved.get("workspace_ids", {})
+            if isinstance(workspace_ids, dict):
+                workspace_ids = dict(workspace_ids)
+                workspace_ids.setdefault(previous_backend, legacy_workspace_id)
+                saved["workspace_ids"] = workspace_ids
+        selected_workspace_id = configured_workspace_id(saved, key, backend)
         ssh_host = (
             resolve_ssh_host(options, project_config, global_config)
             if backend == "host-ssh"
@@ -1587,12 +1693,14 @@ def run(arguments: list[str]) -> int:
         if options["checkpoint"] is not None:
             saved["persistent_workspace"] = options["checkpoint"]
             saved["checkpoint"] = options["checkpoint"]
-            if (
-                options["checkpoint"]
-                and persistence_mode == "checkpoint"
-                and not options["global"]
-            ):
-                saved.setdefault("workspace_id", key)
+        if (
+            selected_persistence
+            and persistence_mode == "checkpoint"
+            and not options["global"]
+        ):
+            remember_workspace_id(saved, backend, selected_workspace_id)
+        elif previous_backend != backend:
+            saved.pop("workspace_id", None)
         runner, image, devices = resolve_runner_preferences(
             options, project, config_home, key
         )
@@ -1627,8 +1735,8 @@ def run(arguments: list[str]) -> int:
             else ""
         )
         checkpoint_note = (
-            f", {persistence_selection_note(options['checkpoint'], persistence_mode)}"
-            if options["checkpoint"] is not None
+            f", {persistence_selection_note(selected_persistence, persistence_mode)}"
+            if options["checkpoint"] is not None or selected_persistence
             else ""
         )
         runner_note = (
@@ -1643,7 +1751,7 @@ def run(arguments: list[str]) -> int:
             "subsequent targets reuse this selection."
         )
         if (
-            options["checkpoint"]
+            selected_persistence
             and persistence_mode == "checkpoint"
             and not options["global"]
         ):
@@ -1653,7 +1761,7 @@ def run(arguments: list[str]) -> int:
             state_root = state_home / "projects" / key
             update_workspace_record(
                 state_home=state_home,
-                workspace_id=str(saved["workspace_id"]),
+                workspace_id=selected_workspace_id,
                 project=project,
                 backend=backend,
                 accelerator=(
@@ -1765,6 +1873,8 @@ def run(arguments: list[str]) -> int:
             project=project,
             config_home=config_home,
             key=key,
+            backend=backend,
+            workspace_id=workspace_id,
             enabled=checkpoint,
             mode=persistence_mode,
         )
@@ -1876,7 +1986,7 @@ def run(arguments: list[str]) -> int:
         if (
             exit_code == 0
             and engine_target == "start"
-            and BACKENDS[backend][0] == "session"
+            and BACKENDS[backend][0] == "yes"
             and backend != "host-ssh"
         ):
             print(
@@ -2082,7 +2192,7 @@ def run(arguments: list[str]) -> int:
         record["runner"].update(
             {
                 name: runner_receipt[name]
-                for name in ("runtime", "digest", "image_inspection")
+                for name in ("runtime", "digest", "image_inspection", "status", "error")
                 if name in runner_receipt
             }
         )

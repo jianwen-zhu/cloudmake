@@ -4,6 +4,17 @@ Cloudmake 2.1 can execute an unchanged Make project with tools supplied by a
 digest-pinned OCI image. This runner is independent of the selected backend and
 of optional persistent workspaces.
 
+Its product boundary is least-privileged OCI execution for trusted automated
+computational workloads, not general-purpose container hosting. Cloudmake
+provides the image userspace, a writable project workspace, temporary storage,
+and explicitly requested CDI devices. It deliberately does not reproduce the
+full `docker run` surface with privileged mode, arbitrary mounts, inherited
+host credentials, port publishing, services, or nested containers. Requiring a
+smaller host surface improves both provider compatibility and security.
+
+Least privilege does not by itself imply strong isolation. The selected
+backend's documented kernel and namespace boundary remains authoritative.
+
 ## Daily use
 
 Choose the backend and image once. Both selections are local to the project:
@@ -50,22 +61,34 @@ visible as exceptions.
 On ordinary local and SSH Linux execution surfaces, automatic selection prefers
 Podman, Docker, then nerdctl. If none is installed, Cloudmake can materialize
 the same OCI image using `skopeo` and `umoci` and execute its userspace through
-PRoot. This fallback is deliberately less capable: it cannot apply CDI device
-edits and does not claim native namespace isolation.
+PRoot. This fallback does not claim native namespace isolation. It can translate
+the strict CDI subset Cloudmake validates—environment entries, bind mounts, and
+device nodes—into explicit PRoot bindings, while rejecting hooks, ownership
+overrides, and unknown edits.
 
 The ordered choices are declared by each backend. On hosts requiring dynamic
 qualification, Cloudmake probes every declared native runtime until one is
 ready; the mere presence of a client executable is insufficient. CDI requests
-filter out PRoot before probing. Image preflight then validates the chosen
-runtime without ever replaying the project target through another one.
+filter out only candidates that cannot apply them. Image preflight then
+validates the chosen runtime without ever replaying the project target through
+another one.
 
 The Colab notebook backend declares one provider-qualified runtime profile.
 Cloudmake installs `skopeo`, `umoci`, and `crun` when absent, materializes the
 rootfs, and adapts its OCI runtime specification to Colab's managed-VM limits.
 It never installs project toolchains outside the image. NVIDIA device nodes and
 host driver libraries are described by a generated CDI specification and
-applied to the runtime spec. Kaggle's fresh batch notebook path does not support
-this runner in 2.1.
+applied to the runtime spec.
+
+The Kaggle notebook backend declares one different constrained profile:
+`skopeo` + `umoci` materialization followed by PRoot, with `setpriv` enforcing
+`noNewPrivileges` and the selected identity. It needs neither a daemon
+nor privileged namespace creation, which fits Kaggle's fresh managed VM. When
+`nvidia.com/gpu=all` is requested, Cloudmake generates a CDI document from the
+NVIDIA nodes and driver libraries actually attached to that VM and translates
+the validated edits into PRoot bindings. Missing or incomplete device evidence
+fails before Make; it never silently falls back to CPU. The path is intended for
+trusted computational images and is not Docker-equivalent isolation.
 
 The project workspace is bound directly into the container, so target-generated
 files remain incremental and there is no per-target workspace copy. The image
@@ -84,11 +107,14 @@ maintain Docker, Podman, `runc`, or bare `chroot` alternatives for Colab. This
 is one explicit `crun` backend property, not a generic promise that `crun`
 works on every restricted VM.
 
-Runtime caches are VM-local and disposable. They are not part of a persistent
-workspace and are not copied to Google Drive. A replacement VM may therefore
-need to pull and materialize the image again; the registry remains the source
-of truth for immutable tools, while the workspace store remains the source of
-truth for mutable project state.
+Runtime caches on local, SSH, and Colab are VM-local and disposable; they are
+not copied to Google Drive. Kaggle is the deliberate exception because it has
+no reusable session: when Kaggle persistence is enabled, Cloudmake includes the
+downloaded runner packages and materialized image cache in the private
+workspace checkpoint. A later fresh VM can reinstall from and reuse that cache
+without routing the large immutable payload through the laptop. The cache is
+still reconstructible and never becomes image authority; the digest-pinned
+registry reference remains authoritative.
 
 ## Security boundary
 
@@ -100,13 +126,16 @@ only the image's OCI environment plus safe defaults when `PATH` or `HOME` is
 absent.
 
 The Colab adapter shares the VM kernel, PID and network namespaces, and host
-`/proc`; it is therefore not a strong security sandbox for untrusted images.
-It does not expose credential directories or unrelated writable host paths.
-CDI names are non-secret capability requests; Cloudmake resolves the strict JSON
-subset it supports and rejects unknown edits instead of silently weakening the
-request. Unsupported or ambiguous device injection fails before Make.
+`/proc`; the Kaggle PRoot adapter shares the provider VM's kernel and host
+interfaces without container namespaces. Neither is a strong security sandbox
+for untrusted images. Neither exposes credential directories or unrelated
+writable host paths. CDI names are non-secret capability requests; Cloudmake
+resolves the strict JSON subset it supports and rejects unknown edits instead
+of silently weakening the request. Unsupported or ambiguous device injection
+fails before Make.
 
 For the full four-axis model and backend matrix, see
 [Execution environments and OCI runner](execution-environments.md). The live
 evidence and exact managed-VM profile are recorded in
-[Colab OCI/CDI qualification](colab-oci-qualification.md).
+[Colab OCI/CDI qualification](colab-oci-qualification.md). Kaggle's separate
+qualification record is [Kaggle checkpoint and OCI qualification](kaggle-oci-qualification.md).
