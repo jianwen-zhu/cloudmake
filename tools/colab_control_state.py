@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 
@@ -29,6 +30,13 @@ def parse_receipt(path: Path, field: str) -> int:
 
 
 def main() -> int:
+    # `colab exec -f` evaluates this file inside an existing Jupyter kernel.
+    # The kernel process contributes its own `-f <connection.json>` arguments;
+    # an argument-free invocation is the remote probe and must not parse those
+    # unrelated arguments. Host-side receipt parsing remains strict so a
+    # misspelled Cloudmake option is never silently accepted.
+    if "--parse" not in sys.argv[1:]:
+        return remote_probe()
     parser = argparse.ArgumentParser(description="Probe or parse Colab control state")
     parser.add_argument("--parse", type=Path)
     parser.add_argument("--field", choices=("owner", "fingerprint"))
@@ -43,4 +51,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # IPython renders even successful SystemExit as a traceback. All failures
+    # in this helper already raise directly, so returning normally keeps the
+    # remote probe quiet without hiding errors.
+    main()
