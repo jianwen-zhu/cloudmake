@@ -66,10 +66,20 @@ GPU_BACKENDS = {
     "lightning-studio-ssh",
 }
 CAPACITY_RETRY_BACKENDS = {"colab-notebook"}
+PERSISTENCE_MODES = {
+    "local": "native",
+    "colab-notebook": "checkpoint",
+    "kaggle-notebook": "unsupported",
+    "codespaces-ssh": "native",
+    "colab-ssh": "unsupported",
+    "host-ssh": "native",
+    "lightning-studio-ssh": "native",
+}
 ACTION_OPTIONS = {
     "--backends": "backends",
     "--collect": "collect",
     "--doctor": "doctor",
+    "--environment": "environment",
     "--fetch": "fetch",
     "--help": "help",
     "--history": "history",
@@ -82,6 +92,7 @@ ACTION_OPTIONS = {
     "--sync": "sync",
     "--sync-dry-run": "sync-dry-run",
     "--version": "version",
+    "--workspaces": "workspaces",
     "-V": "version",
     "-h": "help",
 }
@@ -90,6 +101,7 @@ ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
 DURATION = re.compile(r"^([1-9][0-9]*)([smh])$")
 COLAB_SESSION_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 SSH_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+WORKSPACE_ID = re.compile(r"^[0-9a-f]{24}$")
 HOST_TEMPLATE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 RESERVED_ASSIGNMENTS = {
     "ARTIFACT_DIR",
@@ -98,6 +110,9 @@ RESERVED_ASSIGNMENTS = {
     "CLOUDMAKE_ALLOCATION_RESULT",
     "CLOUDMAKE_CONTEXT_ACCELERATOR",
     "CLOUDMAKE_OPERATION_STATE",
+    "CLOUDMAKE_CHECKPOINT",
+    "CLOUDMAKE_PROJECT_KEY",
+    "CLOUDMAKE_WORKSPACE_ID",
     "CLOUDMAKE_PROJECT_ARGS_B64",
     "CLOUDMAKE_PROJECT_ROOT",
     "CLOUDMAKE_RETRY_FOR_SECONDS",
@@ -311,6 +326,39 @@ def allocation_receipt(path: Path) -> dict[str, Any] | None:
     return receipt
 
 
+def checkpoint_receipts(state_root: Path, run_id: str) -> list[dict[str, Any]]:
+    receipts: list[dict[str, Any]] = []
+    for path in sorted(state_root.glob(f"colab-notebook/*/checkpoint/{run_id}-*.json")):
+        try:
+            payload = load_json(path, optional=False)
+        except Exception:
+            receipts.append({"status": "receipt-invalid"})
+            continue
+        receipt = {
+            name: payload[name]
+            for name in (
+                "operation",
+                "status",
+                "outcome",
+                "reason",
+                "repository",
+                "snapshot",
+                "data_added",
+                "profile",
+                "current_profile",
+                "files",
+                "bytes",
+                "runtime",
+                "error",
+            )
+            if name in payload
+        }
+        receipts.append(receipt)
+    operation_order = {"restore": 0, "publish": 1, "purge": 2}
+    receipts.sort(key=lambda receipt: operation_order.get(receipt.get("operation"), 99))
+    return receipts
+
+
 def allocation_exit_code(receipt: dict[str, Any] | None, default: int) -> int:
     if receipt is None:
         return default
@@ -351,11 +399,14 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         "retry_for": None,
         "accelerator": None,
         "accelerator_set": False,
+        "checkpoint": None,
+        "force": False,
         "host": None,
         "host_template": None,
         "global": False,
         "use_backend": None,
         "verbose": False,
+        "workspace_action": None,
     }
     index = 0
     while index < len(arguments):
@@ -400,6 +451,24 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
             options["accelerator"] = ""
             options["accelerator_set"] = True
             index += 1
+        elif argument == "--checkpoint":
+            options["checkpoint"] = True
+            index += 1
+        elif argument == "--no-checkpoint":
+            options["checkpoint"] = False
+            index += 1
+        elif argument == "--persist":
+            options["checkpoint"] = True
+            index += 1
+        elif argument == "--no-persist":
+            options["checkpoint"] = False
+            index += 1
+        elif argument == "--workspace":
+            set_action(options, "workspace")
+            options["workspace_action"], index = take_value(arguments, index, argument)
+        elif argument == "--force":
+            options["force"] = True
+            index += 1
         elif argument == "--retry-for":
             options["retry_for"], index = take_value(arguments, index, argument)
         elif argument.startswith("--retry-for="):
@@ -441,21 +510,59 @@ Every positional name is passed unchanged to the project Makefile. Cloudmake
 reserves no project target names.
 
 Project options: -b BACKEND, -C DIR, -j N, --host HOST, --gpu[=TYPE], --cpu,
-                 --retry-for=DURATION, --verbose
+                 --persist, --no-persist, --retry-for=DURATION, --verbose
 Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
-                  --sync-dry-run, --status, --fetch, --open, --shell, --stop
+                  --sync-dry-run, --status, --environment, --fetch, --open,
+                  --shell, --stop
+Managed checkpoint workspaces: --workspaces; --workspace {{show,attach,purge}} [ID]
+                               (purge requires --force)
+Persistence selection: --persist/--no-persist are local and per project;
+                       --checkpoint/--no-checkpoint remain compatible aliases.
+Persistence modes: Colab notebook=encrypted checkpoint; local/persistent SSH=native
+                   storage (no transfer); ephemeral batch/Colab SSH=unsupported.
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
+Environment: --environment records observed VM facts, not format compatibility.
 Information: --help, --version, --history, --host-templates,
              --host-template NAME
 """
 
 
 def show_backends() -> None:
-    print("BACKEND             LIFECYCLE  TRANSPORT                   HOST CLIENT")
+    print("BACKEND             LIFECYCLE  PERSISTENCE  TRANSPORT                   HOST CLIENT")
     for name, (lifecycle, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
-        print(f"{name:19} {lifecycle:10} {transport:27} {client} ({installed})")
+        print(
+            f"{name:19} {lifecycle:10} {PERSISTENCE_MODES[name]:12} "
+            f"{transport:27} {client} ({installed})"
+        )
+
+
+def validate_persistence(backend: str, enabled: bool) -> str:
+    mode = PERSISTENCE_MODES[backend]
+    if enabled and mode == "unsupported":
+        reason = (
+            "each target uses a fresh batch VM"
+            if backend == "kaggle-notebook"
+            else "the SSH-managed Colab VM is ephemeral and this transport has no "
+            "cross-VM checkpoint store"
+        )
+        raise UsageError(
+            f"backend {backend!r} does not support persistent workspaces: {reason}; "
+            "select it with --no-persist"
+        )
+    return mode
+
+
+def persistence_selection_note(enabled: bool, mode: str) -> str:
+    if not enabled:
+        return "persistent-workspace=disabled"
+    if mode == "native":
+        return (
+            "persistent-workspace=enabled mode=native "
+            "(backend storage; no checkpoint transfer)"
+        )
+    return "persistent-workspace=enabled mode=checkpoint"
 
 
 def host_templates() -> dict[str, Path]:
@@ -514,6 +621,229 @@ def show_history(state_home: Path, key: str) -> None:
     print(f"Provenance directory: {runs}")
 
 
+def workspace_record_path(state_home: Path, workspace_id: str) -> Path:
+    if not WORKSPACE_ID.fullmatch(workspace_id):
+        raise UsageError("persistent workspace IDs are 24 lowercase hexadecimal characters")
+    return state_home / "workspaces" / f"{workspace_id}.json"
+
+
+def load_workspace_record(state_home: Path, workspace_id: str) -> dict[str, Any]:
+    path = workspace_record_path(state_home, workspace_id)
+    record = load_json(path)
+    if not record:
+        raise UsageError(f"persistent workspace is not known locally: {workspace_id}")
+    if record.get("schema") != 1 or record.get("workspace_id") != workspace_id:
+        raise UsageError(f"persistent workspace metadata is corrupt: {path}")
+    return record
+
+
+def update_workspace_record(
+    *,
+    state_home: Path,
+    workspace_id: str,
+    project: Path,
+    backend: str,
+    accelerator: str | None,
+    session: str | None = None,
+    receipts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    path = workspace_record_path(state_home, workspace_id)
+    record = load_json(path)
+    now = utc_timestamp()
+    if not record:
+        record = {
+            "schema": 1,
+            "workspace_id": workspace_id,
+            "created_at": now,
+        }
+    record.update(
+        backend=backend,
+        accelerator=accelerator or "cpu",
+        project_name=project.name,
+        last_attached_project=os.fspath(project),
+        last_used_at=now,
+    )
+    if backend == "colab-notebook" and session is not None:
+        record["session"] = session
+    for receipt in receipts or []:
+        if receipt.get("status") != "succeeded":
+            continue
+        record["last_operation"] = receipt.get("operation")
+        if receipt.get("snapshot"):
+            record["latest_snapshot"] = receipt["snapshot"]
+        if isinstance(receipt.get("files"), int):
+            record["files"] = receipt["files"]
+        if isinstance(receipt.get("bytes"), int):
+            record["logical_bytes"] = receipt["bytes"]
+        if isinstance(receipt.get("runtime"), dict):
+            record["last_runtime"] = receipt["runtime"]
+    atomic_json(path, record)
+    return record
+
+
+def show_workspaces(state_home: Path) -> None:
+    directory = state_home / "workspaces"
+    records: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            record = load_json(path, optional=False)
+        except Exception:
+            continue
+        if record.get("schema") == 1 and WORKSPACE_ID.fullmatch(
+            str(record.get("workspace_id", ""))
+        ):
+            records.append(record)
+    if not records:
+        print("No managed checkpoint workspaces are known on this computer.")
+        return
+    print(
+        "WORKSPACE_ID              BACKEND             ACCELERATOR  "
+        "PROJECT              UPDATED"
+    )
+    for record in sorted(
+        records,
+        key=lambda item: str(item.get("last_used_at", "")),
+        reverse=True,
+    ):
+        print(
+            f"{record['workspace_id']:24} "
+            f"{str(record.get('backend', '-')):19} "
+            f"{str(record.get('accelerator', '-')):12} "
+            f"{str(record.get('project_name', '-')):20} "
+            f"{record.get('last_used_at', '-')}"
+        )
+
+
+def show_workspace(state_home: Path, workspace_id: str) -> None:
+    record = load_workspace_record(state_home, workspace_id)
+    print(json.dumps(record, indent=2, sort_keys=True))
+
+
+def detach_workspace_mappings(
+    config_home: Path, workspace_id: str, *, keep: Path | None = None
+) -> None:
+    for path in (config_home / "projects").glob("*.json"):
+        if keep is not None and path == keep:
+            continue
+        saved = load_json(path)
+        if saved.get("workspace_id") != workspace_id:
+            continue
+        saved.pop("workspace_id", None)
+        saved.pop("checkpoint", None)
+        saved["persistent_workspace"] = False
+        atomic_json(path, saved)
+
+
+def manage_workspace(
+    *,
+    project: Path,
+    project_id: str,
+    config_home: Path,
+    state_home: Path,
+    cache_home: Path,
+    options: dict[str, Any],
+    positional: list[str],
+) -> int:
+    if (
+        options["backend"] is not None
+        or options["accelerator_set"]
+        or options["checkpoint"] is not None
+        or options["host"] is not None
+        or options["global"]
+    ):
+        raise UsageError(
+            "workspace management cannot be combined with backend, host, accelerator, "
+            "persistence, or global selection options"
+        )
+    operation = options["workspace_action"]
+    if operation not in {"show", "attach", "purge"}:
+        raise UsageError("--workspace requires one of: show, attach, purge")
+    project_config = load_json(config_home / "projects" / f"{project_id}.json")
+    current = project_config.get("workspace_id", project_id)
+    if not isinstance(current, str) or not WORKSPACE_ID.fullmatch(current):
+        raise UsageError("configured persistent workspace ID is invalid")
+    if operation == "show":
+        if options["force"]:
+            raise UsageError("--force is not used with --workspace show")
+        if len(positional) > 1:
+            raise UsageError("--workspace show accepts at most one workspace ID")
+        show_workspace(state_home, positional[0] if positional else current)
+        return 0
+    if len(positional) != 1:
+        raise UsageError(f"--workspace {operation} requires one workspace ID")
+    selected = positional[0]
+    record = load_workspace_record(state_home, selected)
+    if record.get("backend") != "colab-notebook":
+        raise UsageError("only Colab persistent workspaces can currently be managed")
+    if operation == "attach":
+        if options["force"]:
+            raise UsageError("--force is not used with --workspace attach")
+        config_path = config_home / "projects" / f"{project_id}.json"
+        detach_workspace_mappings(config_home, selected, keep=config_path)
+        saved = project_config
+        saved.update(
+            backend="colab-notebook",
+            persistent_workspace=True,
+            checkpoint=True,
+            workspace_id=selected,
+            project=os.fspath(project),
+        )
+        saved_accelerator = record.get("accelerator")
+        if isinstance(saved_accelerator, str):
+            saved["accelerator"] = "" if saved_accelerator == "cpu" else saved_accelerator
+        atomic_json(config_path, saved)
+        update_workspace_record(
+            state_home=state_home,
+            workspace_id=selected,
+            project=project,
+            backend="colab-notebook",
+            accelerator=(
+                saved_accelerator if isinstance(saved_accelerator, str) else None
+            ),
+        )
+        accelerator_note = (
+            f" accelerator={saved_accelerator}"
+            if isinstance(saved_accelerator, str) and saved_accelerator
+            else " accelerator=cpu"
+        )
+        print(
+            f"[cloudmake] attached project={project.name} to persistent-workspace={selected}; "
+            f"backend=colab-notebook{accelerator_note}; subsequent targets restore and update it."
+        )
+        return 0
+    if not options["force"]:
+        raise UsageError(
+            "purging permanently deletes the encrypted Drive repository and its local key; "
+            "rerun with --force --workspace purge WORKSPACE_ID"
+        )
+    purge_session = record.get("session")
+    if not isinstance(purge_session, str) or not purge_session:
+        purge_session = os.environ.get("COLAB_SESSION", "cuda-build")
+    exit_code = engine_command(
+        project=project,
+        backend="colab-notebook",
+        accelerator="",
+        accelerator_set=True,
+        ssh_host=None,
+        jobs=options["jobs"],
+        verbose=options["verbose"],
+        state_home=state_home,
+        cache_home=cache_home,
+        key=project_id,
+        workspace_id=selected,
+        target="workspace-purge",
+        assignments=[],
+        retry_seconds=None,
+        checkpoint=True,
+        colab_session=purge_session,
+    )
+    if exit_code == 0:
+        workspace_record_path(state_home, selected).unlink(missing_ok=True)
+        detach_workspace_mappings(config_home, selected)
+        print(f"[cloudmake] persistent-workspace={selected} purged and detached")
+    return exit_code
+
+
 def resolve_ssh_host(
     options: dict[str, Any], project_config: dict[str, Any], global_config: dict[str, Any]
 ) -> str | None:
@@ -534,7 +864,7 @@ def resolve_ssh_host(
 
 def resolve_preferences(
     project: Path, options: dict[str, Any], config_home: Path, key: str
-) -> tuple[str, str | None, bool, str | None]:
+) -> tuple[str, str | None, bool, str | None, bool, str]:
     global_config = load_json(config_home / "config.json")
     shared_config = load_json(project / ".cloudmake.json")
     project_config = load_json(config_home / "projects" / f"{key}.json")
@@ -554,19 +884,34 @@ def resolve_preferences(
         else None
     )
 
+    checkpoint: Any = options["checkpoint"]
+    if checkpoint is None:
+        if "persistent_workspace" in project_config:
+            checkpoint = project_config["persistent_workspace"]
+        elif "checkpoint" in project_config:  # early stateful prototype compatibility
+            checkpoint = project_config["checkpoint"]
+    if checkpoint is None:
+        checkpoint = False
+    if not isinstance(checkpoint, bool):
+        raise UsageError("configured persistent-workspace selection must be true or false")
+
+    workspace_id: Any = project_config.get("workspace_id", key)
+    if not isinstance(workspace_id, str) or not WORKSPACE_ID.fullmatch(workspace_id):
+        raise UsageError("configured persistent workspace ID is invalid")
+
     if options["accelerator_set"]:
-        return backend, options["accelerator"], True, ssh_host
+        return backend, options["accelerator"], True, ssh_host, checkpoint, workspace_id
     if "CLOUDMAKE_GPU" in os.environ:
-        return backend, os.environ["CLOUDMAKE_GPU"], True, ssh_host
+        return backend, os.environ["CLOUDMAKE_GPU"], True, ssh_host, checkpoint, workspace_id
     for config in (project_config, shared_config, global_config):
         if "accelerator" in config:
             if backend not in GPU_BACKENDS:
-                return backend, None, False, ssh_host
+                return backend, None, False, ssh_host, checkpoint, workspace_id
             value = config["accelerator"]
             if not isinstance(value, str):
                 raise UsageError("configured accelerator must be a string")
-            return backend, value, True, ssh_host
-    return backend, None, False, ssh_host
+            return backend, value, True, ssh_host, checkpoint, workspace_id
+    return backend, None, False, ssh_host, checkpoint, workspace_id
 
 
 def validate_project(project: Path) -> Path:
@@ -635,6 +980,7 @@ def engine_command(
     state_home: Path,
     cache_home: Path,
     key: str,
+    workspace_id: str,
     target: str,
     assignments: list[str],
     retry_seconds: int | None,
@@ -642,6 +988,7 @@ def engine_command(
     remote_target: str | None = None,
     remote_collect_dir: str | None = None,
     run_id: str | None = None,
+    checkpoint: bool = False,
     colab_session: str | None = None,
     operation_state: Path | None = None,
 ) -> int:
@@ -654,6 +1001,9 @@ def engine_command(
         f"CLOUDMAKE_PROJECT_ROOT={project}",
         f"PROJECT={project.name}",
         f"PROJECT_SLUG={project_slug(project, key)}",
+        f"CLOUDMAKE_PROJECT_KEY={key}",
+        f"CLOUDMAKE_WORKSPACE_ID={workspace_id}",
+        f"CLOUDMAKE_CHECKPOINT={1 if checkpoint else 0}",
         "PROJECT_MAKEFILE=Makefile",
         f"ARTIFACT_DIR={project / 'artifacts'}",
         f"CLOUDMAKE_STATE_ROOT={state_home / 'projects' / key}",
@@ -679,6 +1029,8 @@ def engine_command(
         variables.append("CLOUDMAKE_VERBOSE=1")
     if backend == "host-ssh" and ssh_host is not None:
         variables.append(f"SSH_HOST={ssh_host}")
+    if workspace_id != key:
+        variables.append("CLOUDMAKE_ADOPT=1")
     if accelerator_set:
         variables.append(
             f"CLOUDMAKE_CONTEXT_ACCELERATOR={accelerator or 'cpu'}"
@@ -725,6 +1077,24 @@ def persist_invocation_accelerator(
     atomic_json(path, saved)
     print(
         f"[cloudmake] selected accelerator={accelerator or 'cpu'} for "
+        f"project={project.name}; subsequent targets reuse this selection.",
+        flush=True,
+    )
+
+
+def persist_invocation_checkpoint(
+    *, project: Path, config_home: Path, key: str, enabled: bool, mode: str
+) -> None:
+    path = config_home / "projects" / f"{key}.json"
+    saved = load_json(path)
+    saved["persistent_workspace"] = enabled
+    saved["checkpoint"] = enabled
+    if enabled and mode == "checkpoint":
+        saved.setdefault("workspace_id", key)
+    saved["project"] = os.fspath(project)
+    atomic_json(path, saved)
+    print(
+        f"[cloudmake] {persistence_selection_note(enabled, mode)} for "
         f"project={project.name}; subsequent targets reuse this selection.",
         flush=True,
     )
@@ -812,6 +1182,9 @@ def run(arguments: list[str]) -> int:
     key = project_key(project)
     action = options["action"]
 
+    if options["force"] and action != "workspace":
+        raise UsageError("--force is valid only with --workspace purge")
+
     if retry_seconds is not None and action not in {None, "collect", "start"}:
         raise UsageError("--retry-for is valid only with --start, a project target, or --collect")
 
@@ -830,6 +1203,21 @@ def run(arguments: list[str]) -> int:
             raise UsageError("--history does not accept arguments")
         show_history(state_home, key)
         return 0
+    if action == "workspaces":
+        if positional:
+            raise UsageError("--workspaces does not accept arguments")
+        show_workspaces(state_home)
+        return 0
+    if action == "workspace":
+        return manage_workspace(
+            project=project,
+            project_id=key,
+            config_home=config_home,
+            state_home=state_home,
+            cache_home=cache_home,
+            options=options,
+            positional=positional,
+        )
     if action == "host-templates":
         if positional:
             raise UsageError("--host-templates does not accept arguments")
@@ -845,6 +1233,11 @@ def run(arguments: list[str]) -> int:
             raise UsageError("--use accepts its backend as an option value only")
         if options["backend"] is not None:
             raise UsageError("-b/--backend cannot be combined with --use")
+        if options["global"] and options["checkpoint"] is not None:
+            raise UsageError(
+                "persistent workspaces must be enabled or disabled per project, "
+                "not with --global"
+            )
         backend = options["use_backend"]
         accelerator_set = options["accelerator_set"]
         accelerator = options["accelerator"]
@@ -862,6 +1255,19 @@ def run(arguments: list[str]) -> int:
         saved = load_json(path)
         global_config = load_json(config_home / "config.json")
         project_config = saved if not options["global"] else {}
+        configured_persistence: Any = saved.get(
+            "persistent_workspace", saved.get("checkpoint", False)
+        )
+        if not isinstance(configured_persistence, bool):
+            raise UsageError(
+                "configured persistent-workspace selection must be true or false"
+            )
+        selected_persistence = (
+            options["checkpoint"]
+            if options["checkpoint"] is not None
+            else configured_persistence
+        )
+        persistence_mode = validate_persistence(backend, selected_persistence)
         ssh_host = (
             resolve_ssh_host(options, project_config, global_config)
             if backend == "host-ssh"
@@ -888,6 +1294,15 @@ def run(arguments: list[str]) -> int:
             saved["host"] = ssh_host
         if selected_colab_session is not None:
             saved["colab_session"] = selected_colab_session
+        if options["checkpoint"] is not None:
+            saved["persistent_workspace"] = options["checkpoint"]
+            saved["checkpoint"] = options["checkpoint"]
+            if (
+                options["checkpoint"]
+                and persistence_mode == "checkpoint"
+                and not options["global"]
+            ):
+                saved.setdefault("workspace_id", key)
         if not options["global"]:
             saved["project"] = os.fspath(project)
         atomic_json(path, saved)
@@ -901,24 +1316,66 @@ def run(arguments: list[str]) -> int:
             if selected_colab_session is not None
             else ""
         )
+        checkpoint_note = (
+            f", {persistence_selection_note(options['checkpoint'], persistence_mode)}"
+            if options["checkpoint"] is not None
+            else ""
+        )
         print(
             f"Saved {scope} backend={backend}{host_note}{accelerator_note}"
-            f"{session_note}; "
+            f"{session_note}{checkpoint_note}; "
             "subsequent targets reuse this selection."
         )
+        if (
+            options["checkpoint"]
+            and persistence_mode == "checkpoint"
+            and not options["global"]
+        ):
+            record_accelerator = saved.get(
+                "accelerator", global_config.get("accelerator", "")
+            )
+            state_root = state_home / "projects" / key
+            update_workspace_record(
+                state_home=state_home,
+                workspace_id=str(saved["workspace_id"]),
+                project=project,
+                backend=backend,
+                accelerator=(
+                    str(record_accelerator) if isinstance(record_accelerator, str) else None
+                ),
+                session=colab_session_name(project, key, state_root, config_home),
+            )
         return 0
     if options["global"]:
         raise UsageError("--global is valid only with --use")
 
-    backend, accelerator, accelerator_set, ssh_host = resolve_preferences(
-        project, options, config_home, key
-    )
+    (
+        backend,
+        accelerator,
+        accelerator_set,
+        ssh_host,
+        checkpoint,
+        workspace_id,
+    ) = resolve_preferences(project, options, config_home, key)
     if options["host"] is not None and backend != "host-ssh":
         raise UsageError("--host is valid only with the ssh backend")
     if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
-        raise UsageError("accelerator names may contain only letters, numbers, dot, dash, and underscore")
+        raise UsageError(
+            "accelerator names may contain only letters, numbers, dot, dash, and underscore"
+        )
     if accelerator and backend not in GPU_BACKENDS:
         raise UsageError(f"backend {backend!r} does not support accelerator requests")
+    persistence_mode = validate_persistence(backend, checkpoint)
+    managed_checkpoint = checkpoint and persistence_mode == "checkpoint"
+    if action == "environment" and backend not in {"local", "colab-notebook"}:
+        raise UsageError(
+            f"backend {backend!r} does not yet provide an execution-environment profile"
+        )
+    if options["checkpoint"] is not None and action not in {None, "collect", "start"}:
+        raise UsageError(
+            "--persist/--no-persist is valid only with --use, --start, "
+            "a project target, or --collect"
+        )
     if retry_seconds is not None and backend not in CAPACITY_RETRY_BACKENDS:
         raise UsageError(
             f"backend {backend!r} does not classify retryable allocation capacity"
@@ -961,7 +1418,7 @@ def run(arguments: list[str]) -> int:
     if (
         options["accelerator_set"]
         and options["backend"] is None
-        and engine_target in {"dispatch", "collect", "start"}
+        and engine_target in {"dispatch", "collect", "start", "environment"}
     ):
         persist_invocation_accelerator(
             project=project,
@@ -969,13 +1426,45 @@ def run(arguments: list[str]) -> int:
             key=key,
             accelerator=accelerator,
         )
-
+    if (
+        options["checkpoint"] is not None
+        and engine_target in {"dispatch", "collect", "start"}
+    ):
+        persist_invocation_checkpoint(
+            project=project,
+            config_home=config_home,
+            key=key,
+            enabled=checkpoint,
+            mode=persistence_mode,
+        )
     state_root = state_home / "projects" / key
     colab_session = (
         colab_session_name(project, key, state_root, config_home)
         if backend == "colab-notebook"
         else None
     )
+    if checkpoint and engine_target in {"dispatch", "collect", "start"}:
+        if persistence_mode == "native":
+            print(
+                f"[cloudmake] persistence=native backend={backend} "
+                "checkpoint-transfer=no",
+                flush=True,
+            )
+        else:
+            print(
+                f"[cloudmake] persistence=checkpoint backend={backend} "
+                f"workspace={workspace_id}",
+                flush=True,
+            )
+    if managed_checkpoint:
+        update_workspace_record(
+            state_home=state_home,
+            workspace_id=workspace_id,
+            project=project,
+            backend=backend,
+            accelerator=accelerator,
+            session=colab_session,
+        )
     if engine_target not in {"dispatch", "collect"}:
         operation_allocation_path = (
             state_root / "operations" / f".{uuid.uuid4().hex}.allocation.json"
@@ -1000,12 +1489,14 @@ def run(arguments: list[str]) -> int:
             state_home=state_home,
             cache_home=cache_home,
             key=key,
+            workspace_id=workspace_id,
             target=engine_target,
             assignments=assignments,
             retry_seconds=retry_seconds,
             allocation_result=operation_allocation_path,
             remote_target=remote_target,
             remote_collect_dir=remote_collect_dir,
+            checkpoint=managed_checkpoint,
             colab_session=colab_session,
             operation_state=operation_state,
         )
@@ -1024,6 +1515,16 @@ def run(arguments: list[str]) -> int:
             in {"readiness_deadline_exceeded", "readiness_deadline_cleanup_failed"}
         ):
             exit_code = 75
+        if managed_checkpoint:
+            update_workspace_record(
+                state_home=state_home,
+                workspace_id=workspace_id,
+                project=project,
+                backend=backend,
+                accelerator=accelerator,
+                session=colab_session,
+                receipts=checkpoint_receipts(state_root, "operation"),
+            )
         if (
             exit_code == 0
             and engine_target == "start"
@@ -1046,6 +1547,7 @@ def run(arguments: list[str]) -> int:
     )
     if allocation_path is not None:
         allocation_path.unlink(missing_ok=True)
+
     record_path = runs / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{run_id}.json"
     record: dict[str, Any] = {
         "schema": 1,
@@ -1060,6 +1562,12 @@ def run(arguments: list[str]) -> int:
         "collect_directory": remote_collect_dir,
         "started_at": utc_timestamp(),
         "status": "running",
+        "checkpoint": {"enabled": managed_checkpoint},
+        "persistent_workspace": {
+            "enabled": checkpoint,
+            "mode": persistence_mode if checkpoint else "disabled",
+            "workspace_id": workspace_id if managed_checkpoint else None,
+        },
     }
     if ssh_host is not None:
         record["host"] = ssh_host
@@ -1103,6 +1611,7 @@ def run(arguments: list[str]) -> int:
                 state_home=state_home,
                 cache_home=cache_home,
                 key=key,
+                workspace_id=workspace_id,
                 target=engine_target,
                 assignments=assignments,
                 retry_seconds=retry_seconds,
@@ -1110,6 +1619,7 @@ def run(arguments: list[str]) -> int:
                 remote_target=remote_target,
                 remote_collect_dir=remote_collect_dir,
                 run_id=run_id,
+                checkpoint=managed_checkpoint,
                 colab_session=colab_session,
                 operation_state=operation_state,
             )
@@ -1119,6 +1629,10 @@ def run(arguments: list[str]) -> int:
             if receipt is not None:
                 record["allocation"] = receipt
             allocation_path.unlink(missing_ok=True)
+        if managed_checkpoint:
+            record["checkpoint"]["operations"] = checkpoint_receipts(
+                state_root, run_id
+            )
         record.update(status="interrupted", finished_at=utc_timestamp())
         atomic_json(record_path, record)
         atomic_json(runs / "latest.json", record)
@@ -1131,6 +1645,18 @@ def run(arguments: list[str]) -> int:
         exit_code = allocation_exit_code(receipt, exit_code)
         allocation_path.unlink(missing_ok=True)
 
+    if managed_checkpoint:
+        record["checkpoint"]["operations"] = checkpoint_receipts(state_root, run_id)
+        record["persistent_workspace"]["operations"] = record["checkpoint"]["operations"]
+        update_workspace_record(
+            state_home=state_home,
+            workspace_id=workspace_id,
+            project=project,
+            backend=backend,
+            accelerator=accelerator,
+            session=colab_session,
+            receipts=record["checkpoint"]["operations"],
+        )
     lifecycle = load_json(operation_state) if operation_state.is_file() else {}
     if (
         exit_code != 0

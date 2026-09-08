@@ -99,6 +99,10 @@ Project-generated files remain wherever the project Makefile places them. A
 reusable backend retains them while its synchronized project workspace remains
 valid; a batch backend starts from a fresh source snapshot.
 
+Preserving that workspace after an ephemeral VM disappears is a distinct
+Cloudmake 2.0 capability under development. Its storage-neutral contract and
+failure rules are documented in [Stateful workspaces](stateful-workspaces.md).
+
 ## Readiness checks
 
 Every compute operation has two readiness stages:
@@ -122,29 +126,19 @@ provider-generated SSH configuration has expired, cloudmake refreshes it once
 after a failed connection. Host SSH configuration is user-managed, so Cloudmake
 never rewrites or regenerates it.
 
-Colab polls its non-mutating remote-readiness probe until a configurable,
-monotonic deadline. Polling happens before source mutation or target submission
-and reports one waiting message plus a final outcome rather than flooding the
-terminal. A never-ready session is automatically released only when the current
-invocation successfully created it. A pre-existing unreachable session is not
-stopped, recreated, or adopted because ownership is ambiguous. In either case
-the requested target remains `not_submitted`, and Cloudmake reports that retrying
-the command is safe.
+After Colab allocation, Cloudmake polls only its non-mutating remote-readiness
+probe until `COLAB_READY_TIMEOUT` (120 seconds by default). Individual provider
+calls are bounded by `COLAB_READY_PROBE_TIMEOUT` (15 seconds), and retries wait
+`COLAB_READY_POLL_SECONDS` (3 seconds). Progress is reported once when waiting
+begins and once on recovery or expiry rather than once per failed probe.
 
-The default Colab session is scoped to stable local project identity. Explicit
-`COLAB_SESSION` values are unchanged; projects with existing local state under
-the old `cuda-build` default retain it. Operators persist a deliberate migration
-with `COLAB_SESSION=NAME cloudmake --use colab`; a normal environment override
-remains unpersisted. The legacy session should first be inspected with
-`COLAB_SESSION=cuda-build cloudmake -b colab --status` and stopped explicitly
-only when no longer needed. Once reachable, a workspace with the expected owner
-is classified as the same runtime. A successful remote probe that reports missing
-ownership or source-fingerprint control state establishes fresh/reset and forces
-a complete stateless source replacement. A transport/download failure does not
-prove absence: Cloudmake records the workspace as unreachable/ambiguous and
-stops before synchronization. A foreign owner is refused unless explicitly
-adopted. Because v0.9 has no durable workspace layer, reset warnings explicitly
-note that runtime-local generated state may be gone.
+If a session created by the current invocation never becomes ready, Cloudmake
+can prove both resource provenance and absence of target submission, so it
+releases that session. A pre-existing unreachable session is never stopped,
+recreated, or adopted automatically because ownership cannot be checked through
+the failed connection. In both cases the requested target is known not submitted
+and the diagnostic reports that retrying is safe. Readiness polling is never
+applied to a project target or preparation target.
 
 Cloudmake does not blindly retry target execution or a mutating notebook
 submission. An ambiguous failure may already have started work, so automatic
@@ -166,6 +160,34 @@ attempts. Its `allocation` field records the attempt count, final outcome, and
 capacity classification when applicable. Allocation success then enters the
 ordinary start/sync/execute path exactly once.
 
+The default native Colab session is the readable project slug plus eight
+hexadecimal characters from the stable project identity. Unrelated project
+paths therefore do not contend for `cuda-build`. An explicitly supplied
+`COLAB_SESSION` is preserved exactly. If the launcher finds this project's
+existing local state for the old `cuda-build` default, it continues using that
+legacy resource and prints a migration notice rather than silently abandoning
+it.
+
+Colab's CLI does not currently expose a stable runtime-instance identifier that
+Cloudmake can rely on. Cloudmake therefore treats the remote owner and source
+fingerprint control records as the observable runtime identity. A non-mutating
+remote probe must positively report a record as absent before its loss is
+accepted as a fresh/reset lifecycle event. A record reported as present but
+unreadable is an infrastructure ambiguity: Cloudmake refuses synchronization,
+leaves the target unsubmitted, and records a safe-retry failure. Confirmed loss
+under a still-listed session invalidates cached fingerprint assumptions, forces
+a full source upload, and warns that provider-local generated state may be gone.
+A matching owner and fingerprint denotes the same reachable workspace; a
+different owner is foreign; an unreachable runtime remains ownership-ambiguous.
+
+Projects that need idempotent runtime-local prerequisites may declare
+`COLAB_SESSION_PREPARE_TARGET`. It runs only after a fresh/reset runtime or when
+its preparation receipt is missing or changed. The receipt is bound to the
+preparation target and synchronized source fingerprint and is committed only
+after a successful result receipt. Receipt upload and remote-install failures
+are recorded separately. A preparation disconnect is not retried; the requested
+target remains unsubmitted.
+
 Colab target execution separates an expected project failure from an
 infrastructure failure. A completed notebook records the project target and its
 Make exit status in an atomic result receipt. A nonzero status preserves all
@@ -176,13 +198,6 @@ infrastructure failure. Unexpected notebook exceptions continue to fail notebook
 execution normally so their traceback and provider diagnostics remain visible.
 In both cases, the launcher retains the executed notebook location and writes
 the normal provenance record; it never retries the project target automatically.
-
-Colab provenance adds the current phase, normalized provider state, runtime
-classification, current-invocation creation evidence, target-submission state,
-and retry-safety flag. `not_submitted` is safe to retry; `ambiguous` means the
-execution request crossed the provider boundary and must be investigated before
-manual repetition. Messages include the exact safe status command when one is
-available and never include provider credentials.
 
 Provider-specific status is retained and followed by one normalized state:
 
@@ -200,9 +215,11 @@ nor a failed terminal state; it is not silently treated as success.
 
 Launcher executions retain private local JSON provenance under the project's
 external Cloudmake state directory. Records include the source and collected
-artifact fingerprints, target, backend, resource, timestamps, and result. Make
-assignment values are hashed rather than copied. Use `cloudmake --history` to
-locate and summarize recent records.
+artifact fingerprints, target, backend, resource, timestamps, and result. Colab
+records also carry `phase`, `provider_state`, `runtime_state`,
+`session_created`, `target_submission`, `retry_safe`, and a stable
+`failure_code` when applicable. Make assignment values are hashed rather than
+copied. Use `cloudmake --history` to locate and summarize recent records.
 
 ## Recovery checklist
 

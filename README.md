@@ -143,7 +143,7 @@ The detailed exclusions follow from those principles:
 | Prescribe source, build, output, or dependency directory layouts | The project. Cloudmake preserves relative paths. |
 | Install compilers, CUDA toolchains, libraries, or project dependencies | The selected cloud image or the project's own setup rules. Cloudmake checks only its documented execution prerequisites. |
 | Clone, commit, push, or otherwise manage project source control | The developer. The local working tree, including uncommitted files, remains authoritative. |
-| Manage provider credentials or act as a secrets manager | Official provider clients and the developer's secret-management mechanism. Selected project files are transferred, so secrets must be excluded from source synchronization. |
+| Take custody of provider or project credentials, or act as a general secrets manager | Official provider clients and the developer's secret-management mechanism. Cloudmake may manage only its own opaque persistent-workspace encryption key. Selected project files are transferred, so secrets must be excluded from source synchronization. |
 | Decide which project output is an artifact | The project chooses and populates a directory; `--collect` only retrieves the explicitly selected directory. |
 | Erase differences between reusable sessions, batch jobs, and SSH VMs | Each backend retains its real lifecycle and exposes it consistently through Cloudmake operations. |
 | Guarantee free compute, a particular accelerator, runtime duration, persistence, capacity, or price | The cloud provider's current policy, quota, image, and availability. |
@@ -156,6 +156,22 @@ of changing provider capabilities or expanding Cloudmake into any of these
 roles.
 
 ## Design
+
+Cloudmake 2.0 implements opt-in persistent workspaces that preserve
+project-generated state across ephemeral accelerator VMs without changing the
+project's Make interface.
+The storage-neutral lifecycle, safety boundary, and acceptance gate are recorded
+in [Stateful workspaces](docs/stateful-workspaces.md). When persistence is not
+enabled, state still lasts only as long as the selected reusable VM and its
+workspace survive.
+
+This is the first step toward a remote-workstation experience built from
+replaceable cloud compute. Cloudmake 2.0 adds durable mutable workspaces while
+retaining native Make execution. Cloudmake 2.1 is planned to add one managed
+non-native runner—registry-backed OCI images with CDI device requirements—so
+immutable tools and mutable project state remain separate. Backend, runner,
+persistence, and source acquisition are independent axes; the frozen boundary
+is documented in [Execution environments and OCI roadmap](docs/execution-environments.md).
 
 ### Tool repository and project repository are separate
 
@@ -215,11 +231,13 @@ can support:
 - The local backend transfers nothing. It invokes the working tree's Makefile
   directly, so the project's existing dependency graph and outputs are already
   available without a synchronization boundary.
-- SSH backends use `rsync`, transferring changed source while deleting stale
-  synchronized paths from the remote project workspace.
+- SSH backends use `rsync` to transfer changed source. A manifest-derived
+  deletion plan removes only stale synchronized paths, retaining unrelated
+  project-generated workspace data.
 - A reusable Colab session compares the source fingerprint and skips the source
   archive upload entirely when the selected tree is unchanged. When it changes,
-  Colab receives a complete validated snapshot because its native file API does
+  Colab receives a complete validated source snapshot and reconciles it with
+  manifest-classified generated workspace data because its native file API does
   not expose an rsync-like delta transport.
 - Kaggle starts a fresh batch VM for every submitted target, so remote
   incremental synchronization is impossible. Cloudmake still reuses the local
@@ -351,6 +369,13 @@ for a selected host. Source archives and private notebook versions must not be
 treated as secret storage. See the
 [security model](docs/security.md) for the complete trust boundary.
 
+An opt-in encrypted persistent workspace has one additional piece of Cloudmake-owned
+state: an automatically generated per-workspace repository key. It is not a user
+credential and is never project configuration. Cloudmake keeps it in macOS
+Keychain or Linux Secret Service, transports only a one-use encrypted envelope,
+and never prints or asks the user to remember it. Google Drive authorization
+continues to belong exclusively to the official Colab CLI.
+
 ### Backend naming
 
 Short names are for people; canonical names describe the transport unambiguously:
@@ -385,20 +410,14 @@ drivers the project itself requires.
 
 ### 2. Install cloudmake
 
-The stable stateless base release is Cloudmake 1.0.0. Durable workspaces,
-checkpoints, and cross-VM restoration are reserved for the stateful 2.0 series.
-Install the stateless release's launcher from the versioned tool checkout:
+Install the launcher from the tool checkout:
 
 ```sh
-git clone --branch v1.0.0 --depth 1 https://github.com/jianwen-zhu/cloudmake.git
+git clone <cloudmake-repository-url>
 cd cloudmake
 make install
-~/.local/bin/cloudmake --version
+cloudmake --version
 ```
-
-The final command must print `cloudmake 1.0.0`. For an immutable deployment,
-also verify that the checkout's `HEAD` is the published 1.0.0 release commit
-listed with the release artifact and tag.
 
 Installation creates an unprivileged launcher under `~/.local/bin/cloudmake`
 and installs its self-contained runtime under `~/.local/libexec/cloudmake/`.
@@ -542,6 +561,7 @@ Common options:
 | `--host HOST` | Select a user-managed OpenSSH alias for the `ssh` backend. |
 | `--gpu`, `--gpu=TYPE` | Select the default or a named GPU where supported; save it for the selected project unless `-b` is an explicit one-off override. |
 | `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
+| `--persist`, `--no-persist` | Enable or disable the selected backend's persistent-workspace mode and save the choice for later targets. The older `--checkpoint` and `--no-checkpoint` spellings remain compatible aliases. |
 | `--retry-for DURATION` | Retry only positively classified temporary allocation capacity, for example `30s`, `15m`, or `2h`. |
 | `--verbose` | Show provider and transfer commands. |
 
@@ -550,10 +570,15 @@ Cloud operation options:
 | Option | Behavior |
 | --- | --- |
 | `--use BACKEND` | Save the backend and applicable host or accelerator preference. |
+| `--workspaces` | List managed checkpoint workspaces known on this computer without contacting a provider. Native backend workspaces remain provider-owned and are not listed. |
+| `--workspace show [ID]` | Show locally recorded metadata for the selected or named managed checkpoint workspace. |
+| `--workspace attach ID` | Attach the current project to an existing locally known managed checkpoint workspace. |
+| `--force --workspace purge ID` | Permanently delete the workspace's Drive repository and Cloudmake-owned local key, then detach it from local projects. |
 | `--start` | Allocate or wake a reusable backend when applicable. |
 | `--sync` | Synchronize source without running a project target. |
 | `--sync-dry-run` | Preview source changes without contacting the provider. |
 | `--status` | Show provider and session/job status. |
+| `--environment` | Record observed machine, privilege, filesystem, namespace, device, and accelerator facts for the selected local or Colab environment. |
 | `--fetch` | Retrieve the latest prepared output. |
 | `--collect DIR TARGET` | Run any project target, collect project-relative `DIR`, and fetch it. |
 | `--open` | Open the provider's notebook or browser interface. |
@@ -603,7 +628,9 @@ cloudmake benchmark SIZE=small
 It requires only a readable root `Makefile` and GNU Make or a compatible Make
 implementation. Project targets run directly in the selected project directory.
 `--start`, `--sync`, `--sync-dry-run`, `--status`, and `--stop` report their local
-no-op or readiness semantics; there is no provider interface, separate shell, or fetch operation.
+no-op or readiness semantics. `--environment` characterizes the local machine
+using the same vocabulary as Colab. There is no provider interface, separate
+shell, or fetch operation.
 Use `--collect DIR TARGET` when a uniform `artifacts/` materialization is useful
 locally as well as remotely.
 
@@ -631,50 +658,14 @@ Prerequisites:
    colab sessions
    ```
 
+Persistent workspaces are optional. They additionally require
+OpenSSL and a local OS credential store: macOS Keychain on macOS, or
+`secret-tool` backed by Secret Service on Linux. Cloudmake checks these local
+facilities before contacting Colab when persistence is selected.
+
 Cloudmake uses `colab new`, `sessions`, `upload`, `download`, `exec`, `url`, and
 `stop`. The source is fingerprinted before upload. An unchanged tree reuses the
 remote source and persistent build directory in the named session.
-
-Unless `COLAB_SESSION` is set explicitly, the launcher derives a readable,
-collision-resistant session name from the local project identity. Projects
-with existing v0.9 local state under the former `cuda-build` default continue
-using that attributable session rather than silently abandoning it. To select
-and persist a replacement for future invocations, first inspect the legacy
-session and release it only after confirming it is no longer needed:
-
-```sh
-COLAB_SESSION=cuda-build cloudmake -b colab --status
-COLAB_SESSION=cuda-build cloudmake -b colab --stop
-```
-
-Then save the replacement:
-
-```sh
-COLAB_SESSION=PROJECT-NAME cloudmake --use colab
-```
-
-An ordinary `COLAB_SESSION=NAME cloudmake TARGET` remains an exact
-environment-scoped override and does not change saved preferences.
-
-New or waking sessions are polled with a non-mutating prerequisite probe before
-source upload or target submission. `COLAB_READY_TIMEOUT` (default `120`),
-`COLAB_READY_POLL_SECONDS` (default `3`), and
-`COLAB_READY_PROBE_TIMEOUT` (default `15`) tune the bounded wait. If a session
-created by the current invocation never becomes ready, Cloudmake releases it.
-An unreachable pre-existing session is left untouched because ownership cannot
-be verified. In both cases the requested project target was not submitted and
-is safe to retry.
-
-Colab sessions are reusable but not durable. If remote ownership or fingerprint
-control state is positively confirmed absent, Cloudmake treats the runtime as
-fresh/reset, warns that runtime-local generated files may be gone, and performs
-a full stateless source sync. A failed or inconclusive control-state read stops
-before synchronization. Projects that need repeatable session setup may declare an
-idempotent Make target with `COLAB_SESSION_PREPARE_TARGET=TARGET`; it runs after
-a fresh/reset sync and is skipped while its source-bound session receipt remains
-valid. A source change conservatively runs preparation again.
-The retry boundary and provider-identity limitation are detailed in the
-[Colab session resilience design](docs/colab-session-resilience.md).
 
 For a normal nonzero project Make result, the notebook preserves the complete
 Make stdout/stderr and writes a small result receipt instead of raising a Python
@@ -717,6 +708,9 @@ For idempotent setup that must be restored after Colab replaces a runtime, a
 project may opt in with
 `COLAB_SESSION_PREPARE_TARGET=prepare-session cloudmake PROJECT_TARGET`.
 Cloudmake records successful preparation in the runtime and skips it on reuse.
+The receipt is bound to the synchronized source fingerprint, so source changes
+rerun the declared idempotent preparation target. A failed receipt transfer
+never permits the requested project target to start.
 See the [project contract](docs/project-contract.md) before enabling the hook.
 
 Accelerator availability, runtime duration, and usage limits are dynamic and are
@@ -729,6 +723,147 @@ cloudmake -b colab --stop
 
 The CLI keeps its own authentication and session information in the user's Colab
 CLI configuration; cloudmake does not copy those tokens.
+
+Inspect the selected VM:
+
+```sh
+cloudmake --environment
+```
+
+This starts or reuses the selected session, but does not synchronize or execute
+the project. It reports observed machine, privilege, filesystem, namespace,
+device, and accelerator facts and retains a machine-readable profile.
+Cloudmake 2.0 does not infer application-format compatibility from those facts
+or from an installed client executable. Observations are not provider guarantees
+and may change on a replacement VM. The local backend supports the same command
+for comparison.
+
+#### Persistent workspace modes
+
+Persistence is off by default. Unless a project has explicitly selected it,
+every backend retains its pre-2.0 execution path and the project receives
+exactly the same target and user-supplied Make assignments as before.
+Persistence can be enabled only by the user on the command line or through the
+resulting local per-project Cloudmake preference. A repository's shared
+`.cloudmake.json` and the global preference cannot enable it.
+
+The flag has an explicit backend-dependent implementation:
+
+| Backend | Persistence mode | `--persist` behavior |
+| --- | --- | --- |
+| `colab-notebook` | `checkpoint` | Restore and publish the encrypted Google Drive workspace described below. |
+| `local` | `native` | Use the existing local project tree; no checkpoint transfer occurs. |
+| `host-ssh` | `native` | Use the existing remote SSH workspace; Cloudmake does not copy it to another store. |
+| `codespaces-ssh` | `native` | Use the Codespace's `/workspaces` storage across stop/start while that Codespace exists. |
+| `lightning-studio-ssh` | `native` | Use the Studio's provider-persistent workspace while that Studio exists. |
+| `kaggle-notebook` | `unsupported` | Reject before provider contact because every target receives a fresh batch VM. |
+| `colab-ssh` | `unsupported` | Reject because this transport has no cross-VM checkpoint store for the ephemeral Colab VM. |
+
+Native mode is intentionally a Cloudmake data-movement no-op: it records and
+reports the selected durability model but adds no Drive mount, key, archive, or
+background copy. Provider deletion, expiry, quota, and retention policies still
+apply. Switching a project with persistence enabled to an unsupported backend
+requires an explicit `--no-persist`, preventing a silent loss of durability.
+`cloudmake --backends` reports the mode for every backend.
+
+#### Colab encrypted checkpoints
+
+Enable a persistent workspace once for a project whose generated state should
+survive replacement of an ephemeral Colab VM:
+
+```sh
+cloudmake --use colab --gpu=T4 --persist
+# bootstrap is a target supplied by this project's Makefile.
+cloudmake bootstrap
+cloudmake verify
+```
+
+After every successful project target, Cloudmake incrementally snapshots the
+persistent workspace into an encrypted restic repository under the user's own
+Google Drive. A newly started VM restores its latest snapshot before
+local source is reconciled; a reused VM keeps its existing workspace. Failed or
+ambiguous project targets do not publish a new snapshot. `--no-persist` turns
+the feature off for subsequent invocations without deleting existing snapshots.
+
+The persistence boundary matters for tool provisioning. On Colab, Cloudmake
+checkpoints only `/content/.cloud-build/workspace`; it does not capture `/usr`,
+`/usr/local`, `/opt`, a home directory outside that workspace, Docker's system
+layer store, drivers, services, or other VM state. A project-provided target
+called `bootstrap` or `provision` has no special persistence semantics. If it
+performs an ordinary system-wide installation, that installation disappears
+with the VM.
+
+For an expensive toolchain to survive VM replacement, the project's target must
+put its durable representation inside the managed workspace—for example a
+relocatable prefix, opaque tool/rootfs archive, or package/build cache. A fresh
+VM may then activate or load that payload and recreate ephemeral
+integration such as `PATH` settings. The running installation may be
+materialized elsewhere; the reusable payload must be inside the checkpoint
+boundary. Uploaded source links remain confined to the project. Links created
+by the remote project are checkpointed without being followed, including links
+used by package stores and extracted root filesystems. Special files
+remain rejected, and collection cannot follow an escaping link. Cloudmake
+deliberately does not rewrite installation commands or prescribe how a project
+provisions its tools.
+
+An existing project therefore runs through Cloudmake unmodified, and any state
+it already keeps in its project tree becomes durable automatically. Persistence
+cannot magically preserve an existing recipe that writes only to system
+directories. Such a project must add or wrap a project-owned provisioning
+recipe that emits a reusable payload to a relative path inside its tree. This
+is a condition for cross-VM persistence, not a new mandatory Cloudmake target.
+
+The active workspace stays on the VM's local disk. Cloudmake asks the official
+`colab drivemount` flow to mount Drive only while restoring or publishing, then
+verifies that Drive and the transient key material are gone before project Make
+runs. A fresh VM can require a foreground browser authorization; Cloudmake does
+not copy or automate the user's Google credentials. Mount readiness and
+idempotent key-destruction/unmount cleanup use bounded same-session retries;
+Cloudmake never recreates the VM or replays a project target to recover them.
+
+Checkpointing has fixed provider overhead in addition to transferring changed
+data: allocating the runtime, authorizing and mounting Drive on a fresh VM,
+installing the checkpoint helper, executing notebooks, and verifying the
+repository. It is intended for provisioning or build state whose reconstruction
+cost is materially larger than that overhead. For small workloads, leave
+persistence disabled.
+
+Cloudmake generates the repository key itself and stores it only in the local
+OS credential store. The VM generates an ephemeral transport key; the host
+uploads only RSA-OAEP ciphertext, and the VM decrypts it directly into restic's
+password pipe. The plaintext key is never placed in arguments, environment
+variables, notebooks, files, logs, provenance, project configuration, or source
+control. If secure storage, transport cleanup, or Drive unmount verification
+fails, the target is blocked as an infrastructure failure.
+
+Persistent-workspace history is recovery state for Cloudmake, not archival backup. Losing the
+local credential-store item makes existing snapshots unreadable, although the
+local source remains unaffected. The complete lifecycle and custody boundaries
+are documented in [Stateful workspaces](docs/stateful-workspaces.md) and the
+[Security model](docs/security.md).
+
+The 2.0 live acceptance gate has restored a 3.3 GB ORFS workspace into a
+replacement Colab VM, reused a previously completed floorplan without
+rebuilding it, completed placement, collected evidence, and published an
+incremental successor that added about 4.4 MB. Exact observations and the gate
+contract are recorded in [Stateful workspaces](docs/stateful-workspaces.md).
+
+Cloudmake imposes no fixed byte or file-count ceiling on persistent workspaces.
+Before restore it compares the snapshot's logical bytes and entry count with the
+actual free disk space and inodes reported by the allocated VM. Publication is
+then limited by the VM filesystem, the user's available Google Drive capacity,
+and provider quotas; those provider limits remain authoritative.
+
+Each persistent workspace has an opaque 24-character ID independent of the
+local project path. Cloudmake keeps a non-secret local registry containing its
+backend, requested accelerator, session name, latest known snapshot statistics,
+and the CPU, memory, disk, OS, and GPU properties last observed during a
+snapshot operation. `--workspace attach` allows a moved or newly cloned project
+to resume that durable state explicitly; attachment transfers the local mapping
+so one locally known project owns the workspace at a time. `--workspace purge`
+is deliberately destructive and therefore requires both the exact ID and `--force`. Listing,
+showing, and attaching do not contact Colab; purging uses a Colab runtime because
+the official Drive mount remains the only storage-authentication surface.
 
 ### Kaggle notebook backend
 
@@ -1105,10 +1240,7 @@ limits before extraction.
 Every project execution creates a private local provenance record containing the
 backend, remote resource, target, source fingerprint, result, and—when collected—
 an artifact fingerprint. Make-assignment names are recorded, but their values are
-stored only as hashes. Native Colab records additionally identify the lifecycle
-phase, normalized provider/runtime state, whether this invocation created the
-session, target-submission certainty, and retry safety. `cloudmake --history`
-shows the ten latest runs.
+stored only as hashes. `cloudmake --history` shows the ten latest runs.
 
 Cloudmake verifies workspace ownership before destructive synchronization,
 serializes concurrent mutations, reconciles saved sessions with live provider
@@ -1124,6 +1256,8 @@ documents before using private source or diagnosing a failure:
 - [Resilience and recovery](docs/resilience.md)
 - [Colab session resilience design](docs/colab-session-resilience.md)
 - [Security model](docs/security.md)
+- [Cloudmake 2.0 stateful-workspace design](docs/stateful-workspaces.md)
+- [Execution environments and OCI roadmap](docs/execution-environments.md)
 - [Project contract](docs/project-contract.md)
 - [Backend contract](docs/backend-contract.md)
 - [Security reporting](SECURITY.md)

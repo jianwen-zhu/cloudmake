@@ -1,8 +1,9 @@
 # Colab session resilience design (v1.0.0)
 
-This design applies specifically to the stateless v1.0.0 Colab notebook backend.
-It improves the safety of reusable live sessions without introducing durable
-workspaces, checkpoints, or cross-VM restoration.
+This document defines the stateless Colab resilience foundation introduced in
+v1.0.0. Cloudmake 2.0 retains these lifecycle and replay-safety guarantees and
+adds opt-in durable workspaces and cross-VM restoration as a separate layer; see
+[Stateful workspaces](stateful-workspaces.md).
 
 ## Session identity
 

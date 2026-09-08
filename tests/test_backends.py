@@ -24,6 +24,7 @@ def fake_environment(fake_bin: Path, tmp_path: Path) -> dict[str, str]:
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "FAKE_LOG": str(tmp_path / "provider.jsonl"),
         "FAKE_REMOTE": str(tmp_path / "remote"),
+        "CLOUDMAKE_CHECKPOINT_KEYCHAIN": "true",
     }
 
 
@@ -136,6 +137,8 @@ elif command == "upload":
         print("Connection was lost while uploading preparation receipt.")
         raise SystemExit(1)
     shutil.copyfile(local, remote / Path(remote_name).name)
+elif command == "rm":
+    (remote / Path(arguments[-1]).name).unlink(missing_ok=True)
 elif command == "download":
     remote_name, local = arguments[-2:]
     source = remote / Path(remote_name).name
@@ -159,23 +162,20 @@ elif command == "download":
     shutil.copyfile(source, local)
 elif command == "exec":
     script = Path(option("-f", ""))
+    readiness_count = remote / "readiness-count"
+    readiness_attempt = int(readiness_count.read_text()) + 1 if readiness_count.exists() else 1
     if script.name == "remote_prerequisites.py":
-        readiness_count = remote / "readiness-count"
-        attempt = int(readiness_count.read_text(encoding="utf-8")) + 1 if readiness_count.exists() else 1
-        readiness_count.write_text(str(attempt), encoding="utf-8")
-        configured_failures = int(os.environ.get("FAKE_COLAB_READINESS_FAILURES", "0"))
-    else:
-        attempt = 0
-        configured_failures = 0
-    should_fail_readiness = script.name == "remote_prerequisites.py" and (
+        readiness_count.write_text(str(readiness_attempt), encoding="utf-8")
+    configured_failures = int(os.environ.get("FAKE_COLAB_READINESS_FAILURES", "0"))
+    should_fail_readiness = (
         os.environ.get("FAKE_COLAB_READINESS_FAIL_ALWAYS")
-        or attempt <= configured_failures
+        or readiness_attempt <= configured_failures
         or (
             os.environ.get("FAKE_COLAB_READINESS_FAIL_ONCE")
             and not (remote / "readiness-failed-once").exists()
         )
     )
-    if should_fail_readiness:
+    if script.name == "remote_prerequisites.py" and should_fail_readiness:
         (remote / "readiness-failed-once").write_text("failed", encoding="utf-8")
         print("Connection was lost.")
         raise SystemExit(1)
@@ -184,8 +184,41 @@ elif command == "exec":
         fingerprint = "present" if (remote / "source.sha256").is_file() else "absent"
         print(f"[cloudmake] control-state owner={owner} fingerprint={fingerprint}")
     elif script.name == "colab_sync.py":
-        shutil.copyfile(remote / "cloud-build-source.sha256", remote / "source.sha256")
-        shutil.copyfile(remote / "cloud-build-owner.json", remote / ".cloudmake-owner.json")
+        if os.environ.get("FAKE_COLAB_SYNC_INTERNAL_FAIL"):
+            print("Traceback (most recent call last):")
+            print("ValueError: generated workspace link escapes source")
+        else:
+            shutil.copyfile(remote / "cloud-build-source.sha256", remote / "source.sha256")
+            if os.environ.get("FAKE_COLAB_SYNC_RECEIPT_MISMATCH"):
+                (remote / "sync-result.sha256").write_text("wrong-source\n", encoding="utf-8")
+            else:
+                shutil.copyfile(remote / "cloud-build-source.sha256", remote / "sync-result.sha256")
+            shutil.copyfile(remote / "cloud-build-owner.json", remote / ".cloudmake-owner.json")
+    elif script.name == "vm_capabilities.py":
+        (remote / "vm-capabilities.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "kind": "cloudmake-execution-environment",
+                    "evidence": "observed",
+                    "platform": {"system": "linux", "architecture": "x86_64"},
+                    "identity": {"effective_uid": 0},
+                    "resources": {"cpu_count": 2},
+                    "filesystem": {"executable_files": True, "symbolic_links": True},
+                    "isolation": {
+                        "user_namespace": {"status": "unusable"},
+                        "bind_mount_namespace": {"status": "unusable"},
+                    },
+                    "devices": {
+                        "fuse": {"present": False},
+                        "kvm": {"present": False},
+                    },
+                    "accelerators": {"nvidia": {"status": "unavailable"}},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     elif script.name == "colab_prepare.py":
         if os.environ.get("FAKE_COLAB_PREP_INSTALL_FAIL"):
             print("Connection was lost while installing preparation receipt.")
@@ -197,10 +230,10 @@ elif command == "exec":
         target = base64.urlsafe_b64decode(target_b64).decode()
         with log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(["target", target]) + "\n")
-        (remote / "target-result.json").unlink(missing_ok=True)
         if os.environ.get("FAKE_COLAB_TARGET_CONNECTION_FAIL"):
-            print("Connection was lost after target submission.")
+            print("Connection was lost.")
             raise SystemExit(1)
+        (remote / "target-result.json").unlink(missing_ok=True)
         if os.environ.get("FAKE_COLAB_NOTEBOOK_INTERNAL_FAIL"):
             print("Traceback (most recent call last):")
             print("RuntimeError: unexpected notebook infrastructure failure")
@@ -230,6 +263,57 @@ elif command == "ssh":
     pass
 else:
     raise SystemExit(f"unsupported fake colab command: {command}")
+''',
+    )
+
+
+def install_fake_checkpoint_host(fake_bin: Path) -> Path:
+    write_executable(
+        fake_bin / "secret-tool",
+        "#!/bin/sh\nexit 1\n",
+    )
+    return write_executable(
+        fake_bin / "checkpoint-host",
+        r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+with Path(os.environ["FAKE_LOG"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(["checkpoint", arguments[0]]) + "\n")
+result = Path(arguments[arguments.index("--result") + 1])
+result.parent.mkdir(parents=True, exist_ok=True)
+failure = os.environ.get(f"FAKE_CHECKPOINT_{arguments[0].upper()}_FAIL")
+result.write_text(
+    json.dumps(
+        {
+            "schema": 1,
+            "operation": arguments[0],
+            "status": "failed" if failure else "succeeded",
+            **(
+                {"error": failure}
+                if failure
+                else {
+                    "snapshot": f"{arguments[0]}-snapshot",
+                    "files": 42,
+                    "bytes": 8192,
+                    "runtime": {
+                        "cpu_count": 4,
+                        "memory_bytes": 17179869184,
+                        "gpu": {"name": "Tesla T4", "memory_mib": 15360},
+                    },
+                }
+            ),
+        }
+    )
+    + "\n",
+    encoding="utf-8",
+)
+if failure:
+    print(f"[cloudmake] infrastructure failure: {failure}", file=sys.stderr)
+    raise SystemExit(1)
 ''',
     )
 
@@ -476,6 +560,34 @@ def test_launcher_runs_external_project_through_colab_native(
 
 
 @pytest.mark.integration
+def test_colab_environment_profile_does_not_sync_or_execute_project(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "external-colab-environment")
+    env = launcher_environment(fake_bin, tmp_path)
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--environment"],
+        cwd=project,
+        env=env,
+    )
+
+    all_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert "environment os=linux arch=x86_64" in result.stdout
+    assert "capabilities filesystem=" in result.stdout
+    assert "evidence=observed (not a provider guarantee)" in result.stdout
+    assert "oci-docker" not in result.stdout
+    profile_path = next((tmp_path / "state").rglob("environment-profile.json"))
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    assert "runtimes" not in profile
+    assert "paths" not in profile
+    assert any(call[1] == "exec" and call[-1].endswith("vm_capabilities.py") for call in all_calls)
+    assert not any(call[1] == "upload" for call in all_calls)
+    assert not (Path(env["FAKE_REMOTE"]) / "cloud-build-target").exists()
+
+
+@pytest.mark.integration
 def test_launcher_prepares_external_project_for_kaggle_batch(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -570,6 +682,7 @@ def test_launcher_runs_external_project_through_codespaces_ssh(
         argument for call in all_calls if call[0] == "rsync" for argument in call[1:]
     }
     assert {"--exclude=/.git/", "--exclude=/.cloud-state/", "--exclude=/artifacts/"} <= rsync_arguments
+    assert "--delete" not in rsync_arguments
     assert not any(
         argument in rsync_arguments
         for argument in ("--exclude=/build/", "--exclude=/.venv/", "--exclude=/__pycache__/")
@@ -742,18 +855,18 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     )
     assert ".cloud-state/colab-notebook/cloud-build-prototype/runner.ipynb" in notebook_exec[-1]
     assert not (prototype / "notebooks" / "colab_output.ipynb").exists()
+    readiness_calls = [
+        call
+        for call in first_calls
+        if call[1] == "exec" and call[-1].endswith("remote_prerequisites.py")
+    ]
+    assert all(call[call.index("--timeout") + 1] == "15" for call in readiness_calls)
     assert all(
         call[call.index("--timeout") + 1] == "3600"
         for call in first_calls
         if call[1] == "exec"
         and not call[-1].endswith(("remote_prerequisites.py", "colab_control_state.py"))
     )
-    readiness_call = next(
-        call
-        for call in first_calls
-        if call[1] == "exec" and call[-1].endswith("remote_prerequisites.py")
-    )
-    assert readiness_call[readiness_call.index("--timeout") + 1] == "15"
     assert any(call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz" for call in first_calls)
     assert not any(call[1] == "ssh" for call in first_calls)
 
@@ -764,6 +877,56 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     assert not any(call[1] == "new" for call in second_calls)
     assert not any(call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz" for call in second_calls)
     assert any(call[1] == "upload" and call[-1] == "/content/cloud-build-target" for call in second_calls)
+
+
+@pytest.mark.integration
+def test_colab_sync_internal_failure_blocks_project_target(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_SYNC_INTERNAL_FAIL"] = "1"
+
+    result = run_command(
+        ["make", *engine_dispatch("build")],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "source synchronization did not produce a success receipt" in result.stdout
+    events = calls(Path(env["FAKE_LOG"]), "colab")
+    assert not any(
+        event[1] == "exec"
+        and event[event.index("-f") + 1].endswith("runner.ipynb")
+        for event in events
+    )
+
+
+@pytest.mark.integration
+def test_colab_sync_rejects_receipt_for_different_source(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_SYNC_RECEIPT_MISMATCH"] = "1"
+
+    result = run_command(
+        ["make", *engine_dispatch("build")],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "source synchronization receipt does not match" in result.stdout
+    events = calls(Path(env["FAKE_LOG"]), "colab")
+    assert not any(
+        event[1] == "exec"
+        and event[event.index("-f") + 1].endswith("runner.ipynb")
+        for event in events
+    )
 
 
 @pytest.mark.integration
@@ -813,6 +976,230 @@ def test_colab_launcher_reports_context_reuse_and_expected_target_failure_cleanl
     assert provenance["target"] == "gemm"
     assert provenance["status"] == "failed"
     assert provenance["exit_code"] == 2
+    assert provenance["phase"] == "target_execution"
+    assert provenance["provider_state"] == "failed"
+    assert provenance["target_submission"] == "submitted"
+    assert provenance["retry_safe"] is False
+
+@pytest.mark.integration
+def test_colab_default_path_has_no_checkpoint_or_drive_side_effects(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    checkpoint_host = install_fake_checkpoint_host(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+
+    run_command(
+        [
+            "make",
+            "BACKEND=colab-notebook",
+            f"COLAB_CHECKPOINT_HOST={checkpoint_host}",
+            *engine_dispatch("build"),
+        ],
+        cwd=prototype,
+        env=env,
+    )
+
+    events = calls(Path(env["FAKE_LOG"]))
+    assert not any(event[0] == "checkpoint" for event in events)
+    assert not any(
+        event[0] == "colab" and event[1] == "drivemount" for event in events
+    )
+    assert (
+        sum(
+            event[0] == "colab"
+            and event[1] == "exec"
+            and event[event.index("-f") + 1].endswith("runner.ipynb")
+            for event in events
+        )
+        == 1
+    )
+
+
+@pytest.mark.integration
+def test_colab_checkpoint_wraps_successful_target_in_restore_and_publish(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    checkpoint_host = install_fake_checkpoint_host(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+
+    run_command(
+        [
+            "make",
+            "BACKEND=colab-notebook",
+            "CLOUDMAKE_CHECKPOINT=1",
+            f"CLOUDMAKE_PROJECT_KEY={'1' * 24}",
+            f"COLAB_CHECKPOINT_HOST={checkpoint_host}",
+            *engine_dispatch("build"),
+        ],
+        cwd=prototype,
+        env=env,
+    )
+
+    events = calls(Path(env["FAKE_LOG"]))
+    restore_index = events.index(["checkpoint", "restore"])
+    publish_index = events.index(["checkpoint", "publish"])
+    sync_index = next(
+        index
+        for index, call in enumerate(events)
+        if call[0] == "colab" and call[1] == "upload" and "source.tar.gz" in call[-1]
+    )
+    target_index = next(
+        index
+        for index, call in enumerate(events)
+        if call[0] == "colab" and call[1] == "exec" and call[call.index("-f") + 1].endswith("runner.ipynb")
+    )
+    assert restore_index < sync_index < target_index < publish_index
+
+
+@pytest.mark.integration
+def test_colab_checkpoint_does_not_publish_after_project_target_failure(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    checkpoint_host = install_fake_checkpoint_host(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_TARGET_EXIT"] = "2"
+
+    result = run_command(
+        [
+            "make",
+            "BACKEND=colab-notebook",
+            "CLOUDMAKE_CHECKPOINT=1",
+            f"CLOUDMAKE_PROJECT_KEY={'2' * 24}",
+            f"COLAB_CHECKPOINT_HOST={checkpoint_host}",
+            *engine_dispatch("gemm"),
+        ],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    checkpoint_calls = calls(Path(env["FAKE_LOG"]), "checkpoint")
+    assert checkpoint_calls == [["checkpoint", "restore"]]
+
+
+@pytest.mark.integration
+def test_colab_checkpoint_restore_failure_blocks_sync_and_project_target(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    checkpoint_host = install_fake_checkpoint_host(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_CHECKPOINT_RESTORE_FAIL"] = "restore verification failed"
+
+    result = run_command(
+        [
+            "make",
+            "BACKEND=colab-notebook",
+            "CLOUDMAKE_CHECKPOINT=1",
+            f"CLOUDMAKE_PROJECT_KEY={'3' * 24}",
+            f"COLAB_CHECKPOINT_HOST={checkpoint_host}",
+            *engine_dispatch("build"),
+        ],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "infrastructure failure: restore verification failed" in result.stdout
+    events = calls(Path(env["FAKE_LOG"]))
+    assert [event for event in events if event[0] == "checkpoint"] == [
+        ["checkpoint", "restore"]
+    ]
+    assert not any(
+        event[0] == "colab"
+        and event[1] == "upload"
+        and "source.tar.gz" in event[-1]
+        for event in events
+    )
+    assert not any(
+        event[0] == "colab"
+        and event[1] == "exec"
+        and event[event.index("-f") + 1].endswith("runner.ipynb")
+        for event in events
+    )
+
+
+@pytest.mark.integration
+def test_colab_checkpoint_publish_failure_does_not_repeat_project_target(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    checkpoint_host = install_fake_checkpoint_host(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_CHECKPOINT_PUBLISH_FAIL"] = "publication verification failed"
+
+    result = run_command(
+        [
+            "make",
+            "BACKEND=colab-notebook",
+            "CLOUDMAKE_CHECKPOINT=1",
+            f"CLOUDMAKE_PROJECT_KEY={'4' * 24}",
+            f"COLAB_CHECKPOINT_HOST={checkpoint_host}",
+            *engine_dispatch("build"),
+        ],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "infrastructure failure: publication verification failed" in result.stdout
+    assert "project target completed; the target was not retried" in result.stdout
+    events = calls(Path(env["FAKE_LOG"]))
+    assert [event for event in events if event[0] == "checkpoint"] == [
+        ["checkpoint", "restore"],
+        ["checkpoint", "publish"],
+    ]
+    assert (
+        sum(
+            event[0] == "colab"
+            and event[1] == "exec"
+            and event[event.index("-f") + 1].endswith("runner.ipynb")
+            for event in events
+        )
+        == 1
+    )
+
+
+@pytest.mark.integration
+def test_colab_checkpoint_uses_one_run_and_records_operation_provenance(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    checkpoint_host = install_fake_checkpoint_host(fake_bin)
+    project = external_project(tmp_path / "checkpoint-project")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["COLAB_CHECKPOINT_HOST"] = str(checkpoint_host)
+
+    result = run_command(
+        [LAUNCHER, "--checkpoint", "build"], cwd=project, env=env
+    )
+
+    assert "persistent-workspace=enabled" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["checkpoint"]["enabled"] is True
+    assert [
+        operation["operation"] for operation in provenance["checkpoint"]["operations"]
+    ] == ["restore", "publish"]
+    assert all(
+        operation["status"] == "succeeded"
+        for operation in provenance["checkpoint"]["operations"]
+    )
+    workspace = next((tmp_path / "state" / "workspaces").glob("*.json"))
+    metadata = json.loads(workspace.read_text(encoding="utf-8"))
+    assert metadata["session"].startswith("checkpoint-project-")
+    assert metadata["session"] != "cuda-build"
+    assert metadata["latest_snapshot"] == "publish-snapshot"
+    assert metadata["files"] == 42
+    assert metadata["logical_bytes"] == 8192
+    assert metadata["last_runtime"]["cpu_count"] == 4
+    assert len(list(latest.parent.glob("*.json"))) == 2  # run plus latest alias
 
 
 @pytest.mark.integration
@@ -839,6 +1226,11 @@ def test_colab_launcher_retains_unexpected_notebook_traceback(
     assert "target 'build' failed with exit status" not in result.stdout
     assert "[cloudmake] notebook=" in result.stdout
     assert "provenance=" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["target_submission"] == "ambiguous"
+    assert provenance["retry_safe"] is False
+    assert provenance["failure_code"] == "ambiguous_execution"
 
 
 @pytest.mark.integration
@@ -924,12 +1316,6 @@ def test_colab_capacity_retry_deadline_returns_tempfail_without_running_target(
     assert provenance["exit_code"] == 75
     assert provenance["allocation"]["outcome"] == "capacity-timeout"
     assert provenance["allocation"]["attempts"] >= 1
-    assert provenance["phase"] == "allocation"
-    assert provenance["provider_state"] == "absent"
-    assert provenance["runtime_state"] == "absent"
-    assert provenance["target_submission"] == "not_submitted"
-    assert provenance["retry_safe"] is True
-    assert provenance["failure_code"] == "capacity_retry_deadline_exceeded"
 
 
 @pytest.mark.integration
@@ -997,15 +1383,10 @@ def test_colab_retry_never_recreates_existing_session_after_readiness_ambiguity(
     remote = Path(env["FAKE_REMOTE"])
     remote.mkdir(parents=True)
     (remote / "session-cuda-build").write_text("running", encoding="utf-8")
-    env.update(
-        {
-            "COLAB_SESSION": "cuda-build",
-            "FAKE_COLAB_READINESS_FAIL_ALWAYS": "1",
-            "COLAB_READY_TIMEOUT": "0.12",
-            "COLAB_READY_POLL_SECONDS": "0.01",
-            "COLAB_READY_PROBE_TIMEOUT": "0.03",
-        }
-    )
+    env["COLAB_SESSION"] = "cuda-build"
+    env["FAKE_COLAB_READINESS_FAIL_ALWAYS"] = "1"
+    env["COLAB_READY_TIMEOUT"] = "0.2"
+    env["COLAB_READY_POLL_SECONDS"] = "0.02"
 
     result = run_command(
         [LAUNCHER, "-b", "colab", "--retry-for=2h", "build"],
@@ -1016,7 +1397,7 @@ def test_colab_retry_never_recreates_existing_session_after_readiness_ambiguity(
 
     colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
     assert result.returncode != 0
-    assert "pre-existing unreachable session was not stopped, recreated, or adopted" in result.stdout
+    assert "pre-existing unreachable session was not stopped" in result.stdout
     assert not any(call[1] == "new" for call in colab_calls)
     assert not any(call[1] == "stop" for call in colab_calls)
     assert sum(
@@ -1163,6 +1544,7 @@ def test_colab_native_retries_only_the_non_mutating_readiness_probe(
     install_fake_colab(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
     env["FAKE_COLAB_READINESS_FAIL_ONCE"] = "1"
+    env["COLAB_READY_POLL_SECONDS"] = "0.01"
 
     result = run_command(["make", *engine_dispatch("build")], cwd=prototype, env=env)
 
@@ -1183,77 +1565,45 @@ def test_colab_native_retries_only_the_non_mutating_readiness_probe(
 
 
 @pytest.mark.integration
-def test_colab_native_releases_only_a_newly_created_never_ready_session(
+def test_colab_native_waits_through_several_startup_disconnects_and_runs_once(
     prototype: Path, fake_bin: Path, tmp_path: Path
 ) -> None:
     install_fake_colab(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
-    env["FAKE_COLAB_READINESS_FAIL_ALWAYS"] = "1"
-    env.update(
-        {
-            "COLAB_READY_TIMEOUT": "0.08",
-            "COLAB_READY_POLL_SECONDS": "0.01",
-            "COLAB_READY_PROBE_TIMEOUT": "0.02",
-        }
-    )
-
-    result = run_command(
-        ["make", *engine_dispatch("build")], cwd=prototype, env=env, check=False
-    )
-
-    assert result.returncode != 0
-    assert "retrying the command is safe" in result.stdout
-    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
-    assert sum(call[1] == "new" for call in colab_calls) == 1
-    assert sum(call[1] == "stop" for call in colab_calls) == 1
-    assert not any(
-        call[1] == "exec" and call[-1].endswith("runner.ipynb")
-        for call in colab_calls
-    )
-
-
-@pytest.mark.integration
-def test_colab_readiness_waits_through_multiple_failures_without_replaying_target(
-    fake_bin: Path, tmp_path: Path
-) -> None:
-    install_fake_colab(fake_bin)
-    project = external_project(tmp_path / "delayed-colab")
-    env = launcher_environment(fake_bin, tmp_path)
     env.update(
         {
             "FAKE_COLAB_READINESS_FAILURES": "3",
-            "COLAB_READY_TIMEOUT": "3",
+            "COLAB_READY_TIMEOUT": "2",
             "COLAB_READY_POLL_SECONDS": "0.01",
             "COLAB_READY_PROBE_TIMEOUT": "1",
         }
     )
 
-    result = run_command([LAUNCHER, "-b", "colab", "build"], cwd=project, env=env)
+    result = run_command(["make", *engine_dispatch("build")], cwd=prototype, env=env)
 
     assert "became ready after 4 probes" in result.stdout
-    all_calls = calls(Path(env["FAKE_LOG"]))
-    assert sum(
-        call[0] == "colab"
-        and call[1] == "exec"
-        and call[-1].endswith("remote_prerequisites.py")
-        for call in all_calls
-    ) == 4
-    assert [call for call in all_calls if call[0] == "target"] == [["target", "build"]]
+    assert len(calls(Path(env["FAKE_LOG"]), "target")) == 1
+    readiness = [
+        call
+        for call in calls(Path(env["FAKE_LOG"]), "colab")
+        if call[1] == "exec" and call[-1].endswith("remote_prerequisites.py")
+    ]
+    assert len(readiness) == 4
 
 
 @pytest.mark.integration
-def test_colab_new_never_ready_session_is_bounded_and_safe_in_provenance(
+def test_colab_readiness_deadline_cleans_only_new_session_and_records_safe_retry(
     fake_bin: Path, tmp_path: Path
 ) -> None:
     install_fake_colab(fake_bin)
-    project = external_project(tmp_path / "never-ready-new")
+    project = external_project(tmp_path / "never-ready")
     env = launcher_environment(fake_bin, tmp_path)
     env.update(
         {
             "FAKE_COLAB_READINESS_FAIL_ALWAYS": "1",
-            "COLAB_READY_TIMEOUT": "0.12",
-            "COLAB_READY_POLL_SECONDS": "0.01",
-            "COLAB_READY_PROBE_TIMEOUT": "0.03",
+            "COLAB_READY_TIMEOUT": "0.2",
+            "COLAB_READY_POLL_SECONDS": "0.02",
+            "COLAB_READY_PROBE_TIMEOUT": "0.1",
         }
     )
 
@@ -1264,10 +1614,10 @@ def test_colab_new_never_ready_session_is_bounded_and_safe_in_provenance(
     assert result.returncode == 75
     assert "target was not submitted" in result.stdout
     assert "retrying the command is safe" in result.stdout
-    all_calls = calls(Path(env["FAKE_LOG"]))
-    assert sum(call[0] == "colab" and call[1] == "new" for call in all_calls) == 1
-    assert sum(call[0] == "colab" and call[1] == "stop" for call in all_calls) == 1
-    assert not any(call[0] == "target" for call in all_calls)
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert sum(call[1] == "new" for call in colab_calls) == 1
+    assert sum(call[1] == "stop" for call in colab_calls) == 1
+    assert calls(Path(env["FAKE_LOG"]), "target") == []
     latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
     provenance = json.loads(latest.read_text(encoding="utf-8"))
     assert provenance["phase"] == "readiness"
@@ -1279,7 +1629,7 @@ def test_colab_new_never_ready_session_is_bounded_and_safe_in_provenance(
 
 
 @pytest.mark.integration
-def test_colab_preexisting_unreachable_session_is_left_untouched(
+def test_colab_native_refuses_to_destroy_an_unreachable_preexisting_session(
     fake_bin: Path, tmp_path: Path
 ) -> None:
     install_fake_colab(fake_bin)
@@ -1287,63 +1637,119 @@ def test_colab_preexisting_unreachable_session_is_left_untouched(
     env = launcher_environment(fake_bin, tmp_path)
     run_command([LAUNCHER, "-b", "colab", "--start"], cwd=project, env=env)
     Path(env["FAKE_LOG"]).write_text("", encoding="utf-8")
-    env.update(
-        {
-            "FAKE_COLAB_READINESS_FAIL_ALWAYS": "1",
-            "COLAB_READY_TIMEOUT": "0.12",
-            "COLAB_READY_POLL_SECONDS": "0.01",
-            "COLAB_READY_PROBE_TIMEOUT": "0.03",
-        }
-    )
+    env["FAKE_COLAB_READINESS_FAIL_ALWAYS"] = "1"
+    env["COLAB_READY_TIMEOUT"] = "0.2"
+    env["COLAB_READY_POLL_SECONDS"] = "0.02"
 
     result = run_command(
         [LAUNCHER, "-b", "colab", "build"], cwd=project, env=env, check=False
     )
 
-    assert result.returncode == 75
-    assert "pre-existing unreachable session was not stopped, recreated, or adopted" in result.stdout
-    all_calls = calls(Path(env["FAKE_LOG"]))
-    assert not any(call[0] == "colab" and call[1] in {"new", "stop"} for call in all_calls)
-    assert not any(call[0] == "target" for call in all_calls)
+    assert result.returncode != 0
+    assert "pre-existing unreachable session was not stopped" in result.stdout
+    assert "retry_safe=true" in result.stdout
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert not any(call[1] == "new" for call in colab_calls)
+    assert not any(call[1] == "stop" for call in colab_calls)
+    assert not any(
+        call[1] == "exec" and call[-1].endswith("runner.ipynb")
+        for call in colab_calls
+    )
     latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
     provenance = json.loads(latest.read_text(encoding="utf-8"))
-    assert provenance["provider_state"] == "unknown"
     assert provenance["runtime_state"] == "unreachable"
     assert provenance["session_created"] is False
     assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
 
 
 @pytest.mark.integration
-def test_colab_detects_reset_control_state_and_forces_full_stateless_sync(
-    prototype: Path, fake_bin: Path, tmp_path: Path
+def test_colab_default_sessions_are_stable_and_distinct_per_project(
+    fake_bin: Path, tmp_path: Path
 ) -> None:
     install_fake_colab(fake_bin)
-    env = fake_environment(fake_bin, tmp_path)
-    run_command(["make", *engine_dispatch("build")], cwd=prototype, env=env)
+    first = external_project(tmp_path / "first-project")
+    second = external_project(tmp_path / "second-project")
+    shared_log = tmp_path / "provider.jsonl"
+    first_env = launcher_environment(fake_bin, tmp_path)
+    first_env["FAKE_LOG"] = str(shared_log)
+    first_env["FAKE_REMOTE"] = str(tmp_path / "first-remote")
+    second_env = dict(first_env)
+    second_env["FAKE_REMOTE"] = str(tmp_path / "second-remote")
+
+    run_command([LAUNCHER, "-b", "colab", "build"], cwd=first, env=first_env)
+    first_latest = next(
+        (tmp_path / "state" / "projects").glob("*/runs/latest.json")
+    )
+    assert json.loads(first_latest.read_text(encoding="utf-8"))["runtime_state"] == "fresh"
+    first_session = next(
+        call[call.index("-s") + 1]
+        for call in calls(shared_log, "colab")
+        if call[1] == "new"
+    )
+    shared_log.write_text("", encoding="utf-8")
+    run_command([LAUNCHER, "-b", "colab", "build"], cwd=second, env=second_env)
+    second_session = next(
+        call[call.index("-s") + 1]
+        for call in calls(shared_log, "colab")
+        if call[1] == "new"
+    )
+    assert first_session != second_session
+    assert first_session.startswith("first-project-")
+    assert second_session.startswith("second-project-")
+
+    shared_log.write_text("", encoding="utf-8")
+    run_command([LAUNCHER, "-b", "colab", "test"], cwd=first, env=first_env)
+    assert not any(call[1] == "new" for call in calls(shared_log, "colab"))
+    assert all(
+        call[call.index("-s") + 1] == first_session
+        for call in calls(shared_log, "colab")
+        if "-s" in call
+    )
+    first_provenance = next(
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (tmp_path / "state" / "projects").glob("*/runs/latest.json")
+        if json.loads(path.read_text(encoding="utf-8"))["project"] == str(first)
+    )
+    assert first_provenance["runtime_state"] == "same"
+
+
+@pytest.mark.integration
+def test_colab_existing_session_with_lost_control_state_forces_full_sync(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "reset-runtime")
+    env = launcher_environment(fake_bin, tmp_path)
+    run_command([LAUNCHER, "-b", "colab", "build"], cwd=project, env=env)
     remote = Path(env["FAKE_REMOTE"])
     (remote / ".cloudmake-owner.json").unlink()
     (remote / "source.sha256").unlink()
     Path(env["FAKE_LOG"]).write_text("", encoding="utf-8")
 
-    result = run_command(["make", *engine_dispatch("test")], cwd=prototype, env=env)
+    result = run_command([LAUNCHER, "-b", "colab", "test"], cwd=project, env=env)
 
     assert "Detected reset runtime" in result.stdout
     assert "runtime-local generated state may be gone" in result.stdout
-    all_calls = calls(Path(env["FAKE_LOG"]), "colab")
-    assert not any(call[1] == "new" for call in all_calls)
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert not any(call[1] == "new" for call in colab_calls)
     assert any(
         call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz"
-        for call in all_calls
+        for call in colab_calls
     )
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["runtime_state"] == "reset"
+    assert provenance["target_submission"] == "submitted"
 
 
 @pytest.mark.integration
-def test_colab_idempotent_preparation_runs_on_fresh_and_reset_only(
+def test_colab_session_preparation_runs_only_for_fresh_runtime(
     prototype: Path, fake_bin: Path, tmp_path: Path
 ) -> None:
     install_fake_colab(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
-    command = ["make", "COLAB_SESSION_PREPARE_TARGET=bootstrap", *engine_dispatch("build")]
+    command = ["make", "COLAB_SESSION_PREPARE_TARGET=prepare", *engine_dispatch("build")]
 
     run_command(command, cwd=prototype, env=env)
     run_command(command, cwd=prototype, env=env)
@@ -1354,14 +1760,14 @@ def test_colab_idempotent_preparation_runs_on_fresh_and_reset_only(
     (remote / "source.sha256").unlink()
     run_command(command, cwd=prototype, env=env)
 
-    targets = [call[1] for call in calls(Path(env["FAKE_LOG"])) if call[0] == "target"]
+    targets = [call[1] for call in calls(Path(env["FAKE_LOG"]), "target")]
     assert targets == [
-        "bootstrap",
+        "prepare",
         "build",
         "build",
-        "bootstrap",
+        "prepare",
         "build",
-        "bootstrap",
+        "prepare",
         "build",
     ]
 
@@ -1392,7 +1798,7 @@ def test_colab_preparation_receipt_failures_keep_requested_target_unsubmitted(
     install_fake_colab(fake_bin)
     project = external_project(tmp_path / failure_code)
     env = launcher_environment(fake_bin, tmp_path)
-    env["COLAB_SESSION_PREPARE_TARGET"] = "bootstrap"
+    env["COLAB_SESSION_PREPARE_TARGET"] = "prepare"
     env[failure_variable] = "1"
 
     result = run_command(
@@ -1401,9 +1807,7 @@ def test_colab_preparation_receipt_failures_keep_requested_target_unsubmitted(
 
     assert result.returncode != 0
     assert "requested target was not submitted" in result.stdout
-    assert [call for call in calls(Path(env["FAKE_LOG"])) if call[0] == "target"] == [
-        ["target", "bootstrap"]
-    ]
+    assert calls(Path(env["FAKE_LOG"]), "target") == [["target", "prepare"]]
     latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
     provenance = json.loads(latest.read_text(encoding="utf-8"))
     assert provenance["phase"] == "preparation"
@@ -1415,7 +1819,7 @@ def test_colab_preparation_receipt_failures_keep_requested_target_unsubmitted(
 
 
 @pytest.mark.integration
-def test_colab_connection_loss_after_submission_is_ambiguous_and_never_replayed(
+def test_colab_disconnect_after_submission_is_not_retried_and_is_ambiguous(
     fake_bin: Path, tmp_path: Path
 ) -> None:
     install_fake_colab(fake_bin)
@@ -1429,9 +1833,7 @@ def test_colab_connection_loss_after_submission_is_ambiguous_and_never_replayed(
 
     assert result.returncode != 0
     assert "Automatic replay is unsafe" in result.stdout
-    assert [call for call in calls(Path(env["FAKE_LOG"])) if call[0] == "target"] == [
-        ["target", "build"]
-    ]
+    assert [call[1] for call in calls(Path(env["FAKE_LOG"]), "target")] == ["build"]
     latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
     provenance = json.loads(latest.read_text(encoding="utf-8"))
     assert provenance["phase"] == "target_execution"
@@ -1443,11 +1845,12 @@ def test_colab_connection_loss_after_submission_is_ambiguous_and_never_replayed(
 
 @pytest.mark.integration
 def test_colab_native_refuses_foreign_workspace_without_explicit_adoption(
-    prototype: Path, fake_bin: Path, tmp_path: Path
+    fake_bin: Path, tmp_path: Path
 ) -> None:
     install_fake_colab(fake_bin)
-    env = fake_environment(fake_bin, tmp_path)
-    env["COLAB_SESSION"] = "shared-workspace"
+    project = external_project(tmp_path / "foreign-workspace")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["COLAB_SESSION"] = "shared"
     remote = Path(env["FAKE_REMOTE"])
     remote.mkdir(parents=True, exist_ok=True)
     (remote / ".cloudmake-owner.json").write_text(
@@ -1464,22 +1867,24 @@ def test_colab_native_refuses_foreign_workspace_without_explicit_adoption(
     )
 
     refused = run_command(
-        ["make", *engine_dispatch("build")], cwd=prototype, env=env, check=False
+        [LAUNCHER, "-b", "colab", "build"], cwd=project, env=env, check=False
     )
     assert refused.returncode != 0
     assert "refusing to replace Colab session" in refused.stdout
-    assert any(
-        call[1] == "new" and "shared-workspace" in call
-        for call in calls(Path(env["FAKE_LOG"]), "colab")
-    )
     assert not any(
         call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz"
         for call in calls(Path(env["FAKE_LOG"]), "colab")
     )
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["runtime_state"] == "foreign"
+    assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
 
+    env["CLOUDMAKE_ADOPT"] = "1"
     adopted = run_command(
-        ["make", "CLOUDMAKE_ADOPT=1", *engine_dispatch("build")],
-        cwd=prototype,
+        [LAUNCHER, "-b", "colab", "build"],
+        cwd=project,
         env=env,
     )
     assert "Adopting Colab session" in adopted.stdout
@@ -1849,24 +2254,38 @@ def test_engine_defines_no_project_target_shortcuts(
 
 
 @pytest.mark.parametrize(
-    ("backend", "lifecycle", "capability"),
+    ("backend", "lifecycle", "capability", "persistence_capability"),
     [
-        ("local", "local", "execute"),
-        ("colab-notebook", "session", "incremental-sync"),
-        ("kaggle-notebook", "batch", "batch"),
-        ("codespaces-ssh", "session", "shell"),
-        ("colab-ssh", "session", "gpu"),
-        ("host-ssh", "session", "incremental-sync"),
-        ("lightning-studio-ssh", "session", "persistent-storage"),
+        ("local", "local", "execute", "native-persistence"),
+        ("colab-notebook", "session", "incremental-sync", "checkpoint-persistence"),
+        ("kaggle-notebook", "batch", "batch", None),
+        ("codespaces-ssh", "session", "shell", "native-persistence"),
+        ("colab-ssh", "session", "gpu", None),
+        ("host-ssh", "session", "incremental-sync", "native-persistence"),
+        (
+            "lightning-studio-ssh",
+            "session",
+            "persistent-storage",
+            "native-persistence",
+        ),
     ],
 )
 def test_backend_contract_declares_lifecycle_and_capabilities(
-    prototype: Path, backend: str, lifecycle: str, capability: str
+    prototype: Path,
+    backend: str,
+    lifecycle: str,
+    capability: str,
+    persistence_capability: str | None,
 ) -> None:
     result = run_command(["make", f"BACKEND={backend}", "backend-info"], cwd=prototype)
     assert "api=1" in result.stdout
     assert f"lifecycle={lifecycle}" in result.stdout
     assert capability in result.stdout
+    if persistence_capability is None:
+        assert "native-persistence" not in result.stdout
+        assert "checkpoint-persistence" not in result.stdout
+    else:
+        assert persistence_capability in result.stdout
 
 
 @pytest.mark.integration

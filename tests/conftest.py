@@ -53,7 +53,12 @@ def prototype(tmp_path: Path) -> Path:
         PROJECT_ROOT,
         destination,
         ignore=shutil.ignore_patterns(
-            ".git", ".cloud-state", "artifacts", "build", "*_output.ipynb", "__pycache__"
+            ".git",
+            ".cloud-state",
+            "artifacts",
+            "build",
+            "*_output.ipynb",
+            "__pycache__",
         ),
     )
     return destination

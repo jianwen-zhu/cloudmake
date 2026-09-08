@@ -4,24 +4,33 @@ COLAB_FINGERPRINT := $(COLAB_STATE_DIR)/source.sha256
 COLAB_REMOTE_FINGERPRINT_COPY := $(COLAB_STATE_DIR)/remote-source.sha256
 COLAB_REMOTE_OWNER_COPY := $(COLAB_STATE_DIR)/remote-owner.json
 COLAB_CONTROL_STATE_COPY := $(COLAB_STATE_DIR)/remote-control-state.txt
+COLAB_SYNC_RESULT := $(COLAB_STATE_DIR)/sync-result.sha256
 COLAB_TARGET_FILE := $(COLAB_STATE_DIR)/target
 COLAB_TARGET_RESULT := $(COLAB_STATE_DIR)/target-result.json
+COLAB_ENVIRONMENT_PROFILE := $(COLAB_STATE_DIR)/environment-profile.json
 COLAB_RESOURCE_STATE := $(COLAB_STATE_DIR)/resource-state
 COLAB_ARTIFACT_ARCHIVE := $(COLAB_STATE_DIR)/artifacts.tar.gz
 COLAB_RUN_NOTEBOOK := $(COLAB_STATE_DIR)/runner.ipynb
 CLOUDMAKE_ALLOCATION_RESULT ?= $(COLAB_STATE_DIR)/allocation-result.json
 CLOUDMAKE_RETRY_FOR_SECONDS ?= 0
+COLAB_CHECKPOINT_STATE_DIR := $(COLAB_STATE_DIR)/checkpoint
+COLAB_CHECKPOINT_RESTORE_RESULT := $(COLAB_CHECKPOINT_STATE_DIR)/$(if $(CLOUDMAKE_RUN_ID),$(CLOUDMAKE_RUN_ID),operation)-restore.json
+COLAB_CHECKPOINT_PUBLISH_RESULT := $(COLAB_CHECKPOINT_STATE_DIR)/$(if $(CLOUDMAKE_RUN_ID),$(CLOUDMAKE_RUN_ID),operation)-publish.json
 
 COLAB_REMOTE_ROOT := /content/.cloud-build/workspace
 COLAB_REMOTE_ARCHIVE := /content/cloud-build-source.tar.gz
 COLAB_REMOTE_FINGERPRINT_INCOMING := /content/cloud-build-source.sha256
 COLAB_REMOTE_FINGERPRINT := $(COLAB_REMOTE_ROOT)/source.sha256
+COLAB_REMOTE_MANIFEST_INCOMING := /content/cloud-build-source-manifest.json
+COLAB_REMOTE_PREVIOUS_MANIFEST_INCOMING := /content/cloud-build-previous-manifest.json
 COLAB_REMOTE_OWNER_INCOMING := /content/cloud-build-owner.json
 COLAB_REMOTE_OWNER := $(COLAB_REMOTE_ROOT)/.cloudmake-owner.json
+COLAB_REMOTE_SYNC_RESULT := $(COLAB_REMOTE_ROOT)/sync-result.sha256
 COLAB_REMOTE_PREPARED_INCOMING := /content/cloud-build-prepared
 COLAB_REMOTE_PREPARED := $(COLAB_REMOTE_ROOT)/.cloudmake-prepared
 COLAB_REMOTE_TARGET := /content/cloud-build-target
 COLAB_REMOTE_TARGET_RESULT := /content/.cloud-build/target-result.json
+COLAB_REMOTE_ENVIRONMENT_PROFILE := /content/.cloud-build/vm-capabilities.json
 COLAB_REMOTE_ARTIFACTS := /content/.cloud-build/artifacts.tar.gz
 
 COLAB_INVOCATION_ID := $(if $(CLOUDMAKE_RUN_ID),$(CLOUDMAKE_RUN_ID),manual)
@@ -33,9 +42,10 @@ COLAB_PREPARE_TARGET_FILE := $(COLAB_STATE_DIR)/prepare-target
 
 COLAB_ACCELERATOR := $(if $(strip $(COLAB_GPU)),--gpu $(COLAB_GPU),)
 
-.PHONY: help start status stop sync collect dispatch fetch shell open \
+.PHONY: help start status stop sync collect dispatch fetch shell open environment \
 	_colab-start _colab-sync _colab-prepare _colab-execute _colab-collect _colab-fetch \
-	_colab-fetch-ready _colab-open _colab-stop
+	_colab-fetch-ready _colab-open _colab-stop _colab-start-ready \
+	_colab-checkpoint-restore _colab-checkpoint-publish _colab-environment workspace-purge
 
 help:
 	@echo 'Usage: make BACKEND=colab-notebook <target>'
@@ -57,7 +67,7 @@ help:
 	@echo '  stop     Release the runtime'
 
 start: doctor
-	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-start
+	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-start-ready
 
 status: doctor
 	@mkdir -p '$(CLOUDMAKE_STATE_ROOT)/status'
@@ -67,6 +77,9 @@ status: doctor
 			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
 			rm -f "$$temporary"; \
 		else code=$$?; cat "$$temporary"; rm -f "$$temporary"; exit $$code; fi
+
+environment: doctor
+	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-environment
 
 stop: doctor
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-stop
@@ -121,7 +134,69 @@ _colab-start: ensure-owner | $(COLAB_STATE_DIR)
 	@resource_state="$$(cat '$(COLAB_RESOURCE_STATE)')"; \
 		CLOUDMAKE_RESOURCE_STATE=$$resource_state; $(CLOUDMAKE_PRINT_CONTEXT)
 
-_colab-sync: _colab-start | $(COLAB_STATE_DIR)
+_colab-start-ready: _colab-start
+	@if test '$(CLOUDMAKE_CHECKPOINT)' = 1; then \
+		$(MAKE) --no-print-directory _colab-checkpoint-restore; \
+	fi
+
+_colab-environment: _colab-start | $(COLAB_STATE_DIR)
+	@rm -f '$(COLAB_ENVIRONMENT_PROFILE)' '$(COLAB_ENVIRONMENT_PROFILE).tmp'
+	@$(COLAB_BIN) rm -s '$(COLAB_SESSION)' \
+		'$(COLAB_REMOTE_ENVIRONMENT_PROFILE)' >/dev/null 2>&1 || :
+	@$(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
+		-f '$(CLOUDMAKE_TOOL_ROOT)/tools/vm_capabilities.py'
+	@if ! $(COLAB_BIN) download -s '$(COLAB_SESSION)' \
+		'$(COLAB_REMOTE_ENVIRONMENT_PROFILE)' \
+		'$(COLAB_ENVIRONMENT_PROFILE).tmp' >/dev/null 2>&1; then \
+		echo '[cloudmake] infrastructure failure: environment probe did not produce a profile' >&2; \
+		rm -f '$(COLAB_ENVIRONMENT_PROFILE).tmp'; exit 1; \
+	fi
+	@mv '$(COLAB_ENVIRONMENT_PROFILE).tmp' '$(COLAB_ENVIRONMENT_PROFILE)'
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/vm_capabilities.py' \
+		--render '$(COLAB_ENVIRONMENT_PROFILE)'
+
+_colab-checkpoint-restore: | $(COLAB_STATE_DIR)
+	@if test -z '$(CLOUDMAKE_PROJECT_KEY)'; then \
+		echo '[cloudmake] persistent-workspace project identity is unavailable' >&2; exit 2; \
+	fi
+	@resource_state="$$(cat '$(COLAB_RESOURCE_STATE)')"; \
+	$(COLAB_CHECKPOINT_HOST) restore \
+		--client '$(COLAB_BIN)' --session '$(COLAB_SESSION)' \
+		--project-key '$(CLOUDMAKE_PROJECT_KEY)' \
+		--workspace-id '$(CLOUDMAKE_WORKSPACE_ID)' --resource-state "$$resource_state" \
+		$(if $(filter-out $(CLOUDMAKE_PROJECT_KEY),$(CLOUDMAKE_WORKSPACE_ID)),--allow-attach) \
+		--tool-root '$(CLOUDMAKE_TOOL_ROOT)' \
+		--state-dir '$(COLAB_CHECKPOINT_STATE_DIR)' \
+		--result '$(COLAB_CHECKPOINT_RESTORE_RESULT)'
+
+_colab-checkpoint-publish: | $(COLAB_STATE_DIR)
+	@if test -z '$(CLOUDMAKE_PROJECT_KEY)'; then \
+		echo '[cloudmake] persistent-workspace project identity is unavailable' >&2; exit 2; \
+	fi
+	@resource_state="$$(cat '$(COLAB_RESOURCE_STATE)')"; \
+	$(COLAB_CHECKPOINT_HOST) publish \
+		--client '$(COLAB_BIN)' --session '$(COLAB_SESSION)' \
+		--project-key '$(CLOUDMAKE_PROJECT_KEY)' \
+		--workspace-id '$(CLOUDMAKE_WORKSPACE_ID)' --resource-state "$$resource_state" \
+		--tool-root '$(CLOUDMAKE_TOOL_ROOT)' \
+		--state-dir '$(COLAB_CHECKPOINT_STATE_DIR)' \
+		--result '$(COLAB_CHECKPOINT_PUBLISH_RESULT)'
+
+workspace-purge: doctor
+	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-workspace-purge
+
+.PHONY: _colab-workspace-purge
+_colab-workspace-purge: _colab-start | $(COLAB_STATE_DIR)
+	@resource_state="$$(cat '$(COLAB_RESOURCE_STATE)')"; \
+	$(COLAB_CHECKPOINT_HOST) purge \
+		--client '$(COLAB_BIN)' --session '$(COLAB_SESSION)' \
+		--project-key '$(CLOUDMAKE_PROJECT_KEY)' \
+		--workspace-id '$(CLOUDMAKE_WORKSPACE_ID)' --resource-state "$$resource_state" \
+		--tool-root '$(CLOUDMAKE_TOOL_ROOT)' \
+		--state-dir '$(COLAB_CHECKPOINT_STATE_DIR)' \
+		--result '$(COLAB_CHECKPOINT_STATE_DIR)/workspace-purge.json'
+
+_colab-sync: _colab-start-ready | $(COLAB_STATE_DIR)
 	@set -e; \
 	$(CLOUDMAKE_RECORD_STATE) --phase ownership --provider-state ready \
 		--target-submission not_submitted --retry-safe true; \
@@ -227,16 +302,37 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
 			--root '$(PROJECT_DIR)' \
 			--archive '$(COLAB_ARCHIVE)' \
+			--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
 			$(CLOUDMAKE_SECRET_OPTION) \
-			--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' >/dev/null; \
+			--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' \
+			> '$(COLAB_FINGERPRINT).tmp'; \
+		mv '$(COLAB_FINGERPRINT).tmp' '$(COLAB_FINGERPRINT)'; \
 		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
 			'$(COLAB_ARCHIVE)' '$(COLAB_REMOTE_ARCHIVE)'; \
 		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
 			'$(COLAB_FINGERPRINT)' '$(COLAB_REMOTE_FINGERPRINT_INCOMING)'; \
 		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
+			'$(CLOUDMAKE_CURRENT_MANIFEST)' '$(COLAB_REMOTE_MANIFEST_INCOMING)'; \
+		if test -f '$(CLOUDMAKE_MANIFEST)'; then \
+			$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
+				'$(CLOUDMAKE_MANIFEST)' '$(COLAB_REMOTE_PREVIOUS_MANIFEST_INCOMING)'; \
+		fi; \
+		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
 			'$(CLOUDMAKE_OWNER_FILE)' '$(COLAB_REMOTE_OWNER_INCOMING)'; \
+		$(COLAB_BIN) rm -s '$(COLAB_SESSION)' \
+			'$(COLAB_REMOTE_SYNC_RESULT)' >/dev/null 2>&1 || :; \
 		$(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
 			-f '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_sync.py'; \
+		if ! $(COLAB_BIN) download -s '$(COLAB_SESSION)' \
+			'$(COLAB_REMOTE_SYNC_RESULT)' '$(COLAB_SYNC_RESULT).tmp' >/dev/null 2>&1; then \
+			echo '[cloudmake] infrastructure failure: source synchronization did not produce a success receipt' >&2; \
+			rm -f '$(COLAB_SYNC_RESULT).tmp'; exit 1; \
+		fi; \
+		if ! cmp -s '$(COLAB_FINGERPRINT)' '$(COLAB_SYNC_RESULT).tmp'; then \
+			echo '[cloudmake] infrastructure failure: source synchronization receipt does not match the uploaded source' >&2; \
+			rm -f '$(COLAB_SYNC_RESULT).tmp'; exit 1; \
+		fi; \
+		mv '$(COLAB_SYNC_RESULT).tmp' '$(COLAB_SYNC_RESULT)'; \
 		mv '$(CLOUDMAKE_CURRENT_MANIFEST)' '$(CLOUDMAKE_MANIFEST)'; \
 	fi
 
@@ -372,11 +468,17 @@ _colab-execute: _colab-prepare | $(COLAB_STATE_DIR)
 	if test $$code -eq 0; then provider=succeeded; else provider=failed; fi; \
 	$(CLOUDMAKE_RECORD_STATE) --phase target_execution --provider-state $$provider \
 		--target-submission submitted --retry-safe false; exit $$code
+	@if test '$(CLOUDMAKE_CHECKPOINT)' = 1; then \
+		if ! $(MAKE) --no-print-directory _colab-checkpoint-publish; then \
+			echo '[cloudmake] persistent-workspace publication failed after the project target completed; the target was not retried.' >&2; \
+			exit 1; \
+		fi; \
+	fi
 
 _colab-collect: _colab-execute
 	@$(MAKE) --no-print-directory _colab-fetch-ready
 
-_colab-fetch: _colab-start | $(COLAB_STATE_DIR)
+_colab-fetch: _colab-start-ready | $(COLAB_STATE_DIR)
 	@$(MAKE) --no-print-directory _colab-fetch-ready
 
 _colab-fetch-ready: | $(COLAB_STATE_DIR)
@@ -394,7 +496,7 @@ _colab-fetch-ready: | $(COLAB_STATE_DIR)
 	$(CLOUDMAKE_SAFE_EXTRACT) \
 		--archive '$(COLAB_ARTIFACT_ARCHIVE)' --destination '$(ARTIFACT_DIR)'
 
-_colab-open: _colab-start
+_colab-open: _colab-start-ready
 	$(COLAB_BIN) url -s '$(COLAB_SESSION)' --open
 
 _colab-stop: ensure-owner

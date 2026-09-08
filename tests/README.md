@@ -22,6 +22,7 @@ python3 -m pytest tests/test_resilience.py
 python3 -m pytest tests/test_notebooks.py
 python3 -m pytest tests/test_colab_allocate.py
 python3 -m pytest tests/test_target_result.py
+python3 -m pytest tests/test_vm_capabilities.py
 python3 -m pytest -m integration
 ```
 
@@ -75,6 +76,25 @@ provides two credential-free hosted automation layers:
 - `Upstream compatibility` runs the pinned public CUDA projects weekly or on
   demand without allocating cloud compute.
 
+## ORFS persistent-workspace acceptance
+
+The final Cloudmake 2.0 persistence gate is opt-in and deliberately separate
+from the offline suite. It runs two project-provided ORFS stage targets across a
+destroyed and replacement Colab VM, checks Cloudmake restore/publication
+evidence, and collects project-owned proof that the second stage consumed the
+first stage without rebuilding it:
+
+```sh
+export COLAB_SESSION=cloudmake-orfs-acceptance
+export CLOUDMAKE_TEST_LIVE_ORFS_CHECKPOINT=1
+tests/acceptance/orfs-checkpoint/run.sh \
+  /path/to/orfs-project PROJECT_STAGE_1 PROJECT_STAGE_2 evidence
+```
+
+The prepared ORFS project owns its tool acquisition, launcher, stage checks,
+and target names. See the [gate contract](acceptance/orfs-checkpoint/README.md).
+The harness leaves the session intact after any failed or ambiguous operation.
+
 `tests/contract/` exercises the public `cloudmake` launcher interface, including
 configuration precedence, aliases, external project isolation, arbitrary target
 dispatch, zero reserved project names, target-agnostic artifact collection,
@@ -86,6 +106,13 @@ internals:
 
 - deterministic source fingerprinting and exclusions;
 - archive safety and atomic Colab source replacement;
+- fingerprint-bound Colab synchronization receipts that prevent a provider CLI
+  from masking a remote synchronization exception and dispatching stale source;
+- adversarial Colab control-state downloads: a present but unreadable owner or
+  fingerprint is never treated as absence, never triggers source replacement,
+  and keeps the project target unsubmitted;
+- source-bound preparation receipts plus distinct upload/install failure
+  provenance;
 - Kaggle notebook generation, metadata, bounded status polling, and failure
   handling;
 - executable Colab and Kaggle notebooks against temporary projects;
@@ -94,6 +121,25 @@ internals:
 - Colab capacity classification, bounded allocation backoff, temporary-failure
   deadlines, immediate interruption, fail-fast compatibility, and at-most-once
   target dispatch;
+- opt-in Colab persistent-workspace selection and provenance, restore/target/publication
+  ordering, fail-closed restore and cleanup behavior, no publication after a
+  failed target, OS credential-store key reuse, and encrypted-envelope
+  non-disclosure;
+- persistence-mode behavior across every backend: checkpoint transfer on native
+  Colab, no-transfer native storage on local and durable SSH workspaces, early
+  rejection on ephemeral Kaggle/Colab SSH, legacy option aliases, and disabled-
+  by-default target compatibility;
+- stable workspace identity independent of project path, local metadata
+  list/show, explicit attachment, force-gated purge, and restore capacity checks
+  against the allocated VM rather than a fixed Cloudmake ceiling;
+- bounded local and Colab environment characterization with explicit observed
+  platform, resource, privilege, filesystem, isolation, device, and accelerator
+  evidence, without inferred application-format compatibility;
+- ownership-aware checkpoint links: strict uploaded/source-owned links,
+  non-followed generated package/rootfs links, rejected special entries and
+  symlinked control records, and generated-link preservation across source sync;
+- default Colab compatibility with no Drive, credential-store, restore, or
+  publication side effects and unchanged project-target argument dispatch;
 - portable Make build, test, run, package, clean, and incremental behavior;
 - reproducible Makefile overlays for pinned NVIDIA and GPU MODE CUDA lessons;
 - backend lifecycle and command construction through fake provider clients;

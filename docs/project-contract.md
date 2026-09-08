@@ -34,8 +34,9 @@ There are no universally mandatory target names.
 The Colab notebook backend also supports an optional host-side setting,
 `COLAB_SESSION_PREPARE_TARGET`. When declared, that project Make target must be
 idempotent. Cloudmake runs it after a confirmed fresh/reset runtime and records
-a runtime-local preparation receipt; it is skipped when that prepared runtime
-is reused. Preparation receives no command-specific `NAME=value` assignments
+a runtime-local preparation receipt bound to the synchronized source
+fingerprint; it is skipped when that prepared runtime and source are unchanged.
+Preparation receives no command-specific `NAME=value` assignments
 and is never an implicit retry of the requested target. Projects should use it
 only for generic session prerequisites that are safe to repeat after an
 ambiguous preparation disconnect.
@@ -88,6 +89,13 @@ With `-b local`, Cloudmake invokes that same root Makefile directly in the
 project directory. It does not enter the backend engine, synchronize files, or
 inject variables. This direct invocation is the reference semantics remote
 backends are required to preserve.
+
+Persistent-workspace selection does not expand the project interface. Native
+persistence uses the backend's existing project tree without adding Make
+variables or transfer steps. Managed checkpoint persistence surrounds target
+execution at the transport boundary, but the project still receives only the
+requested target and user-supplied assignments. Backends unable to provide the
+selected durability reject the invocation before Make runs.
 
 For `--collect DIR TARGET`, `DIR` is a nonempty project-relative directory with
 no `..` components. The project chooses its location and contents through its

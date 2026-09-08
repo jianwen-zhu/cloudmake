@@ -14,11 +14,9 @@ MARKER = re.compile(
 
 
 def remote_probe() -> int:
-    owner = "present" if OWNER.exists() else "absent"
-    fingerprint = "present" if FINGERPRINT.exists() else "absent"
-    print(
-        f"[cloudmake] control-state owner={owner} fingerprint={fingerprint}"
-    )
+    owner = "present" if OWNER.is_file() else "absent"
+    fingerprint = "present" if FINGERPRINT.is_file() else "absent"
+    print(f"[cloudmake] control-state owner={owner} fingerprint={fingerprint}")
     return 0
 
 

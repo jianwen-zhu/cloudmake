@@ -3,7 +3,48 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
-## Unreleased
+## 2.0.0 - 2026-09-07
+
+- Define the storage-neutral Cloudmake 2.0 stateful-workspace and checkpoint
+  contract, including source precedence, atomic publication, and failure safety.
+- Preserve project-generated files during reusable Colab and SSH source
+  reconciliation while removing only paths previously owned by local source.
+- Record the Cloudmake 2.0 checkpoint credential-custody contract and gate the
+  restic-on-mounted-Drive candidate on non-disclosure and filesystem-reliability
+  tests.
+- Add opt-in Colab workspace checkpoints backed by an incremental encrypted
+  restic repository in the user's Drive. Cloudmake owns the opaque per-project
+  repository key in the local OS credential store and sends only per-operation
+  encrypted envelopes to the VM; Drive and transient key material are removed
+  before project execution.
+- Define persistence behavior for every backend: managed checkpoints for native
+  Colab, native no-transfer persistence for local and durable SSH workspaces,
+  and early rejection for Kaggle batch and Colab SSH. Preserve disabled-by-
+  default behavior and the legacy `--checkpoint` option aliases.
+- Promote the user-facing abstraction from individual checkpoints to managed
+  persistent workspaces, with stable IDs, a local non-secret VM metadata
+  registry, explicit list/show/attach/purge operations, and compatibility
+  aliases for the earlier checkpoint flags.
+- Remove Cloudmake's fixed 50 GiB and one-million-entry workspace ceilings.
+  Restore now checks snapshot requirements against the actual free bytes and
+  inodes of the allocated VM; Drive and provider capacity remain authoritative.
+- Define the durable tool-installation boundary: only the managed project
+  workspace is checkpointed, so reusable tool payloads must live there even
+  when a project materializes them into an ephemeral execution location.
+- Add format-neutral observed VM characterization covering platform, resources,
+  privilege, filesystem, namespace, cgroup, device, and accelerator facts.
+  Cloudmake 2.0 makes no bundle-compatibility claim; managed OCI/CDI execution
+  is explicitly staged as a separate 2.1 capability.
+- Freeze the native/OCI runner, persistence, backend, and source axes as
+  independent contracts, and add a conservative opt-in ORFS replacement-VM
+  acceptance harness for the 2.0 checkpoint gate.
+- Pass the live ORFS replacement-VM gate: restore a 3.3 GB workspace in a fresh
+  Colab VM, reuse the completed floorplan without rebuilding it, complete
+  placement, collect evidence, and publish an incremental successor with about
+  4.4 MB of newly added repository data.
+- Require a fingerprint-bound success receipt from Colab source reconciliation,
+  preventing a provider CLI that masks a remote Python exception from
+  dispatching a project target against stale source.
 
 ## 1.0.0 - 2026-09-07
 

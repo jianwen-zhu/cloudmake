@@ -30,15 +30,15 @@ existing directory after success, and transactionally replace the local
 
 User aliases are short; canonical names identify transport explicitly:
 
-| User alias | Canonical backend | Transport |
-| --- | --- | --- |
-| `local` | `local` | Direct project Make invocation |
-| `colab` | `colab-notebook` | Native Colab contents and kernel APIs |
-| `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
-| `codespaces` | `codespaces-ssh` | SSH and rsync |
-| `colab-ssh` | `colab-ssh` | SSH and rsync |
-| `ssh` | `host-ssh` | User-managed SSH and rsync |
-| `lightning` | `lightning-studio-ssh` | SSH and rsync |
+| User alias | Canonical backend | Transport | Persistence mode |
+| --- | --- | --- | --- |
+| `local` | `local` | Direct project Make invocation | `native` |
+| `colab` | `colab-notebook` | Native Colab contents and kernel APIs | `checkpoint` |
+| `kaggle` | `kaggle-notebook` | Private Kaggle notebook version | `unsupported` |
+| `codespaces` | `codespaces-ssh` | SSH and rsync | `native` |
+| `colab-ssh` | `colab-ssh` | SSH and rsync | `unsupported` |
+| `ssh` | `host-ssh` | User-managed SSH and rsync | `native` |
+| `lightning` | `lightning-studio-ssh` | SSH and rsync | `native` |
 
 An alias must not silently change transport. In particular, `colab` always
 means native notebook access and never falls back to SSH.
@@ -64,6 +64,28 @@ Capabilities describe real behavior rather than provider branding. Examples
 include synchronization, execution, artifact retrieval, status, opening a web
 interface, stopping reusable compute, and an interactive shell. A backend must
 not advertise a shell merely because its provider has a browser terminal.
+
+`environment-profile` is separate from these Cloudmake backend capabilities.
+It means the backend can observe the selected execution VM and report the
+machine, privilege, filesystem, isolation, device, and accelerator evidence
+defined in [Execution environments and OCI roadmap](execution-environments.md).
+It does not imply support for a particular application format or runner.
+Observed properties are not provider guarantees and must not be cached as if
+they were promises for a replacement VM.
+
+`checkpoint-persistence` means Cloudmake transfers a managed workspace through
+an independent durable checkpoint store. `native-persistence` means the
+backend's ordinary project workspace already survives its supported stop/start
+lifecycle; selecting persistence adds no transfer or checkpoint credential.
+A backend advertising neither capability must reject enabled persistence before
+provider contact. It must never silently accept the option merely because some
+local source archive or provider output happens to be cached.
+
+These modes describe mechanism, not unlimited retention. A native workspace
+still disappears if its provider resource or storage is deleted. The launcher
+keeps persistence disabled by default for backward compatibility and passes
+`CLOUDMAKE_CHECKPOINT=1` to the internal engine only for the managed checkpoint
+mode. This variable never enters the project Make assignment namespace.
 
 ## Lifecycle semantics
 
@@ -138,6 +160,12 @@ Every remote transport must:
 7. retrieve artifacts with safe transactional extraction; and
 8. report both provider detail and a normalized cloudmake status.
 
+Reusable transports must also distinguish synchronized source paths from
+project-generated paths. Local source additions and modifications win, and
+previously synchronized paths deleted locally are removed; a broad mirror
+deletion must not erase generated workspace state. The cross-session extension
+of this rule is specified in [Stateful workspaces](stateful-workspaces.md).
+
 Before target submission, a session transport may retry only non-mutating
 readiness probes and must bound the wait by a deadline. It may automatically
 release a never-ready resource only when the current invocation has positive
@@ -174,9 +202,9 @@ the operator explicitly adopts it.
 
 SSH transports synchronize incrementally with rsync and invoke Make over the
 same SSH execution surface. Provider backends supply connection discovery and
-lifecycle behavior. The transport must check ownership before any
-`rsync --delete`, and synchronize the uploaded project independently of any
-anchor repository checked out by the provider.
+lifecycle behavior. The transport must check ownership before applying its
+manifest-derived source deletion plan, and synchronize the uploaded project
+independently of any anchor repository checked out by the provider.
 
 ## State boundary
 

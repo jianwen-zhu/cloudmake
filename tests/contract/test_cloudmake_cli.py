@@ -119,6 +119,51 @@ def test_help_documents_bounded_capacity_retry(
     assert engine_calls(log) == []
 
 
+def test_help_documents_opt_in_checkpoint_selection(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, "--help")
+
+    assert "--persist" in result.stdout
+    assert "--no-persist" in result.stdout
+    assert "--checkpoint" in result.stdout
+    assert "local and per project" in result.stdout
+    assert "not format compatibility" in result.stdout
+    assert "local/persistent SSH=native" in result.stdout
+    assert "ephemeral batch/Colab SSH=unsupported" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_backends_reports_persistence_mode_for_every_backend(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, "--backends")
+
+    assert "PERSISTENCE" in result.stdout
+    rows = {
+        line.split()[0]: line.split()
+        for line in result.stdout.splitlines()[1:]
+        if line.split()
+    }
+    assert rows["colab-notebook"][2] == "checkpoint"
+    for backend in (
+        "local",
+        "codespaces-ssh",
+        "host-ssh",
+        "lightning-studio-ssh",
+    ):
+        assert rows[backend][2] == "native"
+    for backend in ("kaggle-notebook", "colab-ssh"):
+        assert rows[backend][2] == "unsupported"
+    assert engine_calls(log) == []
+
+
 @pytest.mark.parametrize(
     ("duration", "seconds"),
     [("30s", "30"), ("15m", "900"), ("2h", "7200")],
@@ -298,6 +343,314 @@ def test_use_persists_canonical_backend_outside_project(
     assert_assignment(call, "COLAB_GPU", "T4")
     assert_remote_target(call, "build")
     assert "dispatch" in call
+
+
+def test_checkpoint_is_disabled_by_default_and_project_arguments_are_unchanged(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    invoke(project, environment, "-b", "colab", "build", "MODE=fast")
+
+    call = engine_calls(log)[0]
+    assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "0")
+    assert_remote_target(call, "build")
+    assert project_arguments(call) == ["MODE=fast"]
+    assert not (tmp_path / "config" / "projects").exists()
+
+
+def test_repository_configuration_cannot_enable_persistent_workspace(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    (project / ".cloudmake.json").write_text(
+        json.dumps({"backend": "colab", "persistent_workspace": True}),
+        encoding="utf-8",
+    )
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    invoke(project, environment, "build")
+
+    call = engine_calls(log)[0]
+    assert_assignment(call, "BACKEND", "colab-notebook")
+    assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "0")
+
+
+def test_global_configuration_cannot_enable_persistent_workspace(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(
+        project,
+        environment,
+        "--global",
+        "--use",
+        "colab",
+        "--persist",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "must be enabled or disabled per project" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_checkpoint_selection_is_persisted_outside_project_and_passed_to_engine(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    before = {path.relative_to(project) for path in project.rglob("*")}
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    selected = invoke(project, environment, "--use", "colab", "--checkpoint")
+    invoke(project, environment, "build")
+
+    assert "persistent-workspace=enabled" in selected.stdout
+    call = engine_calls(log)[0]
+    assert_assignment(call, "BACKEND", "colab-notebook")
+    assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "1")
+    project_key_value = next(
+        value.split("=", 1)[1]
+        for value in call
+        if value.startswith("CLOUDMAKE_PROJECT_KEY=")
+    )
+    assert len(project_key_value) == 24
+    preference = next((tmp_path / "config" / "projects").glob("*.json"))
+    saved = json.loads(preference.read_text(encoding="utf-8"))
+    assert saved["persistent_workspace"] is True
+    assert saved["checkpoint"] is True
+    assert {path.relative_to(project) for path in project.rglob("*")} == before
+
+
+def test_no_checkpoint_disables_persisted_selection(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "--use", "colab", "--checkpoint")
+
+    disabled = invoke(project, environment, "--no-checkpoint", "build")
+    invoke(project, environment, "test")
+
+    assert "persistent-workspace=disabled" in disabled.stdout
+    for call in engine_calls(log):
+        assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "0")
+
+
+def test_persist_alias_registers_and_lists_a_persistent_workspace(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    selected = invoke(project, environment, "--use", "colab", "--persist")
+    listed = invoke(project, environment, "--workspaces")
+
+    assert "persistent-workspace=enabled" in selected.stdout
+    record = next((tmp_path / "state" / "workspaces").glob("*.json"))
+    metadata = json.loads(record.read_text(encoding="utf-8"))
+    assert metadata["workspace_id"] in listed.stdout
+    assert metadata["backend"] == "colab-notebook"
+    assert metadata["project_name"] == "project"
+    assert metadata["session"].startswith("project-")
+    assert metadata["session"] != "cuda-build"
+    assert engine_calls(log) == []
+
+
+def test_workspace_attach_decouples_durable_identity_from_project_path(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    first = make_project(tmp_path / "first")
+    second = make_project(tmp_path / "second")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(first, environment, "--use", "colab", "--gpu=T4", "--persist")
+    record = next((tmp_path / "state" / "workspaces").glob("*.json"))
+    metadata = json.loads(record.read_text(encoding="utf-8"))
+    workspace_id = metadata["workspace_id"]
+    invoke(second, environment, "--use", "local")
+
+    attached = invoke(second, environment, "--workspace", "attach", workspace_id)
+    invoke(second, environment, "build")
+
+    assert f"persistent-workspace={workspace_id}" in attached.stdout
+    call = engine_calls(log)[0]
+    assert_assignment(call, "CLOUDMAKE_WORKSPACE_ID", workspace_id)
+    assert_assignment(call, "CLOUDMAKE_ADOPT", "1")
+    assert_assignment(call, "COLAB_GPU", "T4")
+    configs = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (tmp_path / "config" / "projects").glob("*.json")
+    ]
+    old = next(config for config in configs if config.get("project") == str(first))
+    assert old["persistent_workspace"] is False
+    assert "workspace_id" not in old
+
+
+def test_workspace_purge_requires_force_and_detaches_local_metadata(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "--use", "colab", "--persist")
+    record = next((tmp_path / "state" / "workspaces").glob("*.json"))
+    metadata = json.loads(record.read_text(encoding="utf-8"))
+    workspace_id = metadata["workspace_id"]
+
+    refused = invoke(
+        project, environment, "--workspace", "purge", workspace_id, check=False
+    )
+    assert refused.returncode == 2
+    assert "--force" in refused.stdout
+    assert record.exists()
+    assert engine_calls(log) == []
+
+    purged = invoke(
+        project,
+        environment,
+        "--force",
+        "--workspace",
+        "purge",
+        workspace_id,
+    )
+    assert "purged and detached" in purged.stdout
+    call = engine_calls(log)[0]
+    assert "workspace-purge" in call
+    assert_assignment(call, "CLOUDMAKE_WORKSPACE_ID", workspace_id)
+    assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "1")
+    assert_assignment(call, "COLAB_SESSION", metadata["session"])
+    assert not record.exists()
+    config = next((tmp_path / "config" / "projects").glob("*.json"))
+    saved = json.loads(config.read_text(encoding="utf-8"))
+    assert saved["persistent_workspace"] is False
+    assert "workspace_id" not in saved
+
+
+@pytest.mark.parametrize("backend", ["kaggle", "colab-ssh"])
+def test_persistence_is_rejected_for_an_ephemeral_backend_before_dispatch(
+    tmp_path: Path, fake_bin: Path, backend: str
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(
+        project, environment, "--use", backend, "--persist", check=False
+    )
+
+    assert result.returncode == 2
+    assert "does not support persistent workspaces" in result.stdout
+    assert "--no-persist" in result.stdout
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize(
+    ("backend", "selection"),
+    [
+        ("local", ("--use", "local", "--persist")),
+        ("codespaces-ssh", ("--use", "codespaces", "--persist")),
+        ("host-ssh", ("--use", "ssh", "--host", "lab-gpu", "--persist")),
+        ("lightning-studio-ssh", ("--use", "lightning", "--persist")),
+    ],
+)
+def test_native_persistence_preserves_target_dispatch_without_checkpoint_transfer(
+    tmp_path: Path,
+    fake_bin: Path,
+    backend: str,
+    selection: tuple[str, ...],
+) -> None:
+    project = make_project(tmp_path / f"project-{backend}")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    selected = invoke(project, environment, *selection)
+    result = invoke(project, environment, "build", "MODE=fast")
+
+    assert "persistent-workspace=enabled mode=native" in selected.stdout
+    assert f"persistence=native backend={backend} checkpoint-transfer=no" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["persistent_workspace"] == {
+        "enabled": True,
+        "mode": "native",
+        "workspace_id": None,
+    }
+    assert provenance["checkpoint"] == {"enabled": False}
+    call = engine_calls(log)[0]
+    if backend != "local":
+        assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "0")
+        assert project_arguments(call) == ["MODE=fast"]
+
+
+def test_legacy_checkpoint_alias_selects_native_persistence_without_intrusion(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "local-alias")
+    environment, _ = contract_environment(tmp_path, fake_bin)
+
+    selected = invoke(project, environment, "--use", "local", "--checkpoint")
+    result = invoke(project, environment, "test")
+
+    assert "persistent-workspace=enabled mode=native" in selected.stdout
+    assert "persistence=native backend=local checkpoint-transfer=no" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("backend", "extra"),
+    [
+        ("local", ()),
+        ("colab", ()),
+        ("kaggle", ()),
+        ("codespaces", ()),
+        ("colab-ssh", ()),
+        ("ssh", ("--host", "lab-gpu")),
+        ("lightning", ()),
+    ],
+)
+def test_persistence_remains_disabled_by_default_for_every_backend(
+    tmp_path: Path,
+    fake_bin: Path,
+    backend: str,
+    extra: tuple[str, ...],
+) -> None:
+    project = make_project(tmp_path / f"default-{backend}")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, "-b", backend, *extra, "build")
+
+    assert "persistence=" not in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["persistent_workspace"] == {
+        "enabled": False,
+        "mode": "disabled",
+        "workspace_id": None,
+    }
+    assert provenance["checkpoint"] == {"enabled": False}
+    call = engine_calls(log)[0]
+    if backend != "local":
+        assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "0")
+
+
+def test_switch_to_ephemeral_backend_requires_explicit_persistence_disable(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "switch-backend")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "--use", "colab", "--persist")
+
+    refused = invoke(project, environment, "--use", "kaggle", check=False)
+    selected = invoke(
+        project, environment, "--use", "kaggle", "--no-persist"
+    )
+    invoke(project, environment, "build")
+
+    assert refused.returncode == 2
+    assert "--no-persist" in refused.stdout
+    assert "persistent-workspace=disabled" in selected.stdout
+    call = engine_calls(log)[0]
+    assert_assignment(call, "BACKEND", "kaggle-notebook")
+    assert_assignment(call, "CLOUDMAKE_CHECKPOINT", "0")
 
 
 def test_use_ssh_persists_the_host_alias_outside_the_project(
@@ -727,7 +1080,7 @@ def test_package_option_is_not_a_second_target_namespace(
     assert engine_calls(log) == []
 
 
-@pytest.mark.parametrize("command", ["start", "sync", "sync-dry-run", "status", "fetch", "open", "shell", "stop"])
+@pytest.mark.parametrize("command", ["start", "sync", "sync-dry-run", "status", "environment", "fetch", "open", "shell", "stop"])
 def test_lifecycle_options_are_not_remote_make_targets(
     tmp_path: Path, fake_bin: Path, command: str
 ) -> None:
@@ -769,7 +1122,7 @@ def test_project_variables_cannot_reconfigure_the_host_engine(
     assert "KAGGLE_ACCELERATOR=NvidiaL4" not in call
 
 
-@pytest.mark.parametrize("option", ["--doctor", "--start", "--sync", "--status", "--fetch", "--open", "--shell", "--stop"])
+@pytest.mark.parametrize("option", ["--doctor", "--start", "--sync", "--status", "--environment", "--fetch", "--open", "--shell", "--stop"])
 def test_cloud_operations_reject_trailing_project_arguments(
     tmp_path: Path, fake_bin: Path, option: str
 ) -> None:
@@ -917,7 +1270,7 @@ def test_colab_default_session_migrates_existing_legacy_project_state(
     result = invoke(project, environment, "test")
 
     assert_assignment(engine_calls(log)[0], "COLAB_SESSION", "cuda-build")
-    assert "Reusing legacy default session cuda-build" in result.stdout
+    assert "Continuing with legacy session cuda-build" in result.stdout
 
 
 def test_explicit_colab_session_is_preserved_exactly(

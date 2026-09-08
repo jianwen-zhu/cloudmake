@@ -23,6 +23,7 @@ RSYNC_RSH := $(SSH_BIN) $(SSH_OPTIONS)
 SSH_REMOTE_OWNER_COPY := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/remote-owner.json
 CLOUDMAKE_RSYNC_IGNORE := $(if $(wildcard $(PROJECT_DIR)/.cloudmakeignore),--exclude-from='$(PROJECT_DIR)/.cloudmakeignore',)
 SSH_ARTIFACT_ARCHIVE := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/artifacts.tar.gz
+SSH_SOURCE_DELETE_SCRIPT := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/source-delete.sh
 
 .PHONY: help start status stop sync collect dispatch fetch shell open \
 	_ssh-backend-start _ssh-start _ssh-sync _ssh-sync-unlocked _ssh-execute \
@@ -116,6 +117,10 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 		--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
 		$(CLOUDMAKE_SECRET_OPTION) \
 		--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' >/dev/null
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_reconcile.py' \
+		--previous '$(CLOUDMAKE_MANIFEST)' \
+		--current '$(CLOUDMAKE_CURRENT_MANIFEST)' \
+		--script '$(SSH_SOURCE_DELETE_SCRIPT)'
 	@set -eu; \
 	temporary='$(SSH_REMOTE_OWNER_COPY).tmp'; \
 	if $(SSH) "cat '$(REMOTE_OWNER_FILE)'" > "$$temporary" 2>/dev/null && test -s "$$temporary"; then \
@@ -129,7 +134,8 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 		rm -f "$$temporary" '$(SSH_REMOTE_OWNER_COPY)'; \
 	fi
 	$(SSH) 'mkdir -p $(REMOTE_SRC)'
-	$(RSYNC_BIN) -az --delete \
+	$(SSH) "sh -s -- '$(REMOTE_SRC)'" < '$(SSH_SOURCE_DELETE_SCRIPT)'
+	$(RSYNC_BIN) -az \
 		--exclude='/.git/' \
 		--exclude='/.cloud-state/' \
 		--exclude='/artifacts/' \
