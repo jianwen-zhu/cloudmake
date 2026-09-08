@@ -1,10 +1,13 @@
 # Backend contract
 
-Cloudmake backends adapt local execution and different provider lifecycles and
-transports to one execution model: invoke an ordinary Make target against the
-selected working tree and optionally retrieve output. Remote backends synchronize
-the local tree first. This document is for cloudmake backend
-authors and maintainers. Project developers should instead read the
+Cloudmake backends compose up to three independent roles: compute
+lifecycle/transport, persistent workspace/checkpoint service, and
+application-bundle runtime qualification. Together they expose one execution
+model: invoke an ordinary Make target against the selected working tree and
+optionally retrieve output. Remote backends synchronize the local tree first.
+A backend may explicitly omit any role it cannot provide; one role must not
+acquire the semantics or state of another. This document is for Cloudmake
+backend authors and maintainers. Project developers should instead read the
 [project contract](project-contract.md).
 
 ## Project boundary
@@ -50,7 +53,9 @@ Each backend declares:
 - the supported backend API version;
 - a canonical backend name;
 - a lifecycle: `local`, `session`, or `batch`;
-- an ordered set of capabilities; and
+- an ordered set of capabilities, including any persistence and bundle-runtime
+  roles;
+- an ordered OCI runtime list, or `none`; and
 - a resource identifier suitable for local serialization.
 
 The shared core validates the descriptor before running an operational target.
@@ -94,20 +99,23 @@ candidate; it is not a compatibility guarantee.
 
 Every backend must also declare an ordered `BACKEND_OCI_RUNTIMES` list. Use
 `none` when OCI is unsupported. The supported runtime vocabulary is `podman`,
-`docker`, `nerdctl`, `proot`, and `chroot`. For example:
+`docker`, `nerdctl`, `proot`, and `crun`. For example:
 
 ```make
 # A host whose installed execution surface must be discovered dynamically.
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
 
 # A managed notebook with one provider-qualified adapter.
-BACKEND_OCI_RUNTIMES := chroot
+BACKEND_OCI_RUNTIMES := crun
 ```
 
 The declaration describes mechanisms the backend permits, not commands proven
 to work on every instance. Cloudmake rejects selections that no declared option
 can satisfy, then probes the actual VM in declaration order. An installed but
-unready native runtime is skipped so another declared option can qualify. The
+unready native runtime is skipped so another declared option can qualify. A
+provider-qualified entry such as Colab's `crun` means the backend also owns the
+exact OCI-spec adaptation, device integration, and security limitations; it is
+not a generic endorsement of that command on other managed VMs. The
 image-specific preflight remains the final authority and never causes target
 replay.
 

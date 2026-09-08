@@ -47,7 +47,8 @@ run_logged() {
 	fi
 }
 
-run_logged select "$cloudmake" -C "$project" --use colab --cpu --image "$image"
+run_logged select "$cloudmake" -C "$project" --use colab --gpu=T4 \
+	--image "$image" --device nvidia.com/gpu=all
 run_logged toolcheck "$cloudmake" -C "$project" orfs-toolcheck
 run_logged enable-persistence "$cloudmake" -C "$project" --persist --start
 run_logged stage1 "$cloudmake" -C "$project" orfs-floorplan

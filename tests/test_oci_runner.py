@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import contextlib
 import importlib.util
 import json
 import os
@@ -258,6 +257,212 @@ def test_dynamic_runtime_probe_skips_non_cdi_fallbacks(monkeypatch) -> None:
     assert selected == "docker"
 
 
+def test_dynamic_runtime_probe_selects_direct_crun_for_cdi(monkeypatch) -> None:
+    module = load("oci_runner_crun_runtime_option")
+    monkeypatch.setattr(module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "crun 1.8\n"),
+    )
+
+    selected = module.select_runtime("auto", ["crun"], requires_cdi=True)
+
+    assert selected == "crun"
+
+
+def test_removed_chroot_runtime_is_rejected_by_public_parser(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    completed = run_command(
+        [
+            sys.executable,
+            TOOL,
+            "--mode",
+            "preflight",
+            "--image",
+            IMAGE,
+            "--runtime",
+            "chroot",
+            "--source",
+            source,
+            "--cache",
+            tmp_path / "cache",
+            "--result",
+            tmp_path / "result.json",
+        ],
+        cwd=tmp_path,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "invalid choice: 'chroot'" in completed.stdout
+
+
+def test_crun_base_command_enters_image_through_make(tmp_path: Path) -> None:
+    module = load("oci_runner_crun_base_command")
+    command = module.crun_base_command(
+        tmp_path / "bundle",
+        tmp_path / "source",
+        "65534:65534",
+        tmp_path / "result.json",
+        ["nvidia.com/gpu=all"],
+        [tmp_path / "cdi"],
+    )
+
+    assert command[:3] == [sys.executable, str(TOOL), "--internal-crun-exec"]
+    assert command[-2:] == ["--", "make"]
+    assert command[command.index("--device") + 1] == "nvidia.com/gpu=all"
+    assert command[command.index("--cdi-dir") + 1] == str(tmp_path / "cdi")
+    parsed = module.internal_crun_parser(command[3:])
+    assert parsed.command == ["make"]
+    assert parsed.device == ["nvidia.com/gpu=all"]
+    assert parsed.cdi_dir == [tmp_path / "cdi"]
+
+
+def test_direct_crun_adapter_applies_strict_json_cdi_edits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("oci_runner_crun_cdi_edits")
+    cdi = tmp_path / "cdi"
+    cdi.mkdir()
+    libraries = tmp_path / "driver-libs"
+    libraries.mkdir()
+    device = tmp_path / "gpu0"
+    device.write_text("device", encoding="utf-8")
+    (cdi / "gpu.json").write_text(
+        json.dumps(
+            {
+                "cdiVersion": "0.6.0",
+                "kind": "vendor.example/gpu",
+                "devices": [
+                    {
+                        "name": "all",
+                        "containerEdits": {
+                            "env": ["GPU_VISIBLE=all"],
+                            "mounts": [
+                                {
+                                    "hostPath": str(libraries),
+                                    "containerPath": "/opt/driver",
+                                    "options": ["rbind", "ro"],
+                                }
+                            ],
+                            "deviceNodes": [
+                                {"path": "/dev/gpu0", "hostPath": str(device)}
+                            ],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module.stat, "S_ISCHR", lambda mode: True)
+    payload = {"process": {"env": ["PATH=/usr/bin"]}, "mounts": []}
+
+    sources = module.apply_cdi_edits(
+        payload, ["vendor.example/gpu=all"], [cdi]
+    )
+
+    assert sources == [str(cdi / "gpu.json")]
+    assert "GPU_VISIBLE=all" in payload["process"]["env"]
+    assert {mount["destination"] for mount in payload["mounts"]} == {
+        "/opt/driver", "/dev/gpu0"
+    }
+
+
+def test_direct_crun_adapter_rejects_unimplemented_cdi_edits(tmp_path: Path) -> None:
+    module = load("oci_runner_crun_rejects_hooks")
+    cdi = tmp_path / "cdi"
+    cdi.mkdir()
+    (cdi / "gpu.json").write_text(
+        json.dumps(
+            {
+                "cdiVersion": "0.6.0",
+                "kind": "vendor.example/gpu",
+                "devices": [
+                    {
+                        "name": "all",
+                        "containerEdits": {
+                            "hooks": [{"hookName": "createContainer", "path": "/hook"}]
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.RunnerError, match="unsupported by the Colab crun"):
+        module.apply_cdi_edits(
+            {"process": {"env": []}, "mounts": []},
+            ["vendor.example/gpu=all"],
+            [cdi],
+        )
+
+
+def test_direct_crun_profile_is_nonroot_and_preserves_target_status(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("oci_runner_crun_transaction")
+    bundle = tmp_path / "bundle"
+    rootfs = bundle / "rootfs"
+    rootfs.mkdir(parents=True)
+    (bundle / "config.json").write_text(
+        json.dumps(
+            {
+                "root": {"path": "rootfs"},
+                "process": {"env": ["PATH=/usr/bin"]},
+                "linux": {
+                    "resources": {},
+                    "namespaces": [
+                        {"type": "mount"}, {"type": "pid"},
+                        {"type": "network"}, {"type": "cgroup"},
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    result = tmp_path / "internal.json"
+    observed: dict = {}
+    monkeypatch.setattr(module, "chown_workspace", lambda *_: None)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["crun", "delete"]:
+            return subprocess.CompletedProcess(command, 0)
+        assert command[:3] == ["crun", "--cgroup-manager=disabled", "run"]
+        config = json.loads((Path(kwargs["cwd"]) / "config.json").read_text())
+        observed.update(config)
+        receipt_mount = next(
+            mount for mount in config["mounts"]
+            if mount["destination"] == "/run/cloudmake"
+        )
+        Path(receipt_mount["source"], "result.json").write_text(
+            json.dumps({"schema": 1, "exit_code": 2}), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(command, 2)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    exit_code = module.internal_crun_exec(
+        [str(bundle), str(source), "65534:65534", str(result), "--", "make", "test"]
+    )
+
+    assert exit_code == 2
+    assert observed["root"] == {"path": str(rootfs), "readonly": True}
+    assert observed["process"]["user"] == {"uid": 65534, "gid": 65534}
+    assert observed["process"]["noNewPrivileges"] is True
+    assert all(not values for values in observed["process"]["capabilities"].values())
+    assert {item["type"] for item in observed["linux"]["namespaces"]} == {"mount"}
+    proc = next(item for item in observed["mounts"] if item["destination"] == "/proc")
+    assert "rw" in proc["options"]
+    assert json.loads(result.read_text())["exit_code"] == 2
+
+
 def test_proot_uses_only_validated_image_environment(tmp_path: Path) -> None:
     module = load("oci_runner_proot_environment")
     bundle = tmp_path / "bundle"
@@ -308,191 +513,6 @@ def test_root_proot_requires_and_drops_to_backend_selected_identity(
     assert (source, 65534, 65534) in ownership
 
 
-def test_chroot_command_uses_private_receipt_and_clean_image_environment(
-    tmp_path: Path,
-) -> None:
-    module = load("oci_runner_chroot_command")
-    bundle = tmp_path / "bundle"
-    bundle.mkdir()
-    (bundle / "config.json").write_text(
-        json.dumps({"process": {"env": ["PATH=/tools/bin:/usr/bin", "TOOLS=/tools"]}}),
-        encoding="utf-8",
-    )
-    internal_result = tmp_path / "internal.json"
-
-    command = module.chroot_base_command(
-        bundle, tmp_path / "source", "65534:65534", internal_result
-    )
-
-    assert command[:3] == [
-        sys.executable,
-        str(TOOL),
-        "--internal-chroot-exec",
-    ]
-    assert str(internal_result) in command
-    assert command[-1] == "make"
-    assert "PATH=/tools/bin:/usr/bin" in command
-    assert "TOOLS=/tools" in command
-    assert "AWS_SECRET_ACCESS_KEY" not in " ".join(command)
-
-
-def test_chroot_execution_preserves_completed_target_status(
-    tmp_path: Path, monkeypatch
-) -> None:
-    module = load("oci_runner_chroot_transaction")
-    bundle = tmp_path / "bundle"
-    rootfs = bundle / "rootfs"
-    rootfs.mkdir(parents=True)
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "input.txt").write_text("before\n", encoding="utf-8")
-    result = tmp_path / "internal.json"
-    monkeypatch.setattr(module, "chown_workspace", lambda *_: None)
-    monkeypatch.setattr(
-        module, "restricted_chroot_mounts", lambda *_: contextlib.nullcontext()
-    )
-
-    def fake_run(command, **kwargs):
-        (source / "output.txt").write_text("after\n", encoding="utf-8")
-        return subprocess.CompletedProcess(command, 70)
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    exit_code = module.internal_chroot_exec(
-        [
-            str(bundle),
-            str(source),
-            "65534:65534",
-            str(result),
-            "--",
-            "/usr/bin/env",
-            "-i",
-            "make",
-            "--",
-            "target",
-        ]
-    )
-
-    assert exit_code == 70
-    assert (source / "output.txt").read_text(encoding="utf-8") == "after\n"
-    assert json.loads(result.read_text(encoding="utf-8")) == {
-        "schema": 1,
-        "status": "completed",
-        "exit_code": 70,
-    }
-    module.validate_chroot_execution(result, 70)
-
-
-def test_chroot_symlink_workspace_is_infrastructure_failure(
-    tmp_path: Path, monkeypatch
-) -> None:
-    module = load("oci_runner_chroot_stranded")
-    bundle = tmp_path / "bundle"
-    rootfs = bundle / "rootfs"
-    rootfs.mkdir(parents=True)
-    guest = rootfs / "workspace"
-    guest.symlink_to(tmp_path)
-    source = tmp_path / "source"
-    source.mkdir()
-    result = tmp_path / "internal.json"
-
-    with pytest.raises(module.RunnerError, match="must not be a symbolic link"):
-        module.internal_chroot_exec(
-            [
-                str(bundle),
-                str(source),
-                "65534:65534",
-                str(result),
-                "--",
-                "/usr/bin/env",
-                "-i",
-                "make",
-                "--",
-                "target",
-            ]
-        )
-
-    receipt = json.loads(result.read_text(encoding="utf-8"))
-    assert receipt["status"] == "infrastructure-failed"
-    assert "must not be a symbolic link" in receipt["error"]
-    assert guest.is_symlink()
-
-
-def test_chroot_mount_profile_is_nosuid_and_workspace_bounded(
-    tmp_path: Path, monkeypatch
-) -> None:
-    module = load("oci_runner_chroot_mounts")
-    rootfs = tmp_path / "rootfs"
-    source = tmp_path / "source"
-    workspace = rootfs / "workspace"
-    runtime_tmp = tmp_path / "runtime-tmp"
-    rootfs.mkdir()
-    source.mkdir()
-    workspace.mkdir()
-    runtime_tmp.mkdir()
-    commands: list[list[str]] = []
-    cleanup: list[list[str]] = []
-
-    def fake_checked(command, **kwargs):
-        commands.append(command)
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    def fake_run(command, **kwargs):
-        cleanup.append(command)
-        return subprocess.CompletedProcess(command, 0, "")
-
-    monkeypatch.setattr(module, "run_checked", fake_checked)
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    with module.restricted_chroot_mounts(rootfs, source, workspace, runtime_tmp):
-        pass
-
-    assert ["mount", "--bind", str(rootfs), str(rootfs)] in commands
-    assert [
-        "mount",
-        "-o",
-        "remount,bind,ro,nosuid,nodev",
-        str(rootfs),
-    ] in commands
-    assert ["mount", "--bind", "/proc", str(rootfs / "proc")] in commands
-    assert [
-        "mount",
-        "-o",
-        "remount,bind,ro,nosuid,nodev,noexec",
-        str(rootfs / "proc"),
-    ] in commands
-    assert ["mount", "--bind", str(source), str(workspace)] in commands
-    assert [
-        "mount",
-        "--bind",
-        str(runtime_tmp),
-        str(rootfs / "tmp"),
-    ] in commands
-    assert [
-        "mount",
-        "-o",
-        "remount,bind,rw,nosuid,nodev",
-        str(workspace),
-    ] in commands
-    assert cleanup[-1] == ["umount", str(rootfs)]
-
-
-def test_chroot_rejects_symlink_runtime_mountpoint(tmp_path: Path) -> None:
-    module = load("oci_runner_chroot_symlink")
-    rootfs = tmp_path / "rootfs"
-    rootfs.mkdir()
-    (rootfs / "proc").symlink_to(tmp_path)
-
-    with pytest.raises(module.RunnerError, match="must not be a symbolic link"):
-        with module.restricted_chroot_mounts(
-            rootfs,
-            tmp_path / "source",
-            rootfs / "workspace",
-            tmp_path / "runtime-tmp",
-        ):
-            pass
-
-
 def test_terminal_receipt_distinguishes_target_exit_70_from_infrastructure(
     tmp_path: Path,
 ) -> None:
@@ -523,7 +543,7 @@ def test_terminal_receipt_distinguishes_target_exit_70_from_infrastructure(
             {
                 "schema": 1,
                 "status": "infrastructure-failed",
-                "error": "restricted chroot mount failed",
+                "error": "crun launch failed",
             }
         ),
         encoding="utf-8",
@@ -534,7 +554,7 @@ def test_terminal_receipt_distinguishes_target_exit_70_from_infrastructure(
         check=False,
     )
     assert completed.returncode == 70
-    assert "OCI infrastructure failure: restricted chroot mount failed" in completed.stdout
+    assert "OCI infrastructure failure: crun launch failed" in completed.stdout
     assert "target '" not in completed.stdout
 
 

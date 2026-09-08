@@ -157,21 +157,32 @@ roles.
 
 ## Design
 
-Cloudmake 2.0 introduced opt-in persistent workspaces that preserve
-project-generated state across ephemeral accelerator VMs without changing the
-project's Make interface.
-The storage-neutral lifecycle, safety boundary, and acceptance gate are recorded
-in [Stateful workspaces](docs/stateful-workspaces.md). When persistence is not
-enabled, state still lasts only as long as the selected reusable VM and its
-workspace survive.
+Cloudmake builds a remote-workstation experience around an unmodified local
+Make project. Each backend can adapt three independent services:
 
-This is the path toward a remote-workstation experience built from replaceable
-cloud compute. Cloudmake 2.0 adds durable mutable workspaces. Cloudmake 2.1 adds
-one managed non-native runner—registry-backed OCI images with CDI device
-requirements—so immutable tools and mutable project state remain separate.
-Native Make remains the default. Backend, runner, persistence, and source
-acquisition are independent axes; the contract is documented in
-[Execution environments and OCI runner](docs/execution-environments.md).
+1. a compute platform, including its allocation, lifecycle, and command
+   transport;
+2. a persistent workspace or checkpoint service for mutable project state; and
+3. an application-bundle runtime for a reproducible professional tool suite.
+
+A backend may implement any subset. Unsupported combinations fail explicitly;
+they never acquire accidental meaning. In particular, an OCI registry and its
+disposable image cache are not a project checkpoint, durable storage does not
+select a runner, and selecting an accelerator does not silently change the
+project command.
+
+Execution composes those services with a fourth independent choice: the source
+of the project. Today the local working tree is authoritative; future source
+adapters may add other acquisition mechanisms without changing compute,
+persistence, or bundle semantics. Native Make remains the default runner.
+
+The capability ladder follows naturally from this model. Cloudmake 2.0 added
+opt-in persistent workspaces, preserving project-generated state across
+ephemeral accelerator VMs. Cloudmake 2.1 adds one managed non-native runner:
+registry-backed OCI images with CDI device requirements, keeping immutable
+tools separate from mutable work. The storage-neutral lifecycle and runtime
+contracts are documented in [Stateful workspaces](docs/stateful-workspaces.md)
+and [Execution environments and OCI runner](docs/execution-environments.md).
 
 ### Tool repository and project repository are separate
 
@@ -786,24 +797,30 @@ target is not run. After preflight, Make is submitted exactly once and ordinary
 target failures retain their exit status and output.
 
 Local and SSH backends prefer Podman, Docker, then nerdctl, with a PRoot
-fallback for CPU images. Colab uses a separate restricted chroot adapter because
-its managed VM does not provide a generally usable native container surface.
-That adapter materializes the OCI rootfs, mounts it read-only with
-`nosuid,nodev`, supplies a fresh writable `/tmp`, binds only the project
-workspace plus a read-only `/proc` and a small standard-device allowlist, and
-runs Make as a non-root identity. CDI is rejected for
-`colab-notebook`, and its managed OCI profile is CPU-only, rather than silently
-allocating an inaccessible accelerator. Kaggle OCI execution is
-unsupported in 2.1 and is rejected before provider contact.
+fallback for CPU images. Colab declares exactly one provider-qualified OCI
+runtime: Cloudmake's `crun` adapter. It materializes the digest-pinned rootfs,
+uses the namespace and cgroup profile established by live qualification, and
+applies NVIDIA devices and host driver libraries from a generated CDI
+specification. Make runs as UID/GID 65534 with no capabilities and
+`noNewPrivileges`; the image root is read-only while `/workspace` and a fresh
+`/tmp` are writable. Kaggle OCI execution is unsupported in 2.1 and is rejected
+before provider contact.
 
 The registry remains authoritative for immutable layers. Runtime image caches
 are disposable VM-local state and are not copied into persistent-workspace
 checkpoints. The target sees the image's OCI environment, not the host's
-environment or credentials. The Colab adapter shares the VM kernel and network
-and is not a strong sandbox for untrusted images. Details, backend coverage,
-security boundaries, and the ORFS validation ladder are in the
+environment or credentials. The Colab adapter shares the VM's PID and network
+namespaces and uses the host `/proc` because Colab cannot mount the procfs and
+cgroup combination expected by stock container profiles. It is not a strong
+sandbox for untrusted images. Cloudmake deliberately exposes neither an
+alternative Colab `runc` profile—which warned that this no-cgroup mode may stop
+working in a future release—nor a bare `chroot` CPU profile that cannot expose
+the accelerator motivating the backend. Details, backend coverage, security
+boundaries, and the ORFS validation ladder are in the
 [OCI/CDI runner guide](docs/oci-runner.md) and
-[execution-environment contract](docs/execution-environments.md).
+[execution-environment contract](docs/execution-environments.md). Colab's exact
+tested runtime boundary is recorded in
+[Colab OCI/CDI qualification](docs/colab-oci-qualification.md).
 
 #### Persistent workspace modes
 
@@ -1241,18 +1258,20 @@ project target requests a machine.
 
 ## Backend behavior summary
 
-| Backend | VM lifecycle | Source transfer | Execution | Interactive shell |
-| --- | --- | --- | --- | --- |
-| `local` | No VM or session | None | Direct project Make | Use the existing local shell |
-| `colab-notebook` | Reusable named session | Fingerprinted archive via Colab API | `colab exec` notebook | No |
-| `kaggle-notebook` | Fresh batch VM per target | Source embedded in private notebook | Kaggle kernel version | No |
-| `codespaces-ssh` | Reusable quota-backed VM | Incremental rsync over SSH | Remote Make | Yes |
-| `colab-ssh` | Reusable paid Colab VM | Incremental rsync over SSH | Remote Make | Yes |
-| `host-ssh` | Existing user-managed host | Incremental rsync over SSH | Remote Make | Yes |
-| `lightning-studio-ssh` | Persistent quota/credit-backed Studio | Incremental rsync over SSH | Remote Make | Yes |
+The three service-adapter roles are visible in each backend's contract:
 
-The backends intentionally converge at the project Makefile, not at their
-transport or lifecycle layer. Project developers should use the
+| Backend | Compute adapter | Persistence adapter | Bundle-runtime adapter | Source transfer |
+| --- | --- | --- | --- | --- |
+| `local` | Existing local process | Native tree; no transfer | Podman, Docker, nerdctl, or CPU PRoot | None |
+| `colab-notebook` | Reusable named Colab session | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
+| `kaggle-notebook` | Fresh Kaggle batch VM per target | Unsupported | Unsupported | Source embedded in private notebook |
+| `codespaces-ssh` | Reusable quota-backed VM over SSH | Provider workspace | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| `colab-ssh` | Reusable paid Colab VM over SSH | Unsupported | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| `host-ssh` | Existing user-managed SSH host | Host filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| `lightning-studio-ssh` | Reusable quota/credit-backed Studio | Studio filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+
+The roles intentionally converge at the project Makefile, not at their
+transport, storage, or bundle layer. Project developers should use the
 [project contract](docs/project-contract.md); backend authors and maintainers can
 find the adapter interface and extension checklist in the
 [backend contract](docs/backend-contract.md).

@@ -5,7 +5,7 @@ BACKEND_ACCESS_CLASS := notebook
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
 BACKEND_CAPABILITIES := sync execute status incremental-sync open artifacts gpu cancel capacity-retry persistent-workspace checkpoint-persistence environment-profile oci-runner
-BACKEND_OCI_RUNTIMES := chroot
+BACKEND_OCI_RUNTIMES := crun
 
 COLAB_SESSION ?= $(PROJECT_SLUG)
 COLAB_GPU ?=

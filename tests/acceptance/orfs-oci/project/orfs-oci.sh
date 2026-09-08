@@ -51,6 +51,7 @@ case "${1:-}" in
 		test -x /OpenROAD-flow-scripts/tools/install/yosys/bin/yosys || die 'Yosys executable is absent'
 		/OpenROAD-flow-scripts/tools/install/OpenROAD/bin/openroad -version
 		/OpenROAD-flow-scripts/tools/install/yosys/bin/yosys -V
+		nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
 		;;
 	floorplan)
 		run_orfs floorplan

@@ -77,7 +77,7 @@ endif
 ifeq ($(strip $(BACKEND_OCI_RUNTIMES)),)
 $(error Backend "$(BACKEND)" does not declare BACKEND_OCI_RUNTIMES)
 endif
-ifneq ($(filter-out none podman docker nerdctl proot chroot,$(BACKEND_OCI_RUNTIMES)),)
+ifneq ($(filter-out none podman docker nerdctl proot crun,$(BACKEND_OCI_RUNTIMES)),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_OCI_RUNTIMES "$(BACKEND_OCI_RUNTIMES)")
 endif
 ifneq ($(filter none,$(BACKEND_OCI_RUNTIMES)),)

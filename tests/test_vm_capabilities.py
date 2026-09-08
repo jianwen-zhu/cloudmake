@@ -63,7 +63,7 @@ def test_profile_is_machine_readable_and_renderable(tmp_path: Path, capsys) -> N
     assert "environment os=linux arch=x86_64" in output
     assert "capabilities filesystem=unknown exec=yes symlink=yes" in output
     assert "nix" not in output.lower()
-    assert "oci-clients=none cdi-devices=0 restricted-chroot=unknown" in output
+    assert "oci-clients=none cdi-devices=0" in output
     assert "sif" not in output.lower()
     assert "evidence=observed (not a provider guarantee)" in output
 
@@ -94,27 +94,6 @@ def test_cdi_probe_records_only_standard_qualified_names(tmp_path: Path) -> None
     serialized = json.dumps(result)
     assert "containerEdits" not in serialized
     assert "env" not in serialized
-
-
-def test_restricted_chroot_probe_is_only_a_preflight_candidate(monkeypatch) -> None:
-    module = load("vm_capabilities_restricted_chroot")
-    monkeypatch.setattr(module.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(
-        module,
-        "effective_capabilities",
-        lambda: {"sys_chroot": True, "sys_admin": True},
-    )
-    monkeypatch.setattr(module.shutil, "which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(module.Path, "exists", lambda self: True)
-
-    result = module.restricted_chroot_record()
-
-    assert result["status"] == "candidate"
-    assert result["runtime_preflight_required"] is True
-    assert result["profile"]["rootfs"] == "bind-ro-nosuid-nodev"
-    assert result["profile"]["project"] == "bind-rw-nosuid-nodev"
-    assert result["profile"]["tmp"] == "fresh-bind-rw-nosuid-nodev"
-    assert result["profile"]["proc"] == "bind-ro-nosuid-nodev-noexec"
 
 
 def test_remote_entrypoint_ignores_jupyter_kernel_arguments(

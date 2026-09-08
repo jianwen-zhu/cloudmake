@@ -4,9 +4,18 @@ This document defines the boundary between Cloudmake 2.0 persistent workspaces
 and the Cloudmake 2.1 OCI/CDI execution surface. It is normative for those
 releases; research experiments do not expand the supported interface.
 
-## Orthogonal model
+## Backend roles and orthogonal choices
 
-A Cloudmake execution is the composition of four independent choices:
+Cloudmake treats a backend as a composition point for three service adapters:
+
+| Backend role | Responsibility | Example |
+| --- | --- | --- |
+| Compute adapter | Allocate, identify, start/stop, and execute on a compute platform | Colab session API, Kaggle batch API, SSH host |
+| Persistence adapter | Preserve or attach mutable project state across the supported lifecycle | encrypted Drive checkpoint, provider-persistent volume, local tree |
+| Bundle-runtime adapter | Qualify and execute a reproducible application tool bundle | Podman/Docker/nerdctl, PRoot fallback, Colab `crun` profile |
+
+These roles are independent capabilities, not a requirement that every backend
+implement all three. A Cloudmake execution then composes four choices:
 
 | Axis | Native/default surface | Managed extension |
 | --- | --- | --- |
@@ -24,8 +33,9 @@ The axes must remain independent. In particular:
 - source acquisition does not become container-image construction.
 
 This model is the path from short-lived cloud compute to a remote-workstation
-experience: replaceable compute, reproducible tools, durable mutable work, and
-portable source are composed without pretending they are one kind of state.
+experience: replaceable compute, reproducible professional tool bundles,
+durable mutable work, and portable source are composed without pretending they
+are one kind of state.
 
 ## Cloudmake 2.0: format-neutral workspaces
 
@@ -57,8 +67,8 @@ or executing the project. The compact output and retained JSON profile record:
 - cgroup generation and writability;
 - `/dev/fuse`, `/dev/kvm`, and NVIDIA visibility;
 - installed OCI clients and fallback tools;
-- prerequisites for Cloudmake's restricted chroot adapter, reported only as a
-  candidate pending active runner preflight; and
+- installed OCI materialization and execution clients, reported only as
+  observations pending active runner preflight; and
 - CDI JSON specification names observed in standard static and dynamic
   directories (YAML files are counted but left to the runtime to validate).
 
@@ -139,14 +149,14 @@ is known.
 | --- | --- | --- | --- |
 | `local` | supported | Podman, Docker, nerdctl, then PRoot fallback | passed to native runtime; rejected by PRoot |
 | `host-ssh`, `codespaces-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | passed to native runtime; rejected by PRoot |
-| `colab-notebook` | CPU images supported | `skopeo` + `umoci` materialization and restricted chroot adapter | rejected before provider contact |
+| `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one provider-qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
 | `kaggle-notebook` | unsupported | none | rejected before provider contact |
 
 These choices are backend declarations rather than launcher special cases:
 
 ```make
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot  # local and SSH hosts
-BACKEND_OCI_RUNTIMES := chroot                       # Colab notebook
+BACKEND_OCI_RUNTIMES := crun                         # Colab notebook
 BACKEND_OCI_RUNTIMES := none                         # Kaggle notebook
 ```
 
@@ -157,34 +167,31 @@ is unavailable, Docker may qualify next. This readiness fallback occurs before
 image preparation and target submission; Cloudmake never switches runtimes and
 replays a project target after submission.
 
-Cloudmake installs only `skopeo` and `umoci` as its own transient runner
-plumbing on a Colab VM when needed; `chroot`, `mount`, and `umount` must be part
-of the managed VM base. It does not install the project's compiler or tool
-suite; those belong to the selected image. The adapter bind-mounts the
-materialized rootfs read-only with `nosuid,nodev`, supplies a fresh writable
-`/tmp`, binds the project workspace writable with `nosuid,nodev`, exposes `/proc` read-only with
-`nosuid,nodev,noexec`, and individually binds a small allowlist of standard
-character devices. It then enters the rootfs and drops to a non-root identity
-before Make. These mounts are created only for preflight or target execution
-and are removed afterward.
+Cloudmake installs `skopeo`, `umoci`, and `crun` as transient runner plumbing on
+a Colab VM when needed. It does not install the project's compiler or tool
+suite; those belong to the selected image. The adapter materializes the image,
+runs it with no cgroup, and retains the mount namespace while sharing the host
+PID and network namespaces. It binds the host `/proc` writable, `/sys`
+read-only, a fresh `/tmp`, the project workspace writable, and a narrow standard
+device set. NVIDIA device nodes, driver libraries, and `nvidia-smi` are added
+only through the generated CDI specification. The image root remains read-only.
+Make runs as UID/GID 65534 with empty capability sets and `noNewPrivileges`.
 
 Changes outside `/workspace` disappear with the invocation; the cached image
-root remains immutable. This restricted adapter is compatibility plumbing, not a strong sandbox. It
-shares the Colab VM kernel and network namespace, has no CDI injection, and
-does not emulate all OCI runtime isolation. Images used on this path must be
-trusted. It does not bind `/sys`, a broad `/dev`, host credential directories,
-or paths outside the project workspace.
+root remains immutable. This host-integrated adapter is compatibility plumbing,
+not a strong sandbox. It shares the Colab VM kernel, PID namespace, network,
+and host `/proc`; images used on this path must be trusted. It does not bind
+host credential directories or unrelated writable host paths.
 
 Native runtimes receive CDI qualified names through their standard device
 surface. Their bounded preflight is authoritative: a missing CDI specification,
 driver, runtime feature, unsupported image architecture, or `make` executable
 fails before the requested target is submitted. A static host/image architecture
 mismatch is recorded but is not alone a failure because a native runtime may
-provide configured emulation. The PRoot and Colab chroot profiles cannot
-safely inject CDI devices, so Cloudmake rejects either combination rather than
-silently running on the CPU.
-For the same reason, the Colab OCI profile rejects a saved or explicit GPU
-allocation request; use native Make for Colab GPU work in 2.1.
+provide configured emulation. PRoot cannot safely inject CDI devices, so
+Cloudmake rejects that combination rather than silently running on the CPU.
+The Colab adapter supports the qualified NVIDIA CDI path and rejects missing or
+ambiguous device evidence before Make.
 
 The supported product surface remains intentionally small:
 
@@ -210,9 +217,9 @@ cache is separate, discardable VM state whose absence cannot affect
 correctness. Registry and runtime credentials remain with their official
 clients; they are never placed in project source, checkpoint metadata, or
 provenance. Cloudmake passes no host environment variables into native OCI
-containers. Its PRoot and restricted chroot paths start project Make with a
-clean environment populated only from validated OCI image configuration plus
-safe `PATH`/`HOME` defaults. Image references, observed platform facts,
+containers. Its PRoot and Colab `crun` paths start project Make with a clean
+environment populated only from validated OCI image configuration plus safe
+`PATH`/`HOME` defaults. Image references, observed platform facts,
 selected CDI names, runtime name, and outcome are non-secret provenance.
 
 ## Filesystem safety

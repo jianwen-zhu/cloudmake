@@ -95,6 +95,24 @@ The prepared ORFS project owns its tool acquisition, launcher, stage checks,
 and target names. See the [gate contract](acceptance/orfs-checkpoint/README.md).
 The harness leaves the session intact after any failed or ambiguous operation.
 
+## ORFS OCI/CDI acceptance
+
+The separate 2.1 gate uses the pinned official ORFS OCI image on a Colab T4.
+Its first project target validates OpenROAD, Yosys, and NVIDIA CDI visibility;
+later targets compose that immutable tool bundle with the already accepted 2.0
+replacement-VM checkpoint flow:
+
+```sh
+export COLAB_SESSION=cloudmake-orfs-oci-acceptance
+export CLOUDMAKE_TEST_LIVE_ORFS_OCI=1
+tests/acceptance/orfs-oci/run.sh \
+  tests/acceptance/orfs-oci/project evidence
+```
+
+Drive authorization is required because the full gate destroys and replaces
+the VM between ORFS stages. The harness stops only after confirmed success and
+leaves an ambiguous session intact for inspection.
+
 `tests/contract/` exercises the public `cloudmake` launcher interface, including
 configuration precedence, aliases, external project isolation, arbitrary target
 dispatch, zero reserved project names, target-agnostic artifact collection,

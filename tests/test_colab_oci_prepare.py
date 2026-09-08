@@ -22,16 +22,21 @@ def load(name: str):
     return module
 
 
-def control(path: Path) -> None:
+def control(
+    path: Path, *, devices: list[str] | None = None, runtimes: list[str] | None = None
+) -> None:
     image = "registry.example/tools@sha256:" + "a" * 64
     path.write_text(
         "\n".join(
             (
                 base64.urlsafe_b64encode(image.encode()).decode(),
-                base64.urlsafe_b64encode(b"[]").decode(),
+                base64.urlsafe_b64encode(json.dumps(devices or []).encode()).decode(),
                 "/content/project",
                 "/content/cache",
                 "Makefile",
+                base64.urlsafe_b64encode(
+                    json.dumps(runtimes or ["crun"]).encode()
+                ).decode(),
             )
         )
         + "\n",
@@ -39,18 +44,18 @@ def control(path: Path) -> None:
     )
 
 
-def test_missing_base_mount_command_fails_without_package_install(
+def test_nonqualified_runtime_is_rejected_without_package_install(
     tmp_path: Path, monkeypatch
 ) -> None:
     module = load("colab_oci_prepare_missing_base")
     module.CONTROL = tmp_path / "control"
     module.RESULT = tmp_path / "result.json"
-    control(module.CONTROL)
+    control(module.CONTROL, runtimes=["proot"])
     calls: list[list[str]] = []
     monkeypatch.setattr(
         module.shutil,
         "which",
-        lambda name: None if name == "mount" else f"/usr/bin/{name}",
+        lambda name: f"/usr/bin/{name}",
     )
     monkeypatch.setattr(
         module.subprocess,
@@ -63,24 +68,54 @@ def test_missing_base_mount_command_fails_without_package_install(
 
     receipt = json.loads(module.RESULT.read_text(encoding="utf-8"))
     assert receipt["status"] == "infrastructure-failed"
-    assert "base VM" in receipt["error"]
-    assert "mount" in receipt["error"]
+    assert "qualified crun profile" in receipt["error"]
     assert calls == []
 
 
-def test_installer_requests_only_materialization_packages(
+def test_malformed_device_control_is_rejected_without_package_install(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("colab_oci_prepare_malformed_devices")
+    module.CONTROL = tmp_path / "control"
+    module.RESULT = tmp_path / "result.json"
+    control(module.CONTROL)
+    lines = module.CONTROL.read_text(encoding="utf-8").splitlines()
+    lines[1] = base64.urlsafe_b64encode(json.dumps({"not": "a list"}).encode()).decode()
+    module.CONTROL.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command),
+    )
+
+    module.main()
+
+    receipt = json.loads(module.RESULT.read_text(encoding="utf-8"))
+    assert receipt["status"] == "infrastructure-failed"
+    assert "CDI device list" in receipt["error"]
+    assert calls == []
+
+
+def test_installer_preflights_packages_runtime_and_devices(
     tmp_path: Path, monkeypatch
 ) -> None:
     module = load("colab_oci_prepare_packages")
     module.CONTROL = tmp_path / "control"
     module.RESULT = tmp_path / "result.json"
     module.RUNNER = tmp_path / "runner.py"
-    control(module.CONTROL)
+    control(module.CONTROL, devices=["nvidia.com/gpu=all"])
     calls: list[list[str]] = []
+    generated: list[tuple[Path, list[str]]] = []
+    monkeypatch.setattr(
+        module,
+        "generate_colab_nvidia_cdi",
+        lambda directory, devices: generated.append((directory, devices)),
+    )
     monkeypatch.setattr(
         module.shutil,
         "which",
-        lambda name: None if name in {"skopeo", "umoci"} else f"/usr/bin/{name}",
+        lambda name: None if name in {"skopeo", "umoci", "crun"} else f"/usr/bin/{name}",
     )
 
     def fake_run(command, **kwargs):
@@ -99,7 +134,39 @@ def test_installer_requests_only_materialization_packages(
     install = next(command for command in calls if command[:2] == ["apt-get", "install"])
     assert "skopeo" in install
     assert "umoci" in install
+    assert "crun" in install
     assert "mount" not in install
     assert "umount" not in install
     runner = calls[-1]
-    assert runner[runner.index("--runtime") + 1] == "chroot"
+    assert runner[runner.index("--runtime") + 1] == "auto"
+    assert runner[runner.index("--runtime-candidate") + 1] == "crun"
+    assert runner[runner.index("--cdi-spec-dir") + 1] == "/content/cache/cdi"
+    assert runner[runner.index("--device") + 1] == "nvidia.com/gpu=all"
+    assert generated == [(Path("/content/cache/cdi"), ["nvidia.com/gpu=all"])]
+
+
+def test_colab_generates_transient_nvidia_cdi_from_provider_mounts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("colab_oci_prepare_nvidia_cdi")
+    libraries = tmp_path / "usr-lib64-nvidia"
+    binary = tmp_path / "nvidia-smi"
+    libraries.mkdir()
+    binary.write_text("binary", encoding="utf-8")
+    monkeypatch.setattr(module, "NVIDIA_LIBRARY_DIR", libraries)
+    monkeypatch.setattr(module, "NVIDIA_SMI", binary)
+    monkeypatch.setattr(
+        module,
+        "colab_nvidia_device_paths",
+        lambda: ["/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm"],
+    )
+    directory = tmp_path / "cdi"
+    module.generate_colab_nvidia_cdi(directory, ["nvidia.com/gpu=all"])
+
+    payload = json.loads((directory / "cloudmake-colab-nvidia.json").read_text())
+    assert payload["kind"] == "nvidia.com/gpu"
+    assert payload["devices"][0]["name"] == "all"
+    edits = payload["devices"][0]["containerEdits"]
+    assert {item["path"] for item in edits["deviceNodes"]} == {
+        "/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm"
+    }

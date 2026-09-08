@@ -235,15 +235,16 @@ elif command == "exec":
         else:
             control = (remote / "cloudmake-oci-control").read_text(encoding="utf-8").splitlines()
             image = base64.urlsafe_b64decode(control[0]).decode()
+            devices = json.loads(base64.urlsafe_b64decode(control[1]).decode())
             payload = {
                 "schema": 1,
                 "mode": "preflight",
                 "status": "ready",
                 "runner": "oci",
-                "runtime": "chroot",
+                "runtime": "crun",
                 "image": image,
                 "digest": image.rsplit("@", 1)[1],
-                "devices": [],
+                "devices": devices,
             }
         (remote / "oci-preflight.json").write_text(
             json.dumps(payload) + "\n", encoding="utf-8"
@@ -270,7 +271,7 @@ elif command == "exec":
             image = base64.urlsafe_b64decode(control[5]).decode()
             payload.update(
                 runner="oci",
-                runtime="chroot",
+                runtime="crun",
                 image=image,
                 digest=image.rsplit("@", 1)[1],
                 status="succeeded" if target_exit == 0 else "target-failed",
@@ -1166,7 +1167,7 @@ def test_colab_oci_runner_preflights_before_submitting_target(
     assert provenance["runner"]["kind"] == "oci"
     assert provenance["runner"]["image"] == image
     assert provenance["runner"]["devices"] == []
-    assert provenance["runner"]["runtime"] == "chroot"
+    assert provenance["runner"]["runtime"] == "crun"
     assert provenance["runner"]["digest"] == "sha256:" + "a" * 64
 
 
@@ -2510,7 +2511,7 @@ def test_backend_contract_declares_lifecycle_and_capabilities(
     expected_oci = (
         "none"
         if backend == "kaggle-notebook"
-        else "chroot"
+        else "crun"
         if backend == "colab-notebook"
         else "podman docker nerdctl proot"
     )

@@ -56,27 +56,33 @@ edits and does not claim native namespace isolation.
 The ordered choices are declared by each backend. On hosts requiring dynamic
 qualification, Cloudmake probes every declared native runtime until one is
 ready; the mere presence of a client executable is insufficient. CDI requests
-filter out PRoot and chroot before probing. Image preflight then validates the
-chosen runtime without ever replaying the project target through another one.
+filter out PRoot before probing. Image preflight then validates the chosen
+runtime without ever replaying the project target through another one.
 
-The Colab notebook backend uses a different restricted chroot adapter because
-the managed VM does not expose a generally usable native container execution
-surface. Cloudmake installs `skopeo` and `umoci` when absent, materializes the
-rootfs, and uses base-VM `chroot` and narrow bind mounts to run CPU OCI images
-without Docker daemon support. It never installs project toolchains outside the
-image. Kaggle's fresh batch notebook path does not support this runner in 2.1.
-The Colab adapter also rejects an explicit or saved GPU allocation rather than
-paying for an accelerator the restricted profile cannot expose; native Make
-remains available for Colab GPU projects.
+The Colab notebook backend declares one provider-qualified runtime profile.
+Cloudmake installs `skopeo`, `umoci`, and `crun` when absent, materializes the
+rootfs, and adapts its OCI runtime specification to Colab's managed-VM limits.
+It never installs project toolchains outside the image. NVIDIA device nodes and
+host driver libraries are described by a generated CDI specification and
+applied to the runtime spec. Kaggle's fresh batch notebook path does not support
+this runner in 2.1.
 
-The project workspace is bound directly into the chroot, so target-generated
+The project workspace is bound directly into the container, so target-generated
 files remain incremental and there is no per-target workspace copy. The image
-root is mounted read-only with `nosuid,nodev`; a fresh writable `/tmp` is
-provided per invocation; the project mount is `nosuid,nodev`; `/proc` is
-read-only and `nosuid,nodev,noexec`; and only standard character devices such
-as `/dev/null` and `/dev/urandom` are bound individually. Make runs as a
-non-root identity. Preflight verifies these operations on the actual VM and
-fails before target submission if the managed service no longer permits them.
+root is read-only; a fresh writable `/tmp` is provided per invocation; and the
+project mount is writable with `nosuid,nodev`. Make runs as UID/GID 65534 with
+empty capability sets and `noNewPrivileges`. Colab's read-only cgroup hierarchy
+and denied fresh procfs mount require no container cgroup, the host PID and
+network namespaces, and a writable bind of host `/proc`; `/sys` is read-only.
+Preflight verifies the profile on the actual VM and fails before target
+submission if the managed service no longer permits it.
+
+Live qualification also found that stock Docker and Podman profiles do not
+provide this combination reliably, and direct `runc` warns that no-cgroup
+operation may become an error in a future release. Cloudmake therefore does not
+maintain Docker, Podman, `runc`, or bare `chroot` alternatives for Colab. This
+is one explicit `crun` backend property, not a generic promise that `crun`
+works on every restricted VM.
 
 Runtime caches are VM-local and disposable. They are not part of a persistent
 workspace and are not copied to Google Drive. A replacement VM may therefore
@@ -89,17 +95,18 @@ truth for mutable project state.
 Cloudmake never embeds registry credentials in source archives, runner control
 files, notebooks, checkpoints, or provenance. Official OCI clients retain
 custody of any registry authentication they need. Native containers receive no
-host environment variables. The PRoot and chroot target processes start with
-`env -i` and receive only the image's OCI environment plus safe defaults when
-`PATH` or `HOME` is absent.
+host environment variables. The PRoot and Colab `crun` target processes receive
+only the image's OCI environment plus safe defaults when `PATH` or `HOME` is
+absent.
 
-The Colab adapter binds the project workspace, read-only `/proc`, and its
-standard-device allowlist; it does not bind `/sys`, broad `/dev`, credential
-directories, or unrelated host paths. It shares the VM kernel and network and
-is therefore not a strong security sandbox for untrusted images. CDI names are
-non-secret capability requests; the selected native runtime is responsible for
-resolving them. Unsupported or ambiguous device injection fails before Make
-instead of being ignored.
+The Colab adapter shares the VM kernel, PID and network namespaces, and host
+`/proc`; it is therefore not a strong security sandbox for untrusted images.
+It does not expose credential directories or unrelated writable host paths.
+CDI names are non-secret capability requests; Cloudmake resolves the strict JSON
+subset it supports and rejects unknown edits instead of silently weakening the
+request. Unsupported or ambiguous device injection fails before Make.
 
 For the full four-axis model and backend matrix, see
-[Execution environments and OCI runner](execution-environments.md).
+[Execution environments and OCI runner](execution-environments.md). The live
+evidence and exact managed-VM profile are recorded in
+[Colab OCI/CDI qualification](colab-oci-qualification.md).

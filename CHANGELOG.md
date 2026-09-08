@@ -18,26 +18,26 @@ once a version is published as a GitHub release.
   allowing the runtime preflight to prove configured architecture emulation.
 - Support native Podman, Docker, and nerdctl execution on local and SSH
   backends, with a CPU-only PRoot compatibility fallback, and reject unsupported
-  Kaggle OCI, Colab OCI accelerator requests, and restricted-runtime CDI
-  combinations before provider contact.
+  Kaggle OCI and PRoot/CDI combinations before provider contact.
 - Make ordered OCI runtime options an explicit backend property; dynamically
   probe multiple declared host runtimes and fall through when an installed
   client is not operational, without retrying after target submission.
-- Add a Colab restricted-chroot adapter that materializes OCI rootfs layers,
-  mounts the image read-only with `nosuid,nodev`, supplies a fresh writable
-  `/tmp`, binds only the project workspace, read-only `/proc`, and selected
-  standard character devices, and executes Make as a non-root identity with no
-  host environment inheritance.
+- Add one live-qualified Colab `crun` adapter that materializes OCI rootfs
+  layers, adapts the runtime spec to the managed VM's read-only cgroup and
+  procfs restrictions, executes Make as UID/GID 65534 with no capabilities and
+  `noNewPrivileges`, and supports NVIDIA devices and host drivers through a
+  generated CDI specification. Deliberately omit Colab `runc` and bare
+  `chroot` alternatives to keep one accelerator-capable maintained profile.
 - Distinguish target exit status from OCI infrastructure failure using private
   execution and terminal receipts, including when a project target itself exits
   with `EX_SOFTWARE`/70.
-- Extend observed VM characterization with OCI client, CDI, and restricted
-  chroot-candidate evidence while retaining active runtime preflight as the
-  compatibility authority.
-- Add a digest-pinned ORFS acceptance project and validate real Yosys synthesis
-  plus OpenROAD floorplanning through the Colab OCI adapter; the composed
-  replacement-VM checkpoint/placement gate remains opt-in because it writes an
-  encrypted workspace repository to the user's Google Drive.
+- Extend observed VM characterization with OCI client and CDI evidence while
+  retaining active runtime preflight as the compatibility authority.
+- Add a digest-pinned ORFS acceptance project whose T4 tool check validates the
+  Colab CDI path before real Yosys/OpenROAD stages. The exact `crun` integration
+  passed a live non-root T4 smoke test; the full composed replacement-VM
+  checkpoint/placement gate remains opt-in because it writes an encrypted
+  workspace repository to the user's Google Drive.
 
 ## 2.0.0 - 2026-09-07
 

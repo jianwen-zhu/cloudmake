@@ -232,6 +232,7 @@ def oci_runtime_record() -> dict[str, Any]:
         "skopeo": ["skopeo", "--version"],
         "umoci": ["umoci", "--version"],
         "proot": ["proot", "--version"],
+        "crun": ["crun", "--version"],
     }
     result: dict[str, Any] = {}
     for name, command in commands.items():
@@ -248,42 +249,6 @@ def oci_runtime_record() -> dict[str, Any]:
         if isinstance(detail, str) and detail:
             result[name]["version"] = detail
     return result
-
-
-def restricted_chroot_record() -> dict[str, Any]:
-    capabilities = effective_capabilities()
-    commands = {
-        name: shutil.which(name) is not None for name in ("chroot", "mount", "umount")
-    }
-    devices = {
-        name: Path("/dev", name).exists()
-        for name in ("null", "zero", "full", "random", "urandom")
-    }
-    candidate = bool(
-        os.geteuid() == 0
-        and capabilities.get("sys_chroot")
-        and capabilities.get("sys_admin")
-        and all(commands.values())
-        and devices["null"]
-    )
-    return {
-        "status": "candidate" if candidate else "unavailable",
-        "effective_root": os.geteuid() == 0,
-        "capabilities": {
-            name: capabilities.get(name) for name in ("sys_chroot", "sys_admin")
-        },
-        "commands": commands,
-        "device_sources": devices,
-        "profile": {
-            "rootfs": "bind-ro-nosuid-nodev",
-            "project": "bind-rw-nosuid-nodev",
-            "proc": "bind-ro-nosuid-nodev-noexec",
-            "tmp": "fresh-bind-rw-nosuid-nodev",
-            "devices": "individual-standard-character-devices",
-            "identity": "non-root",
-        },
-        "runtime_preflight_required": True,
-    }
 
 
 def cdi_record(
@@ -376,7 +341,6 @@ def observe(workspace: Path) -> dict[str, Any]:
         "oci": {
             "clients": oci_runtime_record(),
             "cdi": cdi_record(),
-            "restricted_chroot": restricted_chroot_record(),
         },
     }
 
@@ -430,12 +394,10 @@ def render(profile: dict[str, Any]) -> None:
         name for name, value in clients.items() if value.get("status") == "installed"
     )
     cdi = oci.get("cdi", {})
-    restricted = oci.get("restricted_chroot", {})
     print(
         "[cloudmake] oci-clients="
         + (",".join(installed) if installed else "none")
         + f" cdi-devices={len(cdi.get('devices', []))}"
-        + f" restricted-chroot={restricted.get('status', 'unknown')}"
     )
     print("[cloudmake] environment evidence=observed (not a provider guarantee)")
 

@@ -3,6 +3,8 @@
 This opt-in live gate is the final application verdict for Cloudmake 2.1. It
 uses a digest-pinned official ORFS OCI image directly through Cloudmake's
 managed OCI runner; it does not install Apptainer or convert the image to SIF.
+The gate allocates a T4 and requests `nvidia.com/gpu=all`, so its initial tool
+check also validates Cloudmake's Colab CDI path before running ORFS stages.
 
 The project-owned Makefile first checks the image tool suite, completes ORFS
 floorplan for the Nangate45 GCD design, and records a database checksum. The

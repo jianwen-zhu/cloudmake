@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -24,9 +25,11 @@ IMAGE = re.compile(r"^([^\s@]+)@sha256:([0-9a-f]{64})$")
 CDI_DEVICE = re.compile(
     r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+$"
 )
-RUNTIMES = ("auto", "podman", "docker", "nerdctl", "proot", "chroot")
-NATIVE_RUNTIMES = ("podman", "docker", "nerdctl")
-CHROOT_DEVICES = ("null", "zero", "full", "random", "urandom")
+RUNTIMES = ("auto", "podman", "docker", "nerdctl", "proot", "crun")
+HIGH_LEVEL_RUNTIMES = ("podman", "docker", "nerdctl")
+CDI_RUNTIMES = (*HIGH_LEVEL_RUNTIMES, "crun")
+STANDARD_DEVICES = ("null", "zero", "full", "random", "urandom")
+CDI_DIRECTORIES = (Path("/etc/cdi"), Path("/var/run/cdi"))
 EX_SOFTWARE = getattr(os, "EX_SOFTWARE", 70)
 
 
@@ -120,22 +123,23 @@ def run_checked(
 
 
 def runtime_readiness(candidate: str) -> tuple[bool, str]:
-    if candidate == "chroot":
-        if os.geteuid() != 0:
-            return False, "requires a root VM adapter"
-        required = ("skopeo", "umoci", "mount", "umount")
-    elif candidate == "proot":
+    if candidate == "proot":
         required = ("skopeo", "umoci", "proot")
+    elif candidate == "crun":
+        if os.geteuid() != 0:
+            return False, "requires a root managed-VM adapter"
+        required = ("skopeo", "umoci", "crun")
     else:
         required = (candidate,)
     missing = [name for name in required if shutil.which(name) is None]
     if missing:
         return False, "missing " + ", ".join(missing)
-    if candidate not in NATIVE_RUNTIMES:
+    if candidate not in (*HIGH_LEVEL_RUNTIMES, "crun"):
         return True, "ready"
     try:
+        probe = [candidate, "--version"] if candidate == "crun" else [candidate, "info"]
         completed = subprocess.run(
-            [candidate, "info"],
+            probe,
             check=False,
             text=True,
             stdout=subprocess.PIPE,
@@ -153,7 +157,7 @@ def runtime_readiness(candidate: str) -> tuple[bool, str]:
 def select_runtime(
     requested: str, candidates: list[str] | None = None, *, requires_cdi: bool = False
 ) -> str:
-    declared = candidates or [*NATIVE_RUNTIMES, "proot"]
+    declared = candidates or [*HIGH_LEVEL_RUNTIMES, "proot"]
     if len(declared) != len(set(declared)):
         raise RunnerError("OCI runtime candidate list contains duplicates")
     invalid = [candidate for candidate in declared if candidate not in RUNTIMES[1:]]
@@ -161,7 +165,7 @@ def select_runtime(
         raise RunnerError("invalid OCI runtime candidate(s): " + ", ".join(invalid))
     choices = [requested] if requested != "auto" else declared
     if requires_cdi:
-        choices = [candidate for candidate in choices if candidate in NATIVE_RUNTIMES]
+        choices = [candidate for candidate in choices if candidate in CDI_RUNTIMES]
         if not choices:
             raise RunnerError(
                 "no backend-declared OCI runtime option can apply CDI devices"
@@ -276,7 +280,7 @@ def cache_lock(cache: Path) -> Iterator[None]:
         yield
 
 
-def materialize_proot(
+def materialize_bundle(
     *, reference: str, digest: str, cache_root: Path
 ) -> tuple[Path, dict[str, Any]]:
     image_cache = cache_root / "images" / digest.removeprefix("sha256:")
@@ -308,8 +312,8 @@ def materialize_proot(
             if bundle.exists():
                 shutil.rmtree(bundle)
             os.replace(unpacked, bundle)
-            # umoci creates the bundle beneath a 0700 staging directory. PRoot
-            # must run unprivileged even when the managed VM account is root.
+            # umoci creates the bundle beneath a 0700 staging directory. The
+            # selected adapter may run the image process as an unprivileged user.
             bundle.chmod(0o755)
             atomic_json(
                 receipt,
@@ -362,6 +366,197 @@ def oci_process_environment(bundle: Path) -> list[str]:
     )
     environment.setdefault("HOME", "/tmp")
     return [f"{name}={value}" for name, value in sorted(environment.items())]
+
+
+def absolute_container_path(value: Any, description: str) -> str:
+    if not isinstance(value, str) or "\0" in value:
+        raise RunnerError(f"CDI {description} must be an absolute path")
+    path = PurePosixPath(value)
+    if not path.is_absolute() or ".." in path.parts:
+        raise RunnerError(f"CDI {description} must be an absolute path")
+    return path.as_posix()
+
+
+def cdi_specifications(directories: list[Path]) -> dict[str, tuple[dict[str, Any], Path]]:
+    """Load the strict JSON subset consumed by the direct crun adapter.
+
+    Higher-level runtimes remain responsible for their own CDI implementation.
+    The direct adapter fails closed on fields it cannot faithfully translate.
+    """
+    resolved: dict[str, tuple[dict[str, Any], Path]] = {}
+    yaml_present = False
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        yaml_present = yaml_present or any(directory.glob("*.yaml")) or any(
+            directory.glob("*.yml")
+        )
+        for path in sorted(directory.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise RunnerError(f"invalid CDI JSON specification {path}: {error}") from error
+            if not isinstance(payload, dict):
+                raise RunnerError(f"invalid CDI JSON specification {path}: expected an object")
+            unknown = set(payload) - {
+                "cdiVersion", "kind", "annotations", "containerEdits", "devices"
+            }
+            if unknown:
+                raise RunnerError(
+                    f"unsupported CDI specification field(s) in {path}: "
+                    + ", ".join(sorted(unknown))
+                )
+            version, kind, devices = (
+                payload.get("cdiVersion"), payload.get("kind"), payload.get("devices")
+            )
+            if not isinstance(version, str) or re.fullmatch(r"(?:0\.[3-9]|1\.[01])\.\d+", version) is None:
+                raise RunnerError(f"unsupported CDI version in {path}: {version!r}")
+            if not isinstance(kind, str) or "/" not in kind:
+                raise RunnerError(f"invalid CDI kind in {path}")
+            if not isinstance(devices, list) or not devices:
+                raise RunnerError(f"invalid CDI devices in {path}")
+            common = payload.get("containerEdits", {})
+            if not isinstance(common, dict):
+                raise RunnerError(f"invalid CDI containerEdits in {path}")
+            seen: set[str] = set()
+            for entry in devices:
+                if not isinstance(entry, dict) or set(entry) - {
+                    "name", "annotations", "containerEdits"
+                }:
+                    raise RunnerError(f"invalid CDI device entry in {path}")
+                name = entry.get("name")
+                edits = entry.get("containerEdits", {})
+                if not isinstance(name, str) or not isinstance(edits, dict):
+                    raise RunnerError(f"invalid CDI device entry in {path}")
+                qualified = f"{kind}={name}"
+                if CDI_DEVICE.fullmatch(qualified) is None or qualified in seen:
+                    raise RunnerError(f"invalid or duplicate CDI device {qualified!r} in {path}")
+                seen.add(qualified)
+                combined: dict[str, Any] = {}
+                for source in (common, edits):
+                    for key, value in source.items():
+                        if value in (None, [], {}):
+                            continue
+                        if key not in {"env", "deviceNodes", "mounts"}:
+                            raise RunnerError(
+                                f"CDI field {key!r} used by {qualified!r} is unsupported "
+                                "by the Colab crun profile"
+                            )
+                        if not isinstance(value, list):
+                            raise RunnerError(f"CDI field {key!r} for {qualified!r} must be a list")
+                        combined.setdefault(key, []).extend(value)
+                # Later CDI directories intentionally override earlier ones,
+                # matching the standard /var/run/cdi precedence convention.
+                resolved[qualified] = (combined, path)
+    if not resolved and yaml_present:
+        raise RunnerError(
+            "the Colab crun profile requires JSON CDI specifications; "
+            "a YAML-only CDI installation was found"
+        )
+    return resolved
+
+
+def apply_cdi_edits(
+    payload: dict[str, Any], devices: list[str], directories: list[Path]
+) -> list[str]:
+    if not devices:
+        return []
+    specifications = cdi_specifications(directories)
+    missing = [device for device in devices if device not in specifications]
+    if missing:
+        raise RunnerError("CDI device specification not found: " + ", ".join(missing))
+    process = payload.setdefault("process", {})
+    environment: dict[str, str] = {}
+    for value in process.get("env", []):
+        if isinstance(value, str) and "=" in value:
+            name, item = value.split("=", 1)
+            environment[name] = item
+    mounts = payload.setdefault("mounts", [])
+    destinations = {
+        item.get("destination") for item in mounts if isinstance(item, dict)
+    }
+    sources: list[str] = []
+    for device in devices:
+        edits, path = specifications[device]
+        sources.append(os.fspath(path))
+        for value in edits.get("env", []):
+            if not isinstance(value, str) or "=" not in value or "\0" in value:
+                raise RunnerError(f"CDI environment entry for {device!r} is invalid")
+            name, item = value.split("=", 1)
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
+                raise RunnerError(f"CDI environment name for {device!r} is invalid")
+            environment[name] = item
+        for item in edits.get("mounts", []):
+            if not isinstance(item, dict) or set(item) - {
+                "hostPath", "containerPath", "type", "options"
+            }:
+                raise RunnerError(f"CDI mount for {device!r} is invalid")
+            source = absolute_container_path(item.get("hostPath"), "hostPath")
+            destination = absolute_container_path(
+                item.get("containerPath"), "containerPath"
+            )
+            mount_type = item.get("type", "bind")
+            options = item.get("options", [])
+            if mount_type != "bind" or not isinstance(options, list) or not all(
+                isinstance(option, str) for option in options
+            ):
+                raise RunnerError(
+                    f"CDI mount {destination!r} for {device!r} is not a bind mount"
+                )
+            if not Path(source).exists():
+                raise RunnerError(f"CDI host mount source is unavailable: {source}")
+            if destination in destinations:
+                raise RunnerError(f"duplicate OCI/CDI mount destination: {destination}")
+            normalized_options = list(options)
+            if not {"bind", "rbind"}.intersection(normalized_options):
+                normalized_options.insert(0, "rbind" if Path(source).is_dir() else "bind")
+            mounts.append(
+                {
+                    "destination": destination,
+                    "type": "bind",
+                    "source": source,
+                    "options": normalized_options,
+                }
+            )
+            destinations.add(destination)
+        for item in edits.get("deviceNodes", []):
+            if not isinstance(item, dict) or set(item) - {
+                "path", "hostPath", "type", "major", "minor", "fileMode",
+                "permissions", "uid", "gid"
+            }:
+                raise RunnerError(f"CDI device node for {device!r} is invalid")
+            unsupported = [
+                name for name in ("type", "major", "minor", "fileMode", "permissions", "uid", "gid")
+                if item.get(name) is not None
+            ]
+            if unsupported:
+                raise RunnerError(
+                    f"CDI device node overrides for {device!r} are unsupported: "
+                    + ", ".join(unsupported)
+                )
+            destination = absolute_container_path(item.get("path"), "device path")
+            source = absolute_container_path(
+                item.get("hostPath", destination), "device hostPath"
+            )
+            try:
+                mode = Path(source).stat().st_mode
+            except OSError as error:
+                raise RunnerError(f"CDI host device is unavailable: {source}") from error
+            if not (stat.S_ISCHR(mode) or stat.S_ISBLK(mode)):
+                raise RunnerError(f"CDI host device is not a device node: {source}")
+            if destination in destinations:
+                raise RunnerError(f"duplicate OCI/CDI mount destination: {destination}")
+            mounts.append(
+                {
+                    "destination": destination,
+                    "type": "bind",
+                    "source": source,
+                    "options": ["bind"],
+                }
+            )
+            destinations.add(destination)
+    process["env"] = [f"{name}={value}" for name, value in sorted(environment.items())]
+    return sources
 
 
 def workspace_owner(value: str) -> tuple[int, int]:
@@ -425,25 +620,6 @@ def proot_base_command(
     ]
 
 
-def chroot_base_command(
-    bundle: Path, source: Path, owner: str, internal_result: Path
-) -> list[str]:
-    return [
-        sys.executable,
-        os.fspath(Path(__file__).resolve()),
-        "--internal-chroot-exec",
-        os.fspath(bundle),
-        os.fspath(source),
-        owner,
-        os.fspath(internal_result),
-        "--",
-        "/usr/bin/env",
-        "-i",
-        *oci_process_environment(bundle),
-        "make",
-    ]
-
-
 def safe_runtime_directory(rootfs: Path, name: str) -> Path:
     path = rootfs / name
     if path.is_symlink():
@@ -454,160 +630,202 @@ def safe_runtime_directory(rootfs: Path, name: str) -> Path:
     return path
 
 
-@contextlib.contextmanager
-def restricted_chroot_mounts(
-    rootfs: Path, source: Path, workspace: Path, runtime_tmp: Path
-) -> Iterator[None]:
-    proc = safe_runtime_directory(rootfs, "proc")
-    dev = safe_runtime_directory(rootfs, "dev")
-    temporary = safe_runtime_directory(rootfs, "tmp")
-    device_mounts: list[tuple[Path, Path]] = []
-    for name in CHROOT_DEVICES:
-        device_source = Path("/dev") / name
-        if not device_source.exists():
-            continue
-        target = dev / name
-        if target.is_symlink() or (target.exists() and not target.is_file()):
-            raise RunnerError(f"OCI image device mount point /dev/{name} is unsafe")
-        target.touch(exist_ok=True)
-        device_mounts.append((device_source, target))
-    mounted: list[Path] = []
+def crun_base_command(
+    bundle: Path,
+    source: Path,
+    owner: str,
+    internal_result: Path,
+    devices: list[str],
+    cdi_directories: list[Path],
+) -> list[str]:
+    command = [
+        sys.executable,
+        os.fspath(Path(__file__).resolve()),
+        "--internal-crun-exec",
+        os.fspath(bundle),
+        os.fspath(source),
+        owner,
+        os.fspath(internal_result),
+    ]
+    for directory in cdi_directories:
+        command.extend(["--cdi-dir", os.fspath(directory)])
+    for device in devices:
+        command.extend(["--device", device])
+    command.extend(["--", "make"])
+    return command
+
+
+def internal_crun_parser(arguments: list[str]) -> argparse.Namespace:
     try:
-        run_checked(
-            ["mount", "--bind", os.fspath(rootfs), os.fspath(rootfs)],
-            capture=True,
-            description="restricted chroot rootfs bind",
-        )
-        mounted.append(rootfs)
-        run_checked(
-            ["mount", "-o", "remount,bind,ro,nosuid,nodev", os.fspath(rootfs)],
-            capture=True,
-            description="restricted chroot read-only rootfs remount",
-        )
-        run_checked(
-            ["mount", "--bind", "/proc", os.fspath(proc)],
-            capture=True,
-            description="restricted chroot proc bind",
-        )
-        mounted.append(proc)
-        run_checked(
-            [
-                "mount",
-                "-o",
-                "remount,bind,ro,nosuid,nodev,noexec",
-                os.fspath(proc),
-            ],
-            capture=True,
-            description="restricted chroot read-only proc remount",
-        )
-        for device_source, target in device_mounts:
-            run_checked(
-                ["mount", "--bind", os.fspath(device_source), os.fspath(target)],
-                capture=True,
-                description=f"restricted chroot /dev/{target.name} bind",
-            )
-            mounted.append(target)
-        run_checked(
-            ["mount", "--bind", os.fspath(runtime_tmp), os.fspath(temporary)],
-            capture=True,
-            description="restricted chroot temporary-directory bind",
-        )
-        mounted.append(temporary)
-        run_checked(
-            [
-                "mount",
-                "-o",
-                "remount,bind,rw,nosuid,nodev",
-                os.fspath(temporary),
-            ],
-            capture=True,
-            description="restricted chroot temporary-directory remount",
-        )
-        run_checked(
-            ["mount", "--bind", os.fspath(source), os.fspath(workspace)],
-            capture=True,
-            description="restricted chroot project bind",
-        )
-        mounted.append(workspace)
-        run_checked(
-            [
-                "mount",
-                "-o",
-                "remount,bind,rw,nosuid,nodev",
-                os.fspath(workspace),
-            ],
-            capture=True,
-            description="restricted chroot project remount",
-        )
-        yield
-    finally:
-        cleanup_errors: list[str] = []
-        for path in reversed(mounted):
-            completed = subprocess.run(
-                ["umount", os.fspath(path)],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-            if completed.returncode:
-                cleanup_errors.append(
-                    f"{path}: {(completed.stdout or '').strip() or completed.returncode}"
-                )
-        if cleanup_errors:
-            raise RunnerError(
-                "restricted chroot mount cleanup failed: " + "; ".join(cleanup_errors)
-            )
+        separator = arguments.index("--")
+    except ValueError as error:
+        raise RunnerError("invalid internal crun invocation") from error
+    result = argparse.ArgumentParser(add_help=False)
+    result.add_argument("bundle", type=Path)
+    result.add_argument("source", type=Path)
+    result.add_argument("owner")
+    result.add_argument("result", type=Path)
+    result.add_argument("--cdi-dir", action="append", type=Path, default=[])
+    result.add_argument("--device", action="append", default=[])
+    parsed = result.parse_args(arguments[:separator])
+    parsed.command = arguments[separator + 1 :]
+    if not parsed.command:
+        raise RunnerError("invalid internal crun invocation")
+    return parsed
 
 
-def internal_chroot_exec(arguments: list[str]) -> int:
-    if len(arguments) < 6 or arguments[4] != "--":
-        raise RunnerError("invalid internal chroot invocation")
-    bundle = Path(arguments[0]).resolve()
-    source = Path(arguments[1]).resolve()
-    uid, gid = workspace_owner(arguments[2])
-    internal_result = Path(arguments[3]).resolve()
-    command = arguments[5:]
+def internal_crun_exec(arguments: list[str]) -> int:
+    parsed = internal_crun_parser(arguments)
+    bundle = parsed.bundle.resolve()
+    source = parsed.source.resolve()
+    internal_result = parsed.result.resolve()
     rootfs = bundle / "rootfs"
-    guest = rootfs / "workspace"
+    uid, gid = workspace_owner(parsed.owner)
     internal_result.unlink(missing_ok=True)
-    completed: subprocess.CompletedProcess[Any] | None = None
+    container_id = f"cloudmake-{os.getpid()}"
     try:
         with cache_lock(bundle):
             if not rootfs.is_dir() or not source.is_dir():
-                raise RunnerError("restricted chroot root or project workspace is unavailable")
-            guest = safe_runtime_directory(rootfs, "workspace")
+                raise RunnerError("crun OCI root or project workspace is unavailable")
+            safe_runtime_directory(rootfs, "workspace")
+            safe_runtime_directory(rootfs, "tmp")
+            safe_runtime_directory(rootfs, "run")
             chown_workspace(source, uid, gid)
-
-            def enter_guest() -> None:
-                os.chroot(rootfs)
-                os.chdir("/workspace")
-                os.setgroups([])
-                os.setgid(gid)
-                os.setuid(uid)
-
-            with tempfile.TemporaryDirectory(prefix=".runtime-", dir=bundle) as temporary:
-                runtime_tmp = Path(temporary)
-                runtime_tmp.chmod(0o1777)
-                with restricted_chroot_mounts(rootfs, source, guest, runtime_tmp):
-                    completed = subprocess.run(
-                        command,
-                        check=False,
-                        env={},
-                        close_fds=True,
-                        preexec_fn=enter_guest,
+            try:
+                payload = json.loads((bundle / "config.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise RunnerError("materialized OCI bundle has no valid runtime configuration") from error
+            if not isinstance(payload, dict):
+                raise RunnerError("materialized OCI runtime configuration is not an object")
+            for field in ("root", "process", "linux"):
+                value = payload.get(field, {})
+                if not isinstance(value, dict):
+                    raise RunnerError(
+                        f"materialized OCI runtime configuration has invalid {field!r}"
                     )
+
+            with tempfile.TemporaryDirectory(prefix=".crun-", dir=bundle.parent) as temporary:
+                runtime_bundle = Path(temporary)
+                runtime_tmp = runtime_bundle / "tmp"
+                runtime_receipt = runtime_bundle / "receipt"
+                runtime_tmp.mkdir(mode=0o777)
+                runtime_tmp.chmod(0o1777)
+                runtime_receipt.mkdir(mode=0o777)
+                runtime_receipt.chmod(0o777)
+
+                payload.setdefault("root", {})["path"] = os.fspath(rootfs)
+                payload["root"]["readonly"] = True
+                process = payload.setdefault("process", {})
+                process.update(
+                    terminal=False,
+                    cwd="/workspace",
+                    user={"uid": uid, "gid": gid},
+                    noNewPrivileges=True,
+                )
+                process["capabilities"] = {
+                    name: []
+                    for name in (
+                        "bounding", "effective", "inheritable", "permitted", "ambient"
+                    )
+                }
+                process["env"] = oci_process_environment(bundle)
+                process["args"] = [
+                    "/bin/sh",
+                    "-c",
+                    '"$@"; code=$?; printf \'{"schema":1,"exit_code":%s}\\n\' "$code" '
+                    '> /run/cloudmake/result.json; exit "$code"',
+                    "cloudmake",
+                    *parsed.command,
+                ]
+
+                linux = payload.setdefault("linux", {})
+                linux.pop("resources", None)
+                linux.pop("cgroupsPath", None)
+                # The outer managed VM remains the security boundary. Colab
+                # does not permit a fresh procfs or writable cgroup hierarchy.
+                linux.pop("seccomp", None)
+                namespaces = [
+                    item for item in linux.get("namespaces", [])
+                    if isinstance(item, dict)
+                    and item.get("type") not in {"cgroup", "network", "pid"}
+                ]
+                if not any(item.get("type") == "mount" for item in namespaces):
+                    namespaces.append({"type": "mount"})
+                linux["namespaces"] = namespaces
+
+                mounts: list[dict[str, Any]] = [
+                    {
+                        "destination": "/proc", "type": "bind", "source": "/proc",
+                        "options": ["rbind", "rw", "nosuid", "nodev", "noexec"],
+                    },
+                    {
+                        "destination": "/sys", "type": "bind", "source": "/sys",
+                        "options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
+                    },
+                    {
+                        "destination": "/workspace", "type": "bind",
+                        "source": os.fspath(source),
+                        "options": ["rbind", "rw", "nosuid", "nodev"],
+                    },
+                    {
+                        "destination": "/tmp", "type": "bind",
+                        "source": os.fspath(runtime_tmp),
+                        "options": ["rbind", "rw", "nosuid", "nodev"],
+                    },
+                    {
+                        "destination": "/run/cloudmake", "type": "bind",
+                        "source": os.fspath(runtime_receipt),
+                        "options": ["rbind", "rw", "nosuid", "nodev", "noexec"],
+                    },
+                ]
+                for name in STANDARD_DEVICES:
+                    host = Path("/dev") / name
+                    if host.exists():
+                        mounts.append(
+                            {
+                                "destination": f"/dev/{name}", "type": "bind",
+                                "source": os.fspath(host), "options": ["bind"],
+                            }
+                        )
+                payload["mounts"] = mounts
+                cdi_sources = apply_cdi_edits(
+                    payload,
+                    [device_name(value) for value in parsed.device],
+                    [*CDI_DIRECTORIES, *parsed.cdi_dir],
+                )
+                (runtime_bundle / "config.json").write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
+                completed = subprocess.run(
+                    ["crun", "--cgroup-manager=disabled", "run", container_id],
+                    check=False,
+                    cwd=runtime_bundle,
+                )
+                private_result = runtime_receipt / "result.json"
+                try:
+                    private = json.loads(private_result.read_text(encoding="utf-8"))
+                except Exception as error:
+                    raise RunnerError(
+                        f"crun did not produce a target receipt (status {completed.returncode})"
+                    ) from error
+                exit_code = private.get("exit_code")
+                if private.get("schema") != 1 or not isinstance(exit_code, int):
+                    raise RunnerError("crun produced an invalid target receipt")
+                if exit_code != completed.returncode:
+                    raise RunnerError("crun target receipt did not match process status")
         atomic_json(
             internal_result,
             {
                 "schema": 1,
                 "status": "completed",
-                "exit_code": completed.returncode,
+                "exit_code": exit_code,
+                "profile": "colab-host-integrated-no-cgroup",
+                "cdi_specs": cdi_sources,
             },
         )
-        return completed.returncode
+        return exit_code
     except (OSError, subprocess.SubprocessError) as error:
-        failure = RunnerError(f"restricted chroot execution failed: {error}")
+        failure = RunnerError(f"crun OCI execution failed: {error}")
         atomic_json(
             internal_result,
             {"schema": 1, "status": "infrastructure-failed", "error": str(failure)},
@@ -619,6 +837,16 @@ def internal_chroot_exec(arguments: list[str]) -> int:
             {"schema": 1, "status": "infrastructure-failed", "error": str(error)},
         )
         raise
+    finally:
+        try:
+            subprocess.run(
+                ["crun", "delete", "--force", container_id],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
 
 
 def prepare(
@@ -631,6 +859,7 @@ def prepare(
     cache: Path,
     internal_result: Path | None = None,
     rootless_workspace_owner: str | None = None,
+    cdi_directories: list[Path] | None = None,
 ) -> tuple[list[str], dict[str, Any], str | None]:
     if not source.is_dir():
         raise RunnerError(f"project workspace is unavailable: {source}")
@@ -640,7 +869,7 @@ def prepare(
                 "the PRoot OCI fallback cannot apply CDI device edits; select a "
                 "CDI-capable native runtime"
             )
-        bundle, image = materialize_proot(
+        bundle, image = materialize_bundle(
             reference=reference, digest=digest, cache_root=cache
         )
         identity_prefix, identity = proot_identity_prefix(
@@ -648,26 +877,26 @@ def prepare(
         )
         return proot_base_command(bundle, source, identity_prefix), image, identity
 
-    if runtime == "chroot":
-        if devices:
-            raise RunnerError(
-                "the restricted chroot OCI runtime cannot apply CDI device edits; "
-                "select a CDI-capable native runtime"
-            )
+    if runtime == "crun":
         if rootless_workspace_owner is None:
-            raise RunnerError(
-                "the restricted chroot OCI runtime requires a non-root workspace owner"
-            )
+            raise RunnerError("the Colab crun profile requires a non-root workspace owner")
         if internal_result is None:
-            raise RunnerError(
-                "the restricted chroot OCI runtime requires an internal result path"
-            )
-        identity = ":".join(str(value) for value in workspace_owner(rootless_workspace_owner))
-        bundle, image = materialize_proot(
+            raise RunnerError("the Colab crun profile requires an internal result path")
+        identity = ":".join(
+            str(value) for value in workspace_owner(rootless_workspace_owner)
+        )
+        bundle, image = materialize_bundle(
             reference=reference, digest=digest, cache_root=cache
         )
         return (
-            chroot_base_command(bundle, source, identity, internal_result),
+            crun_base_command(
+                bundle,
+                source,
+                identity,
+                internal_result,
+                devices,
+                cdi_directories or [],
+            ),
             image,
             identity,
         )
@@ -681,18 +910,18 @@ def prepare(
     return native_base_command(runtime, source, reference, devices), image, None
 
 
-def validate_chroot_execution(path: Path, exit_code: int) -> None:
+def validate_internal_execution(path: Path, exit_code: int, runtime: str) -> None:
     try:
         receipt = json.loads(path.read_text(encoding="utf-8"))
     except Exception as error:
         raise RunnerError(
-            "restricted chroot execution did not produce a valid result receipt"
+            f"{runtime} execution did not produce a valid result receipt"
         ) from error
     if receipt.get("schema") != 1 or receipt.get("status") != "completed":
-        detail = receipt.get("error", "restricted chroot execution did not complete")
+        detail = receipt.get("error", f"{runtime} execution did not complete")
         raise RunnerError(str(detail))
     if receipt.get("exit_code") != exit_code:
-        raise RunnerError("restricted chroot execution result did not match process status")
+        raise RunnerError(f"{runtime} execution result did not match process status")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -711,14 +940,15 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--arguments-b64", default="W10=")
     result.add_argument("--jobs", type=int, default=1)
     result.add_argument("--rootless-workspace-owner")
+    result.add_argument("--cdi-spec-dir", action="append", type=Path, default=[])
     result.add_argument("--result", type=Path, required=True)
     return result
 
 
 def main() -> int:
-    if sys.argv[1:2] == ["--internal-chroot-exec"]:
+    if sys.argv[1:2] == ["--internal-crun-exec"]:
         try:
-            return internal_chroot_exec(sys.argv[2:])
+            return internal_crun_exec(sys.argv[2:])
         except RunnerError as error:
             print(f"[cloudmake] OCI infrastructure failure: {error}", file=sys.stderr)
             return EX_SOFTWARE
@@ -752,9 +982,10 @@ def main() -> int:
             devices=devices,
             cache=arguments.cache.resolve(),
             internal_result=arguments.result.resolve().with_name(
-                f".{arguments.result.name}.chroot"
+                f".{arguments.result.name}.runtime"
             ),
             rootless_workspace_owner=arguments.rootless_workspace_owner,
+            cdi_directories=arguments.cdi_spec_dir,
         )
         receipt["image_inspection"] = image
         if identity is not None:
@@ -793,10 +1024,11 @@ def main() -> int:
         receipt.update(status="submitted", target=target)
         atomic_json(arguments.result, receipt)
         completed = subprocess.run(command, check=False)
-        if runtime == "chroot":
-            validate_chroot_execution(
-                arguments.result.resolve().with_name(f".{arguments.result.name}.chroot"),
+        if runtime == "crun":
+            validate_internal_execution(
+                arguments.result.resolve().with_name(f".{arguments.result.name}.runtime"),
                 completed.returncode,
+                runtime,
             )
         receipt.update(
             status="succeeded" if completed.returncode == 0 else "target-failed",

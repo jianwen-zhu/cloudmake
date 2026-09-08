@@ -138,7 +138,7 @@ OCI_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 CDI_DEVICE = re.compile(
     r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+$"
 )
-OCI_RUNTIME_CANDIDATES = {"podman", "docker", "nerdctl", "proot", "chroot"}
+OCI_RUNTIME_CANDIDATES = {"podman", "docker", "nerdctl", "proot", "crun"}
 
 
 class UsageError(RuntimeError):
@@ -1049,7 +1049,7 @@ def validate_backend_oci_selection(
         return runtimes
     if not runtimes:
         raise UsageError(f"backend {backend!r} does not support the managed OCI runner")
-    native = {"podman", "docker", "nerdctl"}
+    native = {"podman", "docker", "nerdctl", "crun"}
     if devices and not native.intersection(runtimes):
         raise UsageError(
             f"backend {backend!r} OCI runtime options cannot apply CDI devices"

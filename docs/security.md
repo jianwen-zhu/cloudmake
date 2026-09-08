@@ -118,25 +118,26 @@ files, notebooks, persistent-workspace snapshots, and provenance contain the
 non-secret image reference and selected CDI names, never registry credentials.
 
 Native OCI containers receive no host environment variables from Cloudmake.
-The PRoot fallback and Colab restricted-chroot adapter start project Make
-through `env -i`, using only environment entries from the image's validated OCI
-runtime configuration plus safe `PATH` and `HOME` defaults when absent. The
-Colab adapter mounts its image root read-only with `nosuid,nodev`, supplies a
-fresh writable `/tmp`, mounts only the project workspace writable with
-`nosuid,nodev`, binds `/proc` read-only with
-`nosuid,nodev,noexec`, individually binds a standard character-device
-allowlist, and drops to a non-root identity. It does not expose `/sys`, a broad
-`/dev`, credential directories, or unrelated host paths.
+The PRoot fallback and Colab `crun` adapter start project Make using only
+environment entries from the image's validated OCI runtime configuration plus
+safe `PATH` and `HOME` defaults when absent. The Colab adapter keeps the image
+root read-only, supplies a fresh writable `/tmp`, mounts the project workspace
+writable with `nosuid,nodev`, exposes `/sys` read-only, and runs Make as UID/GID
+65534 with empty capability sets and `noNewPrivileges`. NVIDIA device nodes and
+host driver files are added only from a generated CDI specification. It does
+not expose credential directories or unrelated writable host paths.
 
-That adapter shares the managed VM kernel and network and is not a strong
-sandbox for untrusted images. The official OCI client itself may use its own
+That adapter shares the managed VM kernel, PID and network namespaces, and host
+`/proc`; it is not a strong sandbox for untrusted images. The official OCI
+client itself may use its own
 runtime-local registry authentication to pull an image; Cloudmake does not
 transport a host credential store to an ephemeral VM. Client custody is
 distinct from target-environment injection.
 
-CDI requirements are passed only to a native runtime capable of resolving them.
-The Colab chroot profile rejects CDI before provider contact. Missing or
-ambiguous device support fails preflight and never degrades silently to CPU.
+CDI requirements are passed only to a runtime path capable of resolving them.
+The Colab adapter accepts only the strict CDI JSON edits it implements; unknown
+hooks or fields fail closed. Missing or ambiguous device support fails preflight
+and never degrades silently to CPU.
 
 The selected checkpoint engine is restic because content-defined chunking,
 snapshot encryption, integrity checks, and interruption handling are backup

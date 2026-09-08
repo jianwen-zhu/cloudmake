@@ -70,11 +70,14 @@ def test_orfs_oci_acceptance_is_digest_pinned_and_composes_persistence() -> None
     assert f"docker.io/openroad/orfs@{digest}" in harness
     assert f"docker.io/openroad/orfs@{digest}" in source
     assert "--image" in harness
+    assert "--gpu=T4" in harness
+    assert "--device nvidia.com/gpu=all" in harness
     assert "--persist" in harness
     assert "snapshot-restored=" in harness
     assert "stage2_reused_floorplan=yes" in source
     assert "APPTAINER" not in source
     assert "docker run" not in source
+    assert "nvidia-smi" in source
     assert "CLOUDMAKE" not in makefile
 
 

@@ -237,7 +237,7 @@ def test_invalid_oci_selection_is_rejected_before_provider_contact(
     assert engine_calls(log) == []
 
 
-def test_colab_restricted_oci_profile_rejects_cdi_before_allocation(
+def test_colab_crun_profile_accepts_cdi_for_remote_preflight(
     tmp_path: Path, fake_bin: Path
 ) -> None:
     project = make_project(tmp_path / "project")
@@ -257,12 +257,13 @@ def test_colab_restricted_oci_profile_rejects_cdi_before_allocation(
         check=False,
     )
 
-    assert result.returncode == 2
-    assert "cannot apply CDI devices" in result.stdout
-    assert engine_calls(log) == []
+    assert result.returncode == 0
+    calls = engine_calls(log)
+    assert len(calls) == 1
+    assert "CLOUDMAKE_OCI_RUNTIMES_B64=" in " ".join(calls[0])
 
 
-def test_colab_restricted_oci_profile_rejects_saved_gpu_before_allocation(
+def test_colab_crun_profile_accepts_saved_gpu_selection(
     tmp_path: Path, fake_bin: Path
 ) -> None:
     project = make_project(tmp_path / "project")
@@ -272,9 +273,8 @@ def test_colab_restricted_oci_profile_rejects_saved_gpu_before_allocation(
 
     result = invoke(project, environment, "--image", image, "build", check=False)
 
-    assert result.returncode == 2
-    assert "OCI runtime options are CPU-only" in result.stdout
-    assert engine_calls(log) == []
+    assert result.returncode == 0
+    assert len(engine_calls(log)) == 1
 
 
 def test_backends_reports_persistence_mode_for_every_backend(
@@ -293,7 +293,7 @@ def test_backends_reports_persistence_mode_for_every_backend(
         if line.split()
     }
     assert rows["colab-notebook"][2] == "checkpoint"
-    assert "chroot" in rows["colab-notebook"]
+    assert "crun" in rows["colab-notebook"]
     assert "unsupported" in rows["kaggle-notebook"]
     assert "podman,docker,nerdctl,proot" in rows["host-ssh"]
     for backend in (
