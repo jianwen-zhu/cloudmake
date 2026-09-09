@@ -3,6 +3,12 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## 2.1.1 - 2026-09-09
+
+- Inspect digest-pinned images through the selected native runtime after pull,
+  so an unrelated host `skopeo` installation cannot add a second registry
+  request or change behavior across otherwise equivalent machines.
+
 ## 2.1.0 - 2026-09-09
 
 - Add one managed non-native execution surface: digest-pinned OCI images with

@@ -1182,11 +1182,11 @@ def prepare(
         )
 
     run_checked([runtime, "pull", reference], description=f"{runtime} image pull")
-    image = (
-        inspect_with_skopeo(reference, digest)
-        if shutil.which("skopeo")
-        else inspect_with_runtime(runtime, reference, digest)
-    )
+    # A native runtime has already pulled and verified the digest-pinned
+    # reference. Inspect that exact local object through the selected runtime;
+    # an unrelated host skopeo installation must not add a second registry
+    # request or change otherwise identical behavior across machines.
+    image = inspect_with_runtime(runtime, reference, digest)
     return native_base_command(runtime, source, reference, devices), image, None
 
 

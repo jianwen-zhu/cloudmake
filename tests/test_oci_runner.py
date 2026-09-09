@@ -237,6 +237,21 @@ def test_preflight_pulls_digest_and_checks_make_without_submitting_target(
     ]
 
 
+def test_native_runtime_does_not_use_an_unrelated_host_skopeo(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    write_executable(
+        fake_bin / "skopeo",
+        "#!/bin/sh\necho 'ambient skopeo must not run' >&2\nexit 99\n",
+    )
+
+    completed, receipt, calls = invoke(tmp_path, fake_bin, "--mode", "preflight")
+
+    assert completed.returncode == 0
+    assert receipt["status"] == "ready"
+    assert calls[2] == ["image", "inspect", IMAGE]
+
+
 @pytest.mark.parametrize("runtime", ["podman", "docker", "nerdctl"])
 def test_native_runtimes_receive_the_same_least_privilege_policy(
     tmp_path: Path, runtime: str
