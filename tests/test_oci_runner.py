@@ -32,6 +32,114 @@ def encoded(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii")
 
 
+def test_materialized_rootfs_is_recreated_from_persistent_oci_layout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("oci_runner_persistent_layout")
+    digest = "sha256:" + "a" * 64
+    reference = "registry.example/tools/build@" + digest
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        module,
+        "inspect_with_skopeo",
+        lambda *_arguments: {"requested_digest": digest, "architecture": "amd64"},
+    )
+
+    def run_checked(command, **_arguments):
+        calls.append([str(value) for value in command])
+        if command[:2] == ["skopeo", "copy"]:
+            layout = Path(command[-1].removeprefix("oci:").rsplit(":", 1)[0])
+            layout.mkdir(parents=True)
+            (layout / "oci-layout").write_text("{}", encoding="utf-8")
+            (layout / "index.json").write_text("{}", encoding="utf-8")
+        elif command[:2] == ["umoci", "unpack"]:
+            bundle = Path(command[-1])
+            (bundle / "rootfs").mkdir(parents=True)
+            (bundle / "config.json").write_text("{}", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(module, "run_checked", run_checked)
+    cache = tmp_path / "cache"
+    bundle, _ = module.materialize_bundle(
+        reference=reference, digest=digest, cache_root=cache
+    )
+    image_cache = cache / "images" / ("a" * 64)
+    assert (image_cache / "layout/oci-layout").is_file()
+    assert (image_cache / "layout/index.json").is_file()
+    assert (bundle / "rootfs").is_dir()
+    assert [command[:2] for command in calls] == [
+        ["skopeo", "copy"],
+        ["umoci", "unpack"],
+    ]
+
+    import shutil
+
+    shutil.rmtree(bundle)
+    calls.clear()
+    monkeypatch.setattr(
+        module,
+        "inspect_with_skopeo",
+        lambda *_arguments: (_ for _ in ()).throw(
+            AssertionError("cached OCI layout must not contact the registry")
+        ),
+    )
+    restored, image = module.materialize_bundle(
+        reference=reference, digest=digest, cache_root=cache
+    )
+
+    assert (restored / "rootfs").is_dir()
+    assert image["architecture"] == "amd64"
+    assert len(calls) == 1
+    assert calls[0][:2] == ["umoci", "unpack"]
+    assert str(image_cache / "layout") in calls[0][calls[0].index("--image") + 1]
+
+
+def test_proot_identifies_guest_and_prior_vm_link_repairs(
+    tmp_path: Path,
+) -> None:
+    module = load("oci_runner_proot_guest_link_rehydration")
+    digest = "a" * 64
+    rootfs = tmp_path / f"cache/oci/images/{digest}/bundle/rootfs"
+    executable = rootfs / "opt/conda/bin/python3"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("python", encoding="utf-8")
+    executable.chmod(0o755)
+    image_home = tmp_path / "checkpoint-home"
+    (image_home / "venv/bin").mkdir(parents=True)
+    python = image_home / "venv/bin/python3"
+    python.symlink_to("/opt/conda/bin/python3")
+    python_short = image_home / "venv/bin/python"
+    python_short.symlink_to("python3")
+    old_python = image_home / "venv/bin/python-old"
+    old_python.symlink_to(
+        f"/tmp/cloud-build/workspace/cache/oci/images/{digest}/bundle/rootfs/"
+        "opt/conda/bin/python3"
+    )
+    (image_home / "missing").symlink_to("/does/not/exist")
+    (image_home / "relative").symlink_to("venv/bin/python3")
+
+    repairs = module.proot_guest_link_repairs(image_home, rootfs)
+
+    assert repairs == [
+        ("", "python3", "/home/cloudmake/venv/bin/python"),
+        (
+            str(executable.resolve()),
+            "/opt/conda/bin/python3",
+            "/home/cloudmake/venv/bin/python-old",
+        ),
+        (
+            str(executable.resolve()),
+            "/opt/conda/bin/python3",
+            "/home/cloudmake/venv/bin/python3",
+        ),
+    ]
+    assert os.readlink(python) == "/opt/conda/bin/python3"
+    assert os.readlink(old_python).startswith("/tmp/cloud-build/workspace/")
+    assert os.readlink(image_home / "missing") == "/does/not/exist"
+    assert os.readlink(image_home / "relative") == "venv/bin/python3"
+
+
 def fake_runtime(fake_bin: Path) -> Path:
     log = fake_bin.parent / "runtime.jsonl"
     write_executable(
@@ -294,7 +402,7 @@ def test_proot_command_binds_a_fresh_runtime_tmp(tmp_path: Path) -> None:
     assert f"{runtime_tmp}:/tmp" in command
 
 
-def test_proot_command_binds_checkpointed_home(tmp_path: Path) -> None:
+def test_proot_command_can_bind_a_runtime_home(tmp_path: Path) -> None:
     module = load("oci_runner_proot_home")
     runtime_home = tmp_path / "home"
     command = module.proot_base_command(
@@ -306,6 +414,76 @@ def test_proot_command_binds_checkpointed_home(tmp_path: Path) -> None:
 
     assert f"{runtime_home}:/home/cloudmake" in command
     assert "HOME=/home/cloudmake" in command
+
+
+def test_proot_command_binds_safe_host_devices_and_resolver(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("oci_runner_proot_host_surface")
+    monkeypatch.setattr(
+        module.Path,
+        "is_char_device",
+        lambda path: str(path) in {"/dev/null", "/dev/zero"},
+    )
+    monkeypatch.setattr(module.Path, "is_block_device", lambda _path: False)
+    monkeypatch.setattr(
+        module.Path,
+        "is_dir",
+        lambda path: str(path) in {"/proc", "/sys"},
+    )
+    monkeypatch.setattr(
+        module.Path,
+        "exists",
+        lambda path: str(path) in {"/etc/resolv.conf", "/etc/hosts"},
+    )
+    monkeypatch.setattr(module.Path, "resolve", lambda path: path)
+
+    command = module.proot_base_command(
+        tmp_path / "bundle", tmp_path / "source", environment=["PATH=/usr/bin"]
+    )
+
+    assert "/dev/null:/dev/null" in command
+    assert "/dev/zero:/dev/zero" in command
+    assert "/dev/random:/dev/random" not in command
+    assert "/etc/resolv.conf:/etc/resolv.conf" in command
+    assert "/etc/hosts:/etc/hosts" in command
+    assert "/proc:/proc" in command
+    assert "/sys:/sys" in command
+
+
+def test_proot_materializes_missing_cdi_bind_targets(tmp_path: Path) -> None:
+    module = load("oci_runner_proot_bind_targets")
+    rootfs = tmp_path / "rootfs"
+    rootfs.mkdir()
+    host_file = tmp_path / "libcuda.so.1"
+    host_file.write_text("driver", encoding="utf-8")
+    host_directory = tmp_path / "device-directory"
+    host_directory.mkdir()
+
+    module.prepare_proot_binding_targets(
+        rootfs,
+        [
+            (str(host_file), "/usr/lib/x86_64-linux-gnu/libcuda.so.1"),
+            (str(host_directory), "/run/cloudmake-device"),
+        ],
+    )
+
+    assert (rootfs / "usr/lib/x86_64-linux-gnu/libcuda.so.1").is_file()
+    assert (rootfs / "run/cloudmake-device").is_dir()
+
+
+def test_proot_rejects_cdi_bind_target_beneath_image_symlink(tmp_path: Path) -> None:
+    module = load("oci_runner_proot_bind_target_symlink")
+    rootfs = tmp_path / "rootfs"
+    rootfs.mkdir()
+    (rootfs / "usr").symlink_to(tmp_path)
+    host_file = tmp_path / "libcuda.so.1"
+    host_file.write_text("driver", encoding="utf-8")
+
+    with pytest.raises(module.RunnerError, match="parent escapes the image root"):
+        module.prepare_proot_binding_targets(
+            rootfs, [(str(host_file), "/usr/lib/libcuda.so")]
+        )
 
 
 def test_proot_checkpointed_home_overrides_image_home_after_cdi(
@@ -321,6 +499,13 @@ def test_proot_checkpointed_home_overrides_image_home_after_cdi(
     source = tmp_path / "source"
     source.mkdir()
     runtime_home = tmp_path / "runtime-home"
+    (runtime_home / "venv/bin").mkdir(parents=True)
+    (runtime_home / "venv/bin/python3").symlink_to("/opt/conda/bin/python3")
+    image_python = bundle / "rootfs/opt/conda/bin/python3"
+    image_python.parent.mkdir(parents=True)
+    image_python.write_text("python", encoding="utf-8")
+    image_python.chmod(0o755)
+    repair_calls: list[list[str]] = []
     monkeypatch.setattr(
         module,
         "materialize_bundle",
@@ -338,6 +523,12 @@ def test_proot_checkpointed_home_overrides_image_home_after_cdi(
             ["/etc/cdi/gpu.json"],
         ),
     )
+    monkeypatch.setattr(
+        module,
+        "run_checked",
+        lambda command, **_: repair_calls.append(command)
+        or subprocess.CompletedProcess(command, 0),
+    )
 
     command, _, _ = module.prepare(
         runtime="proot",
@@ -353,6 +544,18 @@ def test_proot_checkpointed_home_overrides_image_home_after_cdi(
     assert "HOME=/home/cloudmake" in command
     assert "HOME=/image-user" not in command
     assert "VISIBLE_GPU=yes" in command
+    assert repair_calls[0][-4:] == [
+        "/bin/ln",
+        "-snf",
+        "/opt/conda/bin/python3",
+        "/home/cloudmake/venv/bin/python3",
+    ]
+    assert repair_calls[1][-3:] == [
+        "/usr/bin/test",
+        "-x",
+        "/home/cloudmake/venv/bin/python3",
+    ]
+    assert f"{image_python}:/home/cloudmake/venv/bin/python3!" not in command
 
 
 def test_dynamic_runtime_probe_tries_multiple_backend_options(monkeypatch) -> None:
@@ -553,6 +756,7 @@ def test_direct_crun_profile_is_nonroot_and_preserves_target_status(
                     "namespaces": [
                         {"type": "mount"}, {"type": "pid"},
                         {"type": "network"}, {"type": "cgroup"},
+                        {"type": "user"},
                     ],
                 },
             }

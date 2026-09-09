@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tarfile
 
 import pytest
@@ -232,6 +234,40 @@ def test_checkpoint_round_trip_preserves_hard_links_and_read_only_directories(
     ).stat().st_ino
 
 
+def test_checkpoint_keeps_oci_layers_and_discards_materialized_rootfs(
+    tmp_path: Path,
+) -> None:
+    loaded = load_remote()
+    workspace = tmp_path / "workspace"
+    digest = "a" * 64
+    image_cache = workspace / "cache/oci/images" / digest
+    (image_cache / "layout").mkdir(parents=True)
+    (image_cache / "layout/oci-layout").write_text("{}", encoding="utf-8")
+    (image_cache / "layout/index.json").write_text("{}", encoding="utf-8")
+    (image_cache / "receipt.json").write_text("{}", encoding="utf-8")
+    (image_cache / "bundle/rootfs").mkdir(parents=True)
+    (image_cache / "bundle/rootfs/tool").write_text("derived", encoding="utf-8")
+    (workspace / "home/.cache/tool").mkdir(parents=True)
+    (workspace / "home/.cache/tool/state").write_text("persistent", encoding="utf-8")
+
+    removed = loaded.prune_oci_materializations(workspace / "cache/oci")
+
+    assert removed == 1
+    assert not (image_cache / "bundle").exists()
+    assert (image_cache / "layout/oci-layout").is_file()
+    assert (image_cache / "receipt.json").is_file()
+    assert (workspace / "home/.cache/tool/state").read_text() == "persistent"
+
+    archive = tmp_path / "checkpoint.tar.gz"
+    loaded.archive_workspace(workspace, archive)
+    restored = tmp_path / "restored"
+    loaded.extract_archive(archive, restored)
+    restored_cache = restored / "cache/oci/images" / digest
+    assert not (restored_cache / "bundle").exists()
+    assert (restored_cache / "layout/oci-layout").is_file()
+    assert (restored / "home/.cache/tool/state").read_text() == "persistent"
+
+
 def test_checkpoint_restore_rejects_escaping_hard_link(tmp_path: Path) -> None:
     loaded = load_remote()
     archive = tmp_path / "malicious.tar.gz"
@@ -274,6 +310,126 @@ def test_expected_oci_preparation_failure_writes_infrastructure_receipt(
     assert receipt["error"] == "registry unavailable"
 
 
+def test_oci_runtime_package_install_retries_once_and_keeps_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loaded = load_remote()
+    installed: set[str] = set()
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        loaded.shutil, "which", lambda command: f"/usr/bin/{command}" if command in installed else None
+    )
+    monkeypatch.setattr(loaded, "require_network", lambda *_arguments: None)
+    pinned_proot = tmp_path / "cache/runtime/proot/5.4.1/proot"
+    monkeypatch.setattr(loaded, "prepare_current_proot", lambda _cache: pinned_proot)
+
+    def run(command, **_arguments):
+        commands.append([str(value) for value in command])
+        if command[:2] == ["apt-get", "install"]:
+            attempts = sum(item[:2] == ["apt-get", "install"] for item in commands)
+            if attempts == 1:
+                raise subprocess.CalledProcessError(100, command)
+            installed.update({"skopeo", "umoci", "setpriv"})
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(loaded.subprocess, "run", run)
+    assert loaded.prepare_oci_runtime(tmp_path / "cache") == pinned_proot
+
+    installs = [command for command in commands if command[:2] == ["apt-get", "install"]]
+    assert len(installs) == 2
+    assert all("Acquire::Retries=3" in command for command in installs)
+    assert all("Binary::apt-get::APT::Keep-Downloaded-Packages=true" in command for command in installs)
+
+
+def test_current_proot_is_checksum_pinned_and_reused_from_checkpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loaded = load_remote()
+    payload = b"current proot"
+    loaded.PROOT_SHA256 = __import__("hashlib").sha256(payload).hexdigest()
+    destination = tmp_path / "cache/runtime/proot/5.4.1/proot"
+    destination.parent.mkdir(parents=True)
+    destination.write_bytes(payload)
+    destination.chmod(0o600)
+    monkeypatch.setattr(
+        loaded,
+        "require_network",
+        lambda *_: (_ for _ in ()).throw(AssertionError("must not use network")),
+    )
+
+    assert loaded.prepare_current_proot(tmp_path / "cache") == destination
+    assert destination.stat().st_mode & 0o111
+
+
+def test_current_proot_download_rejects_wrong_checksum(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loaded = load_remote()
+    monkeypatch.setattr(loaded, "require_network", lambda *_: None)
+    monkeypatch.setattr(
+        loaded.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: io.BytesIO(b"unexpected binary"),
+    )
+
+    with pytest.raises(loaded.InfrastructureError, match="checksum mismatch"):
+        loaded.prepare_current_proot(tmp_path / "cache")
+
+    destination = tmp_path / "cache/runtime/proot/5.4.1/proot"
+    assert not destination.exists()
+    assert not destination.with_name(".proot.tmp").exists()
+
+
+def test_kaggle_nvidia_cdi_ignores_matching_directories(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loaded = load_remote()
+    candidates = {
+        "/dev/nvidia0",
+        "/dev/nvidiactl",
+        "/dev/nvidia-uvm",
+        "/dev/nvidia-caps",
+        "/dev/nvidia-caps/nvidia-cap1",
+    }
+    monkeypatch.setattr(loaded.glob, "glob", lambda _pattern: list(candidates))
+    monkeypatch.setattr(
+        loaded.Path,
+        "is_char_device",
+        lambda path: str(path) != "/dev/nvidia-caps",
+    )
+    monkeypatch.setattr(loaded.Path, "is_block_device", lambda _path: False)
+    monkeypatch.setattr(
+        loaded.Path,
+        "is_file",
+        lambda path: str(path) == "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+    )
+    monkeypatch.setattr(loaded.shutil, "which", lambda _command: None)
+    monkeypatch.setattr(
+        loaded.subprocess,
+        "run",
+        lambda *_arguments, **_keywords: subprocess.CompletedProcess(
+            [], 0, "libcuda.so.1 (libc6,x86-64) => /usr/lib/x86_64-linux-gnu/libcuda.so.1\n"
+        ),
+    )
+
+    loaded.generate_nvidia_cdi(tmp_path / "cdi", ["nvidia.com/gpu=all"])
+
+    payload = json.loads(
+        (tmp_path / "cdi/cloudmake-kaggle-nvidia.json").read_text()
+    )
+    device_nodes = payload["devices"][0]["containerEdits"]["deviceNodes"]
+    paths = {item["path"] for item in device_nodes}
+    assert "/dev/nvidia-caps" not in paths
+    assert "/dev/nvidia-caps/nvidia-cap1" in paths
+    mounts = payload["devices"][0]["containerEdits"]["mounts"]
+    assert mounts == [{
+        "hostPath": "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+        "containerPath": "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+        "options": ["bind", "ro"],
+    }]
+
+
 def test_corrupt_prior_checkpoint_fails_before_project_target(tmp_path: Path) -> None:
     project = tmp_path / "project"
     install_project(project)
@@ -312,6 +468,7 @@ def test_corrupt_prior_checkpoint_fails_before_project_target(tmp_path: Path) ->
 
     assert second.returncode != 0
     assert "checkpoint digest does not match" in second.stdout
+    assert "Traceback" not in second.stdout
     receipt = json.loads(
         (second_dir / "working/cloudmake-target-result.json").read_text()
     )

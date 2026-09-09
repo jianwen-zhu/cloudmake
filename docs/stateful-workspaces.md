@@ -30,6 +30,10 @@ provider-specific files, targets, or directory layouts.
    password, and never expose plaintext during remote delivery.
 8. Keep persistence off by default. Without explicit project opt-in, preserve
    the previous execution, dependency, credential, and provider-I/O contract.
+9. Treat every persistent workspace and checkpoint as disposable acceleration
+   state. A project must remain rebuildable from its selected source and
+   Makefile on a fresh compatible backend; persistence may reduce repeated work
+   but must not change target meaning or correctness.
 
 ## Backend behavior
 
@@ -39,8 +43,9 @@ mechanism:
 | Mode | Backends | Contract |
 | --- | --- | --- |
 | Managed checkpoint | `colab-notebook` | Incrementally restore and publish an encrypted workspace through Google Drive. |
+| Experimental managed checkpoint | `kaggle-notebook` | Retain the deprecated provider-private alternating-output implementation for compatibility and coarse batch experiments. |
 | Native persistence | `local`, `host-ssh`, `codespaces-ssh`, `lightning-studio-ssh` | Keep using the backend's existing durable project tree; perform no checkpoint transfer. |
-| Unsupported | `kaggle-notebook`, `colab-ssh` | Reject before provider contact rather than imply durability the transport cannot supply. |
+| Unsupported | `colab-ssh` | Reject before provider contact rather than imply durability the transport cannot supply. |
 
 Persistence remains an explicit per-project selection in every mode. Native
 mode is operationally a no-op because the backend already has the required
@@ -59,6 +64,21 @@ backend. The legacy `--checkpoint` spelling remains an alias for `--persist`.
   modules, drivers, running processes, or open network connections.
 - Persistent-workspace snapshots are not a replacement for source control or an archival backup of
   the developer's local project.
+
+## Rebuildability principle
+
+The project source and Makefile are the complete specification of the work.
+Checkpoint contents may include compiled objects, downloaded dependencies,
+tool caches, intermediate results, and materialized application bundles, but
+all such state is rebuildable. A missing, expired, corrupt, incompatible, or
+explicitly purged workspace must fall back to clean project execution rather
+than reveal a hidden project prerequisite.
+
+This principle applies equally to native persistence. A stopped Codespace or
+provider volume can make restoration effectively free because no archive moves,
+but that filesystem remains a warm build tree rather than a durable source of
+truth. Final results that cannot be reconstructed must be explicitly collected
+or stored by the project outside Cloudmake's checkpoint contract.
 
 ## State model
 

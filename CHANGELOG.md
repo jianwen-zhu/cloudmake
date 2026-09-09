@@ -3,7 +3,7 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
-## 2.1.0 - 2026-09-08
+## 2.1.0 - 2026-09-09
 
 - Add one managed non-native execution surface: digest-pinned OCI images with
   optional standard CDI qualified device requests, while preserving native Make
@@ -28,17 +28,30 @@ once a version is published as a GitHub release.
   `noNewPrivileges`, and supports NVIDIA devices and host drivers through a
   generated CDI specification. Deliberately omit Colab `runc` and bare
   `chroot` alternatives to keep one accelerator-capable maintained profile.
-- Add a Kaggle persistent-workspace adapter that alternates two private
+- Retain an experimental Kaggle persistent-workspace adapter that alternates two private
   notebook-output slots, restores the last successful workspace entirely inside
   Kaggle, reconciles current local source, and advances the local head only
   after a successful Make target and validated publication receipt.
-- Add a Kaggle `skopeo` + `umoci` + PRoot OCI profile for trusted computational
+- Retain an experimental Kaggle `skopeo` + `umoci` + PRoot OCI profile for trusted computational
   images, including strict `nvidia.com/gpu=all` CDI translation from devices and
-  host drivers observed in the actual VM. Cache downloaded runner packages and
-  the materialized image in the private workspace so `session-reuse=no` does not
-  require a cold registry pull on every target.
+  host drivers observed in the actual VM. Cache downloaded runner packages,
+  a checksum-pinned current PRoot binary, and the verified OCI layout in the
+  private workspace so `session-reuse=no` does not require a cold registry pull
+  on every target; discard and reconstruct the derived rootfs to avoid doubling
+  checkpoint storage.
+- Rehydrate checkpointed virtual-environment links inside the current PRoot
+  guest, expose the conventional `/proc` and `/sys` kernel API views required by
+  CUDA, and retain UID/GID 65534, empty capabilities, and `noNewPrivileges`.
 - Replace backend lifecycle labels with the orthogonal `session-reuse=yes|no`
   property while retaining API-1 lifecycle declarations as compatibility input.
+- Add explicit backend status metadata and deprecate Kaggle for remote-
+  workstation use after live ECE467 evaluation measured a roughly 14.5 GB
+  restore/materialize/publish cycle on every target. Keep the implementation
+  available for compatibility and coarse batch experimentation, but remove it
+  from release qualification.
+- Establish that native workspaces and managed checkpoints are disposable,
+  rebuildable acceleration state: source plus Make remain authoritative, and
+  persistence must not change target meaning or correctness.
 - Distinguish target exit status from OCI infrastructure failure using private
   execution and terminal receipts, including when a project target itself exits
   with `EX_SOFTWARE`/70.

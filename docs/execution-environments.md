@@ -197,7 +197,7 @@ is known.
 | `local` | supported | Podman, Docker, nerdctl, then PRoot fallback | native CDI or validated PRoot bind/environment translation |
 | `host-ssh`, `codespaces-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | native CDI or validated PRoot translation |
 | `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one provider-qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
-| `kaggle-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and PRoot | qualified NVIDIA `all` device translated from generated CDI; fail closed when absent |
+| `kaggle-notebook` | deprecated experimental profile for trusted Linux images | `skopeo` + `umoci` materialization and PRoot | qualified NVIDIA `all` device translated from generated CDI; fail closed when absent |
 
 These choices are backend declarations rather than launcher special cases:
 
@@ -253,9 +253,14 @@ SIF, Nix closures, and other mechanisms may still appear inside ordinary
 project recipes, but Cloudmake neither selects nor validates them as managed
 runners. OCI must be validated as OCI; conversion to SIF is not OCI evidence.
 
-## Kaggle as the no-reuse validation
+## Historical Kaggle no-reuse validation
 
-Kaggle is the deliberate counterpoint to Colab in Cloudmake's backend model.
+Kaggle provided the deliberate counterpoint to Colab in Cloudmake's backend
+model, but is deprecated for remote-workstation use. The implementation remains
+available for compatibility and coarse batch experimentation; it does not gate
+the 2.1 release. The retained evidence is documented in the
+[historical backend report](historical/kaggle-notebook.md).
+
 Colab can amortize source, image, and workspace preparation across targets in a
 reused session. Kaggle assigns fresh compute to every notebook version and
 therefore declares `session-reuse=no`. “Batch” and “fresh per target” are
@@ -274,8 +279,11 @@ Kaggle composes two independent adapters without changing that reuse property:
 This preserves incremental Make *state*, not cheap incremental
 dispatch. Every target still pays for a fresh VM, source staging,
 workspace restore, OCI materialization when uncached, and successful checkpoint
-publication. Cloudmake must identify those costs as properties of the backend
-rather than compensate with implicit target aggregation or a scheduler.
+publication. Cloudmake identifies those costs as properties of the backend
+rather than compensating with implicit target aggregation or a scheduler. Live
+ECE467 evaluation measured a roughly 14.5 GB restore/materialize/publish cycle
+on each target, which made this backend unsuitable for the intended workstation
+loop.
 
 The persistence gate proves provider-side restore and publication without a
 laptop round trip for the checkpoint payload, deterministic version selection,

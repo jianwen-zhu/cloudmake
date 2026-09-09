@@ -33,15 +33,15 @@ existing directory after success, and transactionally replace the local
 
 User aliases are short; canonical names identify transport explicitly:
 
-| User alias | Canonical backend | Transport | Persistence mode |
-| --- | --- | --- | --- |
-| `local` | `local` | Direct project Make invocation | `native` |
-| `colab` | `colab-notebook` | Native Colab contents and kernel APIs | `checkpoint` |
-| `kaggle` | `kaggle-notebook` | Private Kaggle notebook version | `checkpoint` |
-| `codespaces` | `codespaces-ssh` | SSH and rsync | `native` |
-| `colab-ssh` | `colab-ssh` | SSH and rsync | `unsupported` |
-| `ssh` | `host-ssh` | User-managed SSH and rsync | `native` |
-| `lightning` | `lightning-studio-ssh` | SSH and rsync | `native` |
+| User alias | Canonical backend | Status | Transport | Persistence mode |
+| --- | --- | --- | --- | --- |
+| `local` | `local` | supported | Direct project Make invocation | `native` |
+| `colab` | `colab-notebook` | supported | Native Colab contents and kernel APIs | `checkpoint` |
+| `kaggle` | `kaggle-notebook` | deprecated | Private Kaggle notebook version | experimental `checkpoint` |
+| `codespaces` | `codespaces-ssh` | supported | SSH and rsync | `native` |
+| `colab-ssh` | `colab-ssh` | supported | SSH and rsync | `unsupported` |
+| `ssh` | `host-ssh` | supported | User-managed SSH and rsync | `native` |
+| `lightning` | `lightning-studio-ssh` | supported | SSH and rsync | `native` |
 
 An alias must not silently change transport. In particular, `colab` always
 means native notebook access and never falls back to SSH.
@@ -52,6 +52,8 @@ Each backend declares:
 
 - the supported backend API version;
 - a canonical backend name;
+- its `BACKEND_PRODUCT_STATUS`, `supported` or `deprecated`, plus
+  `BACKEND_PRODUCT_STATUS_REASON` when deprecated;
 - whether its execution environment is reusable across target invocations;
 - an ordered set of capabilities, including any persistence and bundle-runtime
   roles;
@@ -65,6 +67,12 @@ Inspect the resolved descriptor with:
 ```sh
 make BACKEND=colab-notebook backend-info
 ```
+
+`BACKEND_PRODUCT_STATUS=deprecated` preserves a compatibility implementation without
+presenting it as a recommended execution surface. The launcher displays the
+status in `cloudmake --backends` and prints the descriptor's reason whenever a
+deprecated backend is selected. Deprecation does not silently alter existing
+syntax or target dispatch.
 
 Capabilities describe real behavior rather than provider branding. Examples
 include synchronization, execution, artifact retrieval, status, opening a web

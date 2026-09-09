@@ -2943,6 +2943,10 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
 ) -> None:
     result = run_command(["make", f"BACKEND={backend}", "backend-info"], cwd=prototype)
     assert "api=1" in result.stdout
+    expected_status = "deprecated" if backend == "kaggle-notebook" else "supported"
+    assert f"product-status={expected_status}" in result.stdout
+    if backend == "kaggle-notebook":
+        assert "product-status-reason=fresh VM and full checkpoint materialization" in result.stdout
     assert f"session-reuse={session_reuse}" in result.stdout
     assert capability in result.stdout
     if persistence_capability is None:
@@ -2991,6 +2995,28 @@ def test_backend_contract_rejects_unknown_internet_capability_values(
 
     assert result.returncode != 0
     assert f"invalid {field}" in result.stdout
+
+
+def test_backend_contract_rejects_unknown_backend_status(tmp_path: Path) -> None:
+    descriptor = tmp_path / "invalid-status-backend.mk"
+    descriptor.write_text(
+        "BACKEND := invalid-status\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_PRODUCT_STATUS := fading\n"
+        "BACKEND_SESSION_REUSE := no\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_OCI_RUNTIMES := none\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert "invalid BACKEND_PRODUCT_STATUS" in result.stdout
 
 
 @pytest.mark.integration

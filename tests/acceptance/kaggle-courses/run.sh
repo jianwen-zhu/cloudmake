@@ -28,6 +28,9 @@ done
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../bin/cloudmake}
 accelerator=${KAGGLE_COURSE_ACCELERATOR:-NvidiaTeslaT4}
+ece467_image=${KAGGLE_ECE467_IMAGE:-docker.io/pytorch/pytorch@sha256:53ab3de62f6101d1e42f9be28623ab7a468a24c070d632f211ed576e30b6abd3}
+ece467_state='STATE_ROOT=$(HOME)/.cache/ece467-labs'
+ece467_link='LIBRARY_PATH=/usr/local/cuda/lib64/stubs'
 mkdir -p "$evidence"
 evidence=$(CDPATH= cd -- "$evidence" && pwd)
 state_root=$evidence/local-state
@@ -71,14 +74,21 @@ run_logged ece326-lab4-paired "$cloudmake" -C "$lab4" \
 
 # ECE467: reproduce the published end-to-end Colab onboarding sequence. Each
 # target receives a fresh T4 VM and must recover the same checkpointed home.
+# Kaggle's native image is not the course toolchain contract: use a pinned OCI
+# CUDA development image and explicit CDI. ECE467's normal Colab default lives
+# outside Cloudmake's workspace, so its existing STATE_ROOT Make override points
+# the reusable tool environment at the checkpointed HOME without changing the
+# project.
 run_logged ece467-select "$cloudmake" -C "$ece467" --use kaggle \
-	--gpu="$accelerator" --persist
+	--gpu="$accelerator" --persist --image "$ece467_image" \
+	--device nvidia.com/gpu=all
 for target in \
 	bootstrap ttl-prelabs verify \
 	lab-axpy-01-cpu lab-axpy-02-device lab-axpy-03-tilelang \
 	lab-gemm-01-cpu lab-gemm-02-device lab-gemm-03-tilelang lab-gemm-04-watch
 do
-	run_logged "ece467-$target" "$cloudmake" -C "$ece467" "$target"
+	run_logged "ece467-$target" "$cloudmake" -C "$ece467" \
+		"$target" "$ece467_state" "$ece467_link"
 done
 
-printf '[cloudmake] Kaggle ECE326/ECE467 acceptance passed evidence=%s\n' "$evidence"
+printf '[cloudmake] historical Kaggle ECE326/ECE467 evaluation passed evidence=%s\n' "$evidence"

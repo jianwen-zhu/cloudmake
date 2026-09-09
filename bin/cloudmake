@@ -598,8 +598,9 @@ Managed checkpoint workspaces: --workspaces; --workspace {{show,attach,purge}} [
                                (purge requires --force)
 Persistence selection: --persist/--no-persist are local and per project;
                        --checkpoint/--no-checkpoint remain compatible aliases.
-Persistence modes: Colab notebook=encrypted checkpoint; Kaggle=private-output
-                   checkpoint; local/persistent SSH=native storage (no transfer);
+Persistence modes: Colab notebook=encrypted checkpoint; deprecated Kaggle=
+                   experimental private-output checkpoint;
+                   local/persistent SSH=native storage (no transfer);
                    Colab SSH=unsupported.
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
@@ -640,20 +641,42 @@ def backend_oci_runtimes(backend: str) -> list[str]:
     return values
 
 
+def backend_status(backend: str) -> tuple[str, str]:
+    status = backend_declaration(backend, "BACKEND_PRODUCT_STATUS")
+    if status not in {"supported", "deprecated"}:
+        raise UsageError(f"backend {backend!r} has invalid status {status!r}")
+    reason = ""
+    if status == "deprecated":
+        reason = backend_declaration(backend, "BACKEND_PRODUCT_STATUS_REASON")
+        if not reason:
+            raise UsageError(f"deprecated backend {backend!r} has no status reason")
+    return status, reason
+
+
+def warn_deprecated_backend(backend: str) -> None:
+    status, reason = backend_status(backend)
+    if status == "deprecated":
+        print(
+            f"[cloudmake] warning: backend={backend} status=deprecated; {reason}.",
+            file=sys.stderr,
+        )
+
+
 def show_backends() -> None:
     print(
-        f"{'BACKEND':22} {'SESSION REUSE':13} {'PERSISTENCE':12} "
+        f"{'BACKEND':22} {'STATUS':10} {'SESSION REUSE':13} {'PERSISTENCE':12} "
         f"{'TRANSPORT':36} {'OCI RUNTIMES':34} {'INTERNET IN':12} "
         f"{'INTERNET OUT':12} HOST CLIENT"
     )
     for name, (session_reuse, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
+        status, _ = backend_status(name)
         runtimes = backend_oci_runtimes(name)
         runtime_text = ",".join(runtimes) if runtimes else "unsupported"
         internet_in = backend_declaration(name, "BACKEND_INTERNET_INBOUND")
         internet_out = backend_declaration(name, "BACKEND_INTERNET_OUTBOUND")
         print(
-            f"{name:22} {session_reuse:13} {PERSISTENCE_MODES[name]:12} "
+            f"{name:22} {status:10} {session_reuse:13} {PERSISTENCE_MODES[name]:12} "
             f"{transport:36} {runtime_text:34} {internet_in:12} "
             f"{internet_out:12} {client} ({installed})"
         )
@@ -1629,6 +1652,7 @@ def run(arguments: list[str]) -> int:
         ):
             raise UsageError("OCI runner selection is per project, not global")
         backend = options["use_backend"]
+        warn_deprecated_backend(backend)
         accelerator_set = options["accelerator_set"]
         accelerator = options["accelerator"]
         if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
@@ -1836,6 +1860,7 @@ def run(arguments: list[str]) -> int:
         return 0
     if backend == "host-ssh" and ssh_host is None:
         raise UsageError("the ssh backend requires --host HOST")
+    warn_deprecated_backend(backend)
 
     if action is None:
         remote_target, assignments = positional[0], positional[1:]

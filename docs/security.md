@@ -246,7 +246,9 @@ it.
 
 ### Kaggle provider-private checkpoints
 
-Kaggle uses a distinct provider-private checkpoint boundary. Cloudmake
+This deprecated backend is retained for compatibility and coarse batch
+experimentation, not recommended remote-workstation use. Kaggle uses a distinct
+provider-private checkpoint boundary. Cloudmake
 alternates two private kernel-output slots and connects the last completed slot
 to the next job through Kaggle's `kernel_sources` mechanism. The checkpoint
 payload never traverses the laptop, and the Kaggle CLI retains sole custody of

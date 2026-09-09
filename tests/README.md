@@ -95,10 +95,10 @@ The prepared ORFS project owns its tool acquisition, launcher, stage checks,
 and target names. See the [gate contract](acceptance/orfs-checkpoint/README.md).
 The harness leaves the session intact after any failed or ambiguous operation.
 
-## Kaggle course acceptance
+## Historical Kaggle course evaluation
 
-Kaggle must pass the same real-consumer behavior already accepted on local and
-Colab backends. The opt-in gate uses a clean public ECE326 Lab 1 release, the
+Kaggle is deprecated and no longer gates Cloudmake releases. The retained
+opt-in evaluation uses a clean public ECE326 Lab 1 release, the
 paired Lab 4 calibration, and the ECE467 accelerator-labs project. It also
 forces Kaggle's `session-reuse=no` behavior to prove that checkpointed `$HOME`
 state survives every fresh target VM:
@@ -111,9 +111,9 @@ tests/acceptance/kaggle-courses/run.sh \
   /path/to/ece467-labs evidence
 ```
 
-See the [course-gate contract](acceptance/kaggle-courses/README.md). The gate is
-not green until all ECE326 and ECE467 targets complete; a provider internet or
-accelerator limitation is recorded as a release blocker rather than waived.
+See the [historical evaluation contract](acceptance/kaggle-courses/README.md).
+It reproduces the evidence behind deprecation and consumes substantial provider
+time; failures are not Cloudmake release blockers.
 
 ## ORFS OCI/CDI acceptance
 

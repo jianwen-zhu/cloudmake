@@ -162,5 +162,6 @@ fails before Make.
 For the full four-axis model and backend matrix, see
 [Execution environments and OCI runner](execution-environments.md). The live
 evidence and exact managed-VM profile are recorded in
-[Colab OCI/CDI qualification](colab-oci-qualification.md). Kaggle's separate
-qualification record is [Kaggle checkpoint and OCI qualification](kaggle-oci-qualification.md).
+[Colab OCI/CDI qualification](colab-oci-qualification.md). Kaggle's deprecated,
+failed remote-workstation usability evaluation is retained as a
+[historical backend report](historical/kaggle-notebook.md).

@@ -4,6 +4,7 @@
 BACKEND_TRANSPORT := ssh
 BACKEND_ACCESS_CLASS := quota-tier
 BACKEND_API_VERSION := 1
+BACKEND_PRODUCT_STATUS := supported
 BACKEND_SESSION_REUSE := yes
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel persistent-storage native-persistence oci-runner
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot

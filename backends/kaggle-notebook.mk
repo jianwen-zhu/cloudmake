@@ -2,6 +2,8 @@
 BACKEND_TRANSPORT := kaggle-kernel
 BACKEND_ACCESS_CLASS := notebook-batch
 BACKEND_API_VERSION := 1
+BACKEND_PRODUCT_STATUS := deprecated
+BACKEND_PRODUCT_STATUS_REASON := fresh VM and full checkpoint materialization per target are impractical for remote-workstation use
 BACKEND_SESSION_REUSE := no
 BACKEND_CAPABILITIES := sync execute status open artifacts gpu persistent-workspace checkpoint-persistence oci-runner
 BACKEND_OCI_RUNTIMES := proot

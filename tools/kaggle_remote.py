@@ -9,16 +9,24 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import subprocess
 import tarfile
 import tempfile
 from typing import Any
+import urllib.error
+import urllib.request
 
 
 class InfrastructureError(RuntimeError):
     """A failure before or around project Make execution."""
+
+
+PROOT_VERSION = "5.4.1"
+PROOT_SHA256 = "19f44283f5c0e73091c60195f5fcd4f4c1165505e44410d434e2ab1b677c1a09"
+PROOT_URL = f"https://github.com/proot-me/proot/releases/download/v{PROOT_VERSION}/proot"
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -174,6 +182,39 @@ def archive_workspace(source: Path, destination: Path) -> tuple[int, int, str]:
     return files, logical_bytes, file_sha256(destination)
 
 
+def prune_oci_materializations(cache: Path) -> int:
+    """Discard derived root filesystems while retaining OCI content layers.
+
+    A materialized bundle is VM-local scratch: it is reproducibly reconstructed
+    from the digest-pinned OCI layout.  Keeping it in a checkpoint both doubles
+    storage and can preserve filesystem details poorly across archive restore.
+    """
+    images = cache / "images"
+    if not images.is_dir():
+        return 0
+    removed = 0
+    for image_cache in sorted(images.iterdir()):
+        if (
+            not image_cache.is_dir()
+            or image_cache.is_symlink()
+            or re.fullmatch(r"[0-9a-f]{64}", image_cache.name) is None
+        ):
+            continue
+        bundle = image_cache / "bundle"
+        if bundle.is_symlink():
+            raise InfrastructureError(
+                f"OCI materialization path is an unsafe symlink: {bundle}"
+            )
+        if bundle.is_file():
+            raise InfrastructureError(
+                f"OCI materialization path is not a directory: {bundle}"
+            )
+        if bundle.is_dir():
+            shutil.rmtree(bundle)
+            removed += 1
+    return removed
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -298,6 +339,102 @@ def restore_checkpoint(
     }
 
 
+def prepare_current_proot(cache: Path) -> Path:
+    destination = cache / "runtime" / "proot" / PROOT_VERSION / "proot"
+    if destination.is_file() and file_sha256(destination) == PROOT_SHA256:
+        destination.chmod(0o755)
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+    require_network("github.com", "Kaggle PRoot release access")
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    try:
+        with urllib.request.urlopen(PROOT_URL, timeout=60) as response:
+            with temporary.open("wb") as output:
+                shutil.copyfileobj(response, output, length=1024 * 1024)
+        observed = file_sha256(temporary)
+        if observed != PROOT_SHA256:
+            raise InfrastructureError(
+                "downloaded PRoot checksum mismatch: "
+                f"expected {PROOT_SHA256}, observed {observed}"
+            )
+        temporary.chmod(0o755)
+        os.replace(temporary, destination)
+    except (OSError, urllib.error.URLError) as error:
+        raise InfrastructureError(
+            f"Kaggle PRoot {PROOT_VERSION} download failed: {error}"
+        ) from error
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
+def prepare_oci_runtime(cache: Path) -> Path:
+    runtime_packages = {
+        "skopeo": "skopeo",
+        "umoci": "umoci",
+        "setpriv": "util-linux",
+    }
+
+    def missing_packages() -> list[str]:
+        return sorted({
+            package for command, package in runtime_packages.items()
+            if shutil.which(command) is None
+        })
+
+    packages = missing_packages()
+    if not packages:
+        return prepare_current_proot(cache)
+    print("[cloudmake] preparing Kaggle OCI runtime: " + ", ".join(packages), flush=True)
+    package_cache = cache / "apt"
+    cached_packages = sorted(package_cache.glob("*.deb"))
+    if cached_packages:
+        subprocess.run(
+            [
+                "apt-get", "install", "-y", "-q", "--no-download",
+                "--no-install-recommends", *map(os.fspath, cached_packages),
+            ],
+            check=False,
+        )
+        packages = missing_packages()
+        if not packages:
+            return prepare_current_proot(cache)
+
+    require_network("archive.ubuntu.com", "Kaggle OCI package access")
+    (package_cache / "partial").mkdir(parents=True, exist_ok=True)
+    last_status = 1
+    for attempt in range(1, 3):
+        try:
+            subprocess.run(
+                ["apt-get", "update", "-q", "-o", "Acquire::Retries=3"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "apt-get", "install", "-y", "-q", "--no-install-recommends",
+                    "-o", "Acquire::Retries=3",
+                    "-o", "Binary::apt-get::APT::Keep-Downloaded-Packages=true",
+                    "-o", f"Dir::Cache::archives={package_cache}", *packages,
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as error:
+            last_status = error.returncode
+        packages = missing_packages()
+        if not packages:
+            return prepare_current_proot(cache)
+        if attempt == 1:
+            print(
+                "[cloudmake] Kaggle OCI package preparation incomplete; "
+                "refreshing package indexes once",
+                flush=True,
+            )
+    raise InfrastructureError(
+        "Kaggle OCI runtime preparation failed with exit status "
+        f"{last_status}; missing: {', '.join(packages)}"
+    )
+
+
 def run_target(
     *, control: dict[str, Any], source: Path, cache: Path, home: Path,
     oci_runner: Path, result: Path
@@ -308,65 +445,14 @@ def run_target(
         *control["project_arguments"], f"-j{control['jobs']}", "--", target,
     ]
     if control["runner"] == "oci":
-        runtime_packages = {
-            "skopeo": "skopeo",
-            "umoci": "umoci",
-            "proot": "proot",
-            "setpriv": "util-linux",
-        }
-        packages = sorted({
-            package for command, package in runtime_packages.items()
-            if shutil.which(command) is None
-        })
-        if packages:
-            print("[cloudmake] preparing Kaggle OCI runtime: " + ", ".join(packages), flush=True)
-            package_cache = cache / "apt"
-            cached_packages = sorted(package_cache.glob("*.deb"))
-            if cached_packages:
-                subprocess.run(
-                    [
-                        "apt-get", "install", "-y", "-qq", "--no-download",
-                        "--no-install-recommends", *map(os.fspath, cached_packages),
-                    ],
-                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                packages = sorted({
-                    package for command, package in runtime_packages.items()
-                    if shutil.which(command) is None
-                })
-        if packages:
-            require_network("archive.ubuntu.com", "Kaggle OCI package access")
-            package_cache = cache / "apt"
-            (package_cache / "partial").mkdir(parents=True, exist_ok=True)
-            try:
-                subprocess.run(["apt-get", "update", "-qq"], check=True)
-                subprocess.run(
-                    [
-                        "apt-get", "install", "-y", "-qq", "--download-only",
-                        "--no-install-recommends", "-o",
-                        f"Dir::Cache::archives={package_cache}", *packages,
-                    ],
-                    check=True,
-                )
-                cached_packages = sorted(package_cache.glob("*.deb"))
-                if not cached_packages:
-                    raise InfrastructureError("Kaggle OCI package cache is empty")
-                subprocess.run(
-                    [
-                        "apt-get", "install", "-y", "-qq", "--no-download",
-                        "--no-install-recommends", *map(os.fspath, cached_packages),
-                    ],
-                    check=True,
-                )
-            except subprocess.CalledProcessError as error:
-                raise InfrastructureError(
-                    f"Kaggle OCI runtime preparation failed with exit status {error.returncode}"
-                ) from error
+        proot = prepare_oci_runtime(cache)
         digest = control["image"].rsplit("@sha256:", 1)[-1]
         image_cache = cache / "images" / digest
-        if not (image_cache / "receipt.json").is_file() or not (
-            image_cache / "bundle/rootfs"
-        ).is_dir():
+        if (
+            not (image_cache / "receipt.json").is_file()
+            or not (image_cache / "layout/oci-layout").is_file()
+            or not (image_cache / "layout/index.json").is_file()
+        ):
             registry = control["image"].split("/", 1)[0]
             if "." not in registry and ":" not in registry and registry != "localhost":
                 registry = "registry-1.docker.io"
@@ -395,7 +481,12 @@ def run_target(
     else:
         command = base
     print("+", " ".join(command), flush=True)
-    return subprocess.run(command, check=False).returncode
+    environment = os.environ.copy()
+    if control["runner"] == "oci":
+        environment["PATH"] = os.fspath(proot.parent) + os.pathsep + environment.get(
+            "PATH", ""
+        )
+    return subprocess.run(command, check=False, env=environment).returncode
 
 
 def require_network(host: str, description: str) -> None:
@@ -412,9 +503,12 @@ def generate_nvidia_cdi(directory: Path, requested: list[str]) -> None:
         raise InfrastructureError(
             "the qualified Kaggle profile currently supports only nvidia.com/gpu=all"
         )
+    candidates = set(glob.glob("/dev/nvidia*")) | set(
+        glob.glob("/dev/nvidia-caps/*")
+    )
     device_paths = sorted(
-        value for value in set(glob.glob("/dev/nvidia*"))
-        if Path(value).exists()
+        value for value in candidates
+        if Path(value).is_char_device() or Path(value).is_block_device()
     )
     required = {"/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm"}
     if not required.issubset(device_paths):
@@ -559,6 +653,14 @@ def main() -> int:
             )
         if control["checkpoint"] and completed.returncode == 0:
             phase = "checkpoint_publication"
+            if control["runner"] == "oci":
+                removed = prune_oci_materializations(cache)
+                if removed:
+                    print(
+                        "[cloudmake] OCI cache=content-addressed "
+                        f"materializations-discarded={removed}",
+                        flush=True,
+                    )
             archive = arguments.working / "cloudmake-checkpoint.tar.gz"
             files, logical_bytes, digest = archive_workspace(workspace, archive)
             snapshot = os.environ.get("KAGGLE_KERNEL_REF", "")
@@ -623,4 +725,9 @@ if __name__ == "__main__":
             print(f"[cloudmake] OCI infrastructure failure: {error}", file=os.sys.stderr)
             exit_code = 70
         raise SystemExit(exit_code)
-    raise SystemExit(main())
+    try:
+        exit_code = main()
+    except InfrastructureError as error:
+        print(f"[cloudmake] Kaggle infrastructure failure: {error}", file=os.sys.stderr)
+        exit_code = 70
+    raise SystemExit(exit_code)

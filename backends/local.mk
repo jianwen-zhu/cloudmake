@@ -4,6 +4,7 @@
 BACKEND_TRANSPORT := local
 BACKEND_ACCESS_CLASS := local
 BACKEND_API_VERSION := 1
+BACKEND_PRODUCT_STATUS := supported
 BACKEND_SESSION_REUSE := yes
 BACKEND_CAPABILITIES := sync execute status artifacts environment-profile native-persistence oci-runner
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot

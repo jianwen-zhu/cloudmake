@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
+import posixpath
 import re
 import shutil
 import stat
@@ -104,7 +105,7 @@ def normalized_architecture(value: str) -> str:
 
 
 def run_checked(
-    command: list[str], *, capture: bool = False, description: str
+    command: list[str], *, capture: bool = False, description: str,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         command,
@@ -285,32 +286,75 @@ def materialize_bundle(
 ) -> tuple[Path, dict[str, Any]]:
     image_cache = cache_root / "images" / digest.removeprefix("sha256:")
     bundle = image_cache / "bundle"
+    layout = image_cache / "layout"
     receipt = image_cache / "receipt.json"
     with cache_lock(image_cache):
-        if receipt.is_file() and (bundle / "rootfs").is_dir():
+        saved: dict[str, Any] = {}
+        if receipt.is_file():
             try:
                 saved = json.loads(receipt.read_text(encoding="utf-8"))
             except Exception:
                 saved = {}
-            if saved.get("reference") == reference and saved.get("digest") == digest:
+
+        cache_matches = (
+            saved.get("reference") == reference
+            and saved.get("digest") == digest
+            and (layout / "oci-layout").is_file()
+            and (layout / "index.json").is_file()
+        )
+        if cache_matches:
+            if (bundle / "rootfs").is_dir():
                 bundle.chmod(0o755)
                 return bundle, saved.get("image", {"requested_digest": digest})
 
+            staging = Path(tempfile.mkdtemp(prefix=".unpack-", dir=image_cache))
+            unpacked = staging / "bundle"
+            try:
+                run_checked(
+                    [
+                        "umoci", "unpack", "--rootless", "--image",
+                        f"{layout}:cloudmake", str(unpacked),
+                    ],
+                    description="OCI image materialization",
+                )
+                if bundle.is_symlink() or bundle.is_file():
+                    bundle.unlink()
+                elif bundle.exists():
+                    shutil.rmtree(bundle)
+                os.replace(unpacked, bundle)
+                bundle.chmod(0o755)
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+            return bundle, saved.get("image", {"requested_digest": digest})
+
         image = inspect_with_skopeo(reference, digest)
         staging = Path(tempfile.mkdtemp(prefix=".image-", dir=image_cache))
-        layout = staging / "layout"
+        staged_layout = staging / "layout"
         unpacked = staging / "bundle"
         try:
             run_checked(
-                ["skopeo", "copy", f"docker://{reference}", f"oci:{layout}:cloudmake"],
+                [
+                    "skopeo", "copy", f"docker://{reference}",
+                    f"oci:{staged_layout}:cloudmake",
+                ],
                 description="OCI image pull",
             )
             run_checked(
-                ["umoci", "unpack", "--rootless", "--image", f"{layout}:cloudmake", str(unpacked)],
+                [
+                    "umoci", "unpack", "--rootless", "--image",
+                    f"{staged_layout}:cloudmake", str(unpacked),
+                ],
                 description="OCI image materialization",
             )
-            if bundle.exists():
+            if layout.is_symlink() or layout.is_file():
+                layout.unlink()
+            elif layout.exists():
+                shutil.rmtree(layout)
+            if bundle.is_symlink() or bundle.is_file():
+                bundle.unlink()
+            elif bundle.exists():
                 shutil.rmtree(bundle)
+            os.replace(staged_layout, layout)
             os.replace(unpacked, bundle)
             # umoci creates the bundle beneath a 0700 staging directory. The
             # selected adapter may run the image process as an unprivileged user.
@@ -593,6 +637,78 @@ def chown_workspace(source: Path, uid: int, gid: int) -> None:
             os.chown(root, uid, gid, follow_symlinks=False)
 
 
+def proot_guest_link_repairs(
+    image_home: Path, rootfs: Path
+) -> list[tuple[str, str, str]]:
+    """Find checkpointed links that PRoot must recreate in its guest namespace.
+
+    PRoot may encode an absolute guest link with the current host rootfs path.
+    That path expires with the VM.  CloudMake derives the original guest target
+    only when it exists in the same digest-pinned rootfs; arbitrary absolute
+    project links remain untouched.
+    """
+    links: dict[str, str] = {}
+    repairs: dict[str, tuple[str, str, str]] = {}
+    current_rootfs = rootfs.resolve()
+    digest = rootfs.parent.parent.name
+    old_rootfs = re.compile(
+        rf"^.*/cache/oci/images/{re.escape(digest)}/bundle/rootfs(?:/(.*))?$"
+    )
+    for directory, directory_names, file_names in os.walk(
+        image_home, topdown=True, followlinks=False
+    ):
+        root = Path(directory)
+        for name in [*directory_names, *file_names]:
+            path = root / name
+            if not path.is_symlink():
+                continue
+            target = os.readlink(path)
+            guest_link = "/home/cloudmake/" + path.relative_to(image_home).as_posix()
+            links[guest_link] = target
+            if not target.startswith(os.sep):
+                continue
+            match = old_rootfs.fullmatch(target)
+            if match is not None:
+                suffix = PurePosixPath(match.group(1) or "")
+            else:
+                candidate = Path(target)
+                try:
+                    suffix = PurePosixPath(
+                        candidate.relative_to(current_rootfs).as_posix()
+                    )
+                except ValueError:
+                    suffix = PurePosixPath(target).relative_to("/")
+            if ".." in suffix.parts:
+                continue
+            image_target = current_rootfs.joinpath(*suffix.parts)
+            if not image_target.is_file():
+                continue
+            guest_target = "/" + suffix.as_posix()
+            repairs[guest_link] = (
+                os.fspath(image_target), guest_target, guest_link
+            )
+
+    # Recreate only the relative-link closure leading to a validated image
+    # target. This avoids touching unrelated project links while repairing the
+    # complete venv-style python -> python3 -> python3.X chain.
+    changed = True
+    while changed:
+        changed = False
+        for guest_link, target in links.items():
+            if guest_link in repairs or target.startswith(os.sep):
+                continue
+            guest_target = posixpath.normpath(
+                posixpath.join(posixpath.dirname(guest_link), target)
+            )
+            if posixpath.dirname(guest_target) != posixpath.dirname(guest_link):
+                continue
+            if guest_target not in repairs:
+                continue
+            repairs[guest_link] = ("", target, guest_link)
+            changed = True
+    return sorted(repairs.values(), key=lambda item: item[2])
+
+
 def proot_identity_prefix(source: Path, owner: str | None) -> tuple[list[str], str]:
     setpriv = shutil.which("setpriv")
     if setpriv is None:
@@ -641,6 +757,21 @@ def proot_base_command(
         command.extend(["-b", f"{runtime_tmp}:/tmp"])
     if runtime_home is not None:
         command.extend(["-b", f"{runtime_home}:/home/cloudmake"])
+    # OCI Linux processes expect the kernel API filesystems supplied by a
+    # conventional runtime.  PRoot's minimal -r form does not add them; omit
+    # them and device libraries can be present while CUDA initialization still
+    # fails because /proc/driver and /sys/module are invisible.
+    for kernel_api in (Path("/proc"), Path("/sys")):
+        if kernel_api.is_dir():
+            command.extend(["-b", f"{kernel_api}:{kernel_api}"])
+    for name in STANDARD_DEVICES:
+        device = Path("/dev") / name
+        if device.is_char_device() or device.is_block_device():
+            command.extend(["-b", f"{device}:/dev/{name}"])
+    for name in ("resolv.conf", "hosts"):
+        configuration = Path("/etc") / name
+        if configuration.exists():
+            command.extend(["-b", f"{configuration.resolve()}:/etc/{name}"])
     for host, container in cdi_bindings or []:
         command.extend(["-b", f"{host}:{container}"])
     command.extend([
@@ -667,6 +798,50 @@ def proot_cdi_configuration(
         for item in payload["mounts"]
     ]
     return bindings, list(payload["process"]["env"]), sources
+
+
+def prepare_proot_binding_targets(
+    rootfs: Path, bindings: list[tuple[str, str]]
+) -> None:
+    """Materialize safe guest mount points required by PRoot bind emulation."""
+    resolved_root = rootfs.resolve()
+    for source_text, destination_text in bindings:
+        source = Path(source_text)
+        destination = PurePosixPath(destination_text)
+        current = rootfs
+        for part in destination.parts[1:-1]:
+            current /= part
+            if current.is_symlink():
+                resolved_parent = current.resolve(strict=False)
+                try:
+                    resolved_parent.relative_to(resolved_root)
+                except ValueError as error:
+                    raise RunnerError(
+                        f"OCI/CDI mount parent escapes the image root: {destination_text}"
+                    ) from error
+                current = resolved_parent
+            current.mkdir(mode=0o755, exist_ok=True)
+            if not current.is_dir():
+                raise RunnerError(
+                    f"OCI/CDI mount parent is not a directory: {destination_text}"
+                )
+        target = current / destination.name
+        if target.is_symlink():
+            raise RunnerError(
+                f"OCI/CDI mount target must not be a symbolic link: {destination_text}"
+            )
+        if source.is_dir():
+            target.mkdir(mode=0o755, exist_ok=True)
+            if not target.is_dir():
+                raise RunnerError(
+                    f"OCI/CDI directory mount target is not a directory: {destination_text}"
+                )
+        elif not target.exists():
+            target.touch(mode=0o644)
+        elif not target.is_file():
+            raise RunnerError(
+                f"OCI/CDI file mount target is not a file: {destination_text}"
+            )
 
 
 def safe_runtime_directory(rootfs: Path, name: str) -> Path:
@@ -796,7 +971,8 @@ def internal_crun_exec(arguments: list[str]) -> int:
                 namespaces = [
                     item for item in linux.get("namespaces", [])
                     if isinstance(item, dict)
-                    and item.get("type") not in {"cgroup", "network", "pid"}
+                    and item.get("type")
+                    not in {"cgroup", "network", "pid", "user"}
                 ]
                 if not any(item.get("type") == "mount" for item in namespaces):
                     namespaces.append({"type": "mount"})
@@ -921,41 +1097,65 @@ def prepare(
         identity_prefix, identity = proot_identity_prefix(
             source, rootless_workspace_owner
         )
+        link_repairs: list[tuple[str, str, str]] = []
         if runtime_home is not None:
             runtime_home.mkdir(parents=True, exist_ok=True)
             if rootless_workspace_owner is not None:
                 uid, gid = workspace_owner(rootless_workspace_owner)
                 chown_workspace(runtime_home, uid, gid)
-            home_root = bundle / "rootfs/home"
-            if home_root.is_symlink():
-                raise RunnerError("OCI image '/home' runtime path must not be a symbolic link")
-            home_root.mkdir(mode=0o755, exist_ok=True)
-            image_home = home_root / "cloudmake"
-            if image_home.is_symlink():
-                raise RunnerError(
-                    "OCI image '/home/cloudmake' runtime path must not be a symbolic link"
-                )
-            image_home.mkdir(mode=0o755, exist_ok=True)
+            link_repairs = proot_guest_link_repairs(
+                runtime_home, bundle / "rootfs"
+            )
         bindings: list[tuple[str, str]] = []
         environment = oci_process_environment(bundle)
         if devices:
-            bindings, environment, _ = proot_cdi_configuration(
+            device_bindings, environment, _ = proot_cdi_configuration(
                 bundle, devices, cdi_directories or []
             )
+            bindings.extend(device_bindings)
+            prepare_proot_binding_targets(bundle / "rootfs", bindings)
         if runtime_home is not None:
             environment = [
                 value for value in environment if not value.startswith("HOME=")
             ]
             environment.append("HOME=/home/cloudmake")
             environment.sort()
-        return (
-            proot_base_command(
-                bundle, source, identity_prefix, bindings, environment, runtime_tmp,
-                runtime_home
-            ),
-            image,
-            identity,
+        repair_base = proot_base_command(
+            bundle,
+            source,
+            identity_prefix,
+            bindings,
+            environment,
+            runtime_tmp,
+            runtime_home,
         )
+        for _, guest_target, guest_link in link_repairs:
+            run_checked(
+                [*repair_base[:-1], "/bin/ln", "-snf", guest_target, guest_link],
+                description="PRoot checkpoint link repair",
+            )
+        base = proot_base_command(
+            bundle,
+            source,
+            identity_prefix,
+            bindings,
+            environment,
+            runtime_tmp,
+            runtime_home,
+        )
+        for _, _, guest_link in link_repairs:
+            run_checked(
+                [*base[:-1], "/usr/bin/test", "-x", guest_link],
+                description="PRoot checkpoint link validation",
+            )
+        if link_repairs:
+            repaired_paths = ",".join(item[2] for item in link_repairs)
+            print(
+                f"[cloudmake] PRoot rehydrated checkpointed-links={len(link_repairs)} "
+                f"paths={repaired_paths}",
+                flush=True,
+            )
+        return base, image, identity
 
     if runtime == "crun":
         if rootless_workspace_owner is None:
@@ -1064,7 +1264,11 @@ def main() -> int:
                 "no_new_privileges": True,
                 "effective_capabilities": [],
                 "host_credentials": "not-injected",
-                "host_mount_scope": "workspace,tmp,cdi",
+                "host_mount_scope": (
+                    "workspace,tmp,kernel-api,cdi"
+                    if runtime == "proot"
+                    else "workspace,tmp,cdi"
+                ),
             },
         )
         base, image, identity = prepare(
@@ -1090,7 +1294,7 @@ def main() -> int:
         if identity is not None:
             receipt["workspace_identity"] = identity
         run_checked(
-            [*base, "--version"], capture=True, description="OCI Make preflight"
+            [*base, "--version"], capture=True, description="OCI Make preflight",
         )
         if arguments.mode == "preflight":
             receipt["status"] = "ready"

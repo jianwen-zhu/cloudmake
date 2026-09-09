@@ -133,7 +133,8 @@ def test_help_documents_opt_in_checkpoint_selection(
     assert "local and per project" in result.stdout
     assert "not format compatibility" in result.stdout
     assert "local/persistent SSH=native" in result.stdout
-    assert "Kaggle=private-output" in result.stdout
+    assert "deprecated Kaggle=" in result.stdout
+    assert "experimental private-output checkpoint" in result.stdout
     assert "Colab SSH=unsupported" in result.stdout
     assert engine_calls(log) == []
 
@@ -286,6 +287,7 @@ def test_backends_reports_persistence_mode_for_every_backend(
 
     result = invoke(project, environment, "--backends")
 
+    assert "STATUS" in result.stdout
     assert "PERSISTENCE" in result.stdout
     assert "OCI RUNTIMES" in result.stdout
     assert "INTERNET IN" in result.stdout
@@ -295,12 +297,14 @@ def test_backends_reports_persistence_mode_for_every_backend(
         for line in result.stdout.splitlines()[1:]
         if line.split()
     }
-    assert rows["colab-notebook"][2] == "checkpoint"
+    assert rows["colab-notebook"][1] == "supported"
+    assert rows["colab-notebook"][3] == "checkpoint"
     assert "crun" in rows["colab-notebook"]
     assert "no" in rows["colab-notebook"]
     assert "yes" in rows["colab-notebook"]
-    assert rows["kaggle-notebook"][1] == "no"
-    assert rows["kaggle-notebook"][2] == "checkpoint"
+    assert rows["kaggle-notebook"][1] == "deprecated"
+    assert rows["kaggle-notebook"][2] == "no"
+    assert rows["kaggle-notebook"][3] == "checkpoint"
     assert "proot" in rows["kaggle-notebook"]
     assert "conditional" in rows["kaggle-notebook"]
     assert "podman,docker,nerdctl,proot" in rows["host-ssh"]
@@ -310,9 +314,22 @@ def test_backends_reports_persistence_mode_for_every_backend(
         "host-ssh",
         "lightning-studio-ssh",
     ):
-        assert rows[backend][2] == "native"
-    assert rows["colab-ssh"][2] == "unsupported"
+        assert rows[backend][3] == "native"
+    assert rows["colab-ssh"][3] == "unsupported"
     assert engine_calls(log) == []
+
+
+def test_deprecated_backend_warns_without_changing_dispatch(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, "-b", "kaggle", "build")
+
+    assert "backend=kaggle-notebook status=deprecated" in result.stdout
+    assert "fresh VM and full checkpoint materialization" in result.stdout
+    assert_assignment(engine_calls(log)[0], "BACKEND", "kaggle-notebook")
 
 
 @pytest.mark.parametrize(

@@ -190,6 +190,15 @@ Make project. Each backend can adapt three independent services:
 2. a persistent workspace or checkpoint service for mutable project state; and
 3. an application-bundle runtime for a reproducible professional tool suite.
 
+Persistent state is an acceleration layer, not project authority. A compatible
+backend must always be able to rebuild the project from the selected source and
+its Makefile when no prior workspace exists. Native persistent filesystems,
+managed checkpoints, build caches, downloaded dependencies, and materialized
+OCI layers may avoid repeated work, but losing any of them changes cost rather
+than target meaning or correctness. Important deliverables must be collected or
+stored explicitly; a Cloudmake workspace is not source control or archival
+backup.
+
 A backend may implement any subset. Unsupported combinations fail explicitly;
 they never acquire accidental meaning. In particular, an OCI registry and its
 disposable image cache are not a project checkpoint, durable storage does not
@@ -432,15 +441,15 @@ continues to belong exclusively to the official Colab CLI.
 
 Short names are for people; canonical names describe the transport unambiguously:
 
-| User-facing name | Canonical backend | Transport |
-| --- | --- | --- |
-| `local` | `local` | Direct project Make invocation |
-| `colab` | `colab-notebook` | Native Colab contents and kernel APIs |
-| `kaggle` | `kaggle-notebook` | Private Kaggle notebook version |
-| `codespaces` | `codespaces-ssh` | SSH and rsync |
-| `colab-ssh` | `colab-ssh` | SSH and rsync |
-| `ssh` | `host-ssh` | User-managed SSH and rsync |
-| `lightning` | `lightning-studio-ssh` | SSH and rsync |
+| User-facing name | Canonical backend | Status | Transport |
+| --- | --- | --- | --- |
+| `local` | `local` | Supported | Direct project Make invocation |
+| `colab` | `colab-notebook` | Supported | Native Colab contents and kernel APIs |
+| `kaggle` | `kaggle-notebook` | Deprecated | Private Kaggle notebook version |
+| `codespaces` | `codespaces-ssh` | Supported | SSH and rsync |
+| `colab-ssh` | `colab-ssh` | Supported | SSH and rsync |
+| `ssh` | `host-ssh` | Supported | User-managed SSH and rsync |
+| `lightning` | `lightning-studio-ssh` | Supported | SSH and rsync |
 
 `colab` always means native notebook access. It never silently changes to SSH.
 
@@ -522,11 +531,13 @@ Other examples:
 
 ```sh
 cloudmake --use local
-cloudmake --use kaggle
 cloudmake --use codespaces
 cloudmake --use ssh --host lab-gpu
 cloudmake --use colab --global
 ```
+
+The retained `kaggle` backend is deprecated and intended only for compatibility
+or coarse batch experiments; it is not part of the recommended onboarding path.
 
 Use `-b` for a one-off override without changing the saved preference:
 
@@ -651,9 +662,6 @@ Examples:
 ```sh
 # Work on a project without changing directory; compile is defined by ../solver/Makefile.
 cloudmake -C ../solver compile
-
-# Use Kaggle for a project-provided verify target and request its exact accelerator.
-cloudmake -b kaggle --gpu=NvidiaL4 verify
 
 # Pass settings to the project-provided benchmark target.
 cloudmake benchmark DATASET=small DEBUG=1
@@ -845,15 +853,19 @@ uses the namespace and cgroup profile established by live qualification, and
 applies NVIDIA devices and host driver libraries from a generated CDI
 specification. Make runs as UID/GID 65534 with no capabilities and
 `noNewPrivileges`; the image root is read-only while `/workspace` and a fresh
-`/tmp` are writable. Kaggle declares its PRoot materialization adapter. It
+`/tmp` are writable. The deprecated Kaggle backend retains an experimental
+PRoot materialization adapter. It
 requires no container daemon or privileged namespace operations, maps the
 supported CDI subset to explicit PRoot binds and image-environment edits, and
 fails before Make if the requested device or registry/network surface is absent.
 
 The registry remains authoritative for immutable layers. Colab and host runtime
-caches are disposable. Kaggle includes its materialized image and downloaded
-runner packages in the private workspace checkpoint so every fresh VM does not
-repeat a large registry pull; that cache remains reconstructible and is not an
+caches are disposable. Kaggle retains the verified OCI layout, downloaded
+runner packages, and a checksum-pinned current PRoot binary in the private
+workspace checkpoint so every fresh VM does not repeat a large registry pull.
+It discards the derived root filesystem before publication and rematerializes
+it from those layers in each new VM; this reduces checkpoint size but does not
+remove per-target unpack time. That cache remains reconstructible and is not an
 image authority. The target sees the image's OCI environment, not the host's
 environment or credentials. The Colab adapter shares the VM's PID and network
 namespaces and uses the host `/proc` because Colab cannot mount the procfs and
@@ -866,9 +878,10 @@ boundaries, and the ORFS validation ladder are in the
 [OCI/CDI runner guide](docs/oci-runner.md) and
 [execution-environment contract](docs/execution-environments.md). Colab's exact
 tested runtime boundary is recorded in
-[Colab OCI/CDI qualification](docs/colab-oci-qualification.md); Kaggle's is
-recorded separately in
-[Kaggle checkpoint and OCI qualification](docs/kaggle-oci-qualification.md).
+[Colab OCI/CDI qualification](docs/colab-oci-qualification.md). Kaggle's failed
+remote-workstation usability evaluation is preserved as a
+[historical backend report](docs/historical/kaggle-notebook.md), not as a
+positive qualification claim.
 
 #### Persistent workspace modes
 
@@ -1006,14 +1019,23 @@ checkpoint.
 
 ### Kaggle notebook backend
 
+> **Deprecated and not recommended.** Kaggle remains available for compatibility
+> and coarse native batch jobs, but it is not a qualified Cloudmake remote-
+> workstation backend. Because `session-reuse=no`, every target repeats VM
+> scheduling and—when selected—full checkpoint restore, OCI materialization,
+> and checkpoint publication. A live ECE467 workspace moved roughly 14.5 GB per
+> target cycle. See the [historical evaluation](docs/historical/kaggle-notebook.md).
+
 Kaggle is a private batch-notebook backend. Every project-target submission
 creates a notebook version and runs in a fresh VM. There is no reusable
 interactive session.
 
 Prerequisites:
 
-1. A Kaggle account with notebook access and any required phone/account
-   verification for accelerators.
+1. A Kaggle account with notebook access. Complete phone verification for the
+   account, and complete Persona identity verification before relying on
+   notebook Internet or restricted accelerators. Kaggle may hide the Internet
+   control until those account prerequisites are satisfied.
 2. Python 3.11 or newer for the current Kaggle CLI.
 3. The official [`kaggle` CLI](https://github.com/Kaggle/kaggle-cli):
 
@@ -1064,11 +1086,13 @@ remain only in the host CLI and are never embedded in the notebook or checkpoint
 
 Although the generated notebook is private, its versions retain uploaded source
 in the Kaggle account's version history. Do not include credentials, private keys,
-or other secrets in the source tree. Internet access is disabled by default.
-When it is requested, Cloudmake probes reachability before submitting Make and
-fails as infrastructure if the provider accepted the metadata but withheld
-egress. Kaggle CLI submissions have exhibited exactly that behavior; a metadata
-value of `enable_internet=true` is not proof of usable network access.
+or other secrets in the source tree. Internet is an account- and job-qualified
+capability. Cloudmake requests it when configured, probes reachability before
+submitting Make, and fails as infrastructure if Kaggle withholds egress. On an
+unverified account Kaggle preserved `enable_internet=true` in API metadata but
+ran the job without egress; after Persona verification, the same notebook's UI
+reported Internet on and the next CLI-submitted job had working DNS and HTTPS.
+Metadata alone is therefore still not proof of reachability.
 
 #### Preinstalled Kaggle GPU stack
 
@@ -1116,13 +1140,20 @@ cloudmake -b kaggle --gpu=NvidiaTeslaT4 PROJECT_TARGET
 `start` only verifies authentication, and `stop` is a no-op because Kaggle ends
 the batch VM automatically.
 
-For an OCI tool bundle, select an immutable image normally. Cloudmake enables
+The deprecated backend retains an experimental OCI tool-bundle path for
+compatibility and investigation; it is not recommended for normal use.
+Cloudmake enables
 notebook internet for the registry pull, transiently prepares `skopeo`, `umoci`,
-PRoot, and `setpriv`, and caches their packages plus the materialized image inside a selected
-Kaggle checkpoint. The adapter does not claim Docker isolation. With
+a checksum-pinned current PRoot, and `setpriv`, and caches their packages plus
+the verified OCI layout inside a selected Kaggle checkpoint. The derived root
+filesystem is rematerialized on every fresh VM rather than duplicated in the
+checkpoint. The adapter does not claim Docker isolation. With
 `--device nvidia.com/gpu=all`, it generates a CDI document from the actually
 attached NVIDIA nodes and driver libraries; absent or incomplete attachment is
-an infrastructure failure, never a silent CPU fallback.
+an infrastructure failure, never a silent CPU fallback. The restricted PRoot
+profile also exposes the conventional `/proc` and `/sys` kernel API views
+needed by OCI Linux applications while retaining an unprivileged identity,
+empty capability sets, and `noNewPrivileges`.
 
 ### GitHub Codespaces SSH backend
 
@@ -1355,15 +1386,15 @@ project target requests a machine.
 
 The three service-adapter roles are visible in each backend's contract:
 
-| Backend | Compute adapter | Persistence adapter | Bundle-runtime adapter | Source transfer |
-| --- | --- | --- | --- | --- |
-| `local` | Existing local process | Native tree; no transfer | Podman, Docker, nerdctl, or CPU PRoot | None |
-| `colab-notebook` | Reusable named Colab session | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
-| `kaggle-notebook` | Fresh Kaggle VM per target (`session-reuse=no`) | Alternating private kernel-output checkpoint | Qualified PRoot OCI materializer; NVIDIA CDI subset | Source embedded in private notebook |
-| `codespaces-ssh` | Reusable quota-backed VM over SSH | Provider workspace | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
-| `colab-ssh` | Reusable paid Colab VM over SSH | Unsupported | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
-| `host-ssh` | Existing user-managed SSH host | Host filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
-| `lightning-studio-ssh` | Reusable quota/credit-backed Studio | Studio filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| Backend | Status | Compute adapter | Persistence adapter | Bundle-runtime adapter | Source transfer |
+| --- | --- | --- | --- | --- | --- |
+| `local` | Supported | Existing local process | Native tree; no transfer | Podman, Docker, nerdctl, or CPU PRoot | None |
+| `colab-notebook` | Supported | Reusable named Colab session | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
+| `kaggle-notebook` | Deprecated; not recommended | Fresh Kaggle VM per target (`session-reuse=no`) | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
+| `codespaces-ssh` | Supported | Reusable quota-backed VM over SSH | Provider workspace | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| `colab-ssh` | Supported | Reusable paid Colab VM over SSH | Unsupported | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| `host-ssh` | Supported | Existing user-managed SSH host | Host filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| `lightning-studio-ssh` | Supported | Reusable quota/credit-backed Studio | Studio filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
 
 Network direction is a separate backend property, not an implication of the
 transport:
@@ -1505,13 +1536,18 @@ commands.
 
 ## Project status
 
-The existing local, Colab notebook, Kaggle notebook, Codespaces SSH, paid Colab
-SSH, user-managed host SSH, and Lightning Studio SSH backends implement the documented
+The supported local, Colab notebook, Codespaces SSH, paid Colab SSH,
+user-managed host SSH, and Lightning Studio SSH backends implement the documented
 launcher, external-project, arbitrary-target,
 incremental synchronization, artifact retrieval, prerequisite, ownership,
 locking, and recovery contracts. `--collect DIR TARGET` performs target-agnostic
 remote export and safe artifact retrieval as one operation; `--fetch` can
 retrieve the latest prepared output again.
+
+The Kaggle notebook implementation remains available but is deprecated after
+live evaluation showed that its fresh-VM-per-target lifecycle makes the
+remote-workstation loop impractical. Its retained behavior and evidence are
+documented under [historical backends](docs/historical/kaggle-notebook.md).
 
 Provider quotas, accelerator availability, images, authentication policies, and
 billing remain external constraints. Future providers should be added as new
