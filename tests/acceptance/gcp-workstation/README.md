@@ -4,7 +4,8 @@ This local-only gate qualifies one already-provisioned Compute Engine VM. It
 never creates or deletes a project, VM, disk, firewall rule, IAM binding, or
 billing resource. Both profiles stop the VM at the end and retain its attached
 disk. Google Cloud charges for retained disks and other attached resources may
-continue after compute stops.
+continue after compute stops. Cloudmake classifies this backend as paid-tier;
+an allowance-eligible CPU shape does not change that classification.
 
 The CPU profile proves lifecycle start/reuse/stop, observed environment facts,
 digest-pinned Dev Container execution, incremental generated state, outbound
@@ -37,7 +38,9 @@ GCP_GATE=g4 tests/acceptance/gcp-workstation/run.sh /tmp/cloudmake-gcp-g4-eviden
 
 The G4 image must contain Make and `nvidia-smi` must be usable through the
 selected CDI device (default `nvidia.com/gpu=all`). `GCP_G4_CDI_DEVICE` may name
-a more specific qualified device. Because G4 is paid, run the bounded gate,
+a more specific qualified device. G4 does not support regional or zonal
+Persistent Disk, so provision a supported Hyperdisk configuration. Because G4
+is paid, run the bounded gate,
 inspect the evidence, confirm `cloudmake --status` reports stopped, and verify
 the provider billing console. No live GCP test belongs in hosted CI and no
 Google or SSH credentials belong in its evidence directory.

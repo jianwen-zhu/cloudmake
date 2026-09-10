@@ -249,10 +249,10 @@ fail-closed subset of the standard Dev Container description the portable
 workstation contract across qualified backends, retaining `--image` as its
 minimal intrusion-free shorthand. Cloudmake 2.4 adds a single-node Google
 Compute Engine remote-workstation backend. It will wake and reuse an already
-provisioned VM, preserve its workspace on Persistent Disk, run the same Dev
+provisioned VM, preserve its workspace on an attached persistent disk, run the same Dev
 Container contract through a qualified standard OCI runtime, and make quota and
-billing exposure visible before work begins. The same backend should cover an
-eligible free-tier `e2-micro` CPU host and paid accelerator machines such as G4;
+billing exposure visible before work begins. The same backend should cover a
+conditionally allowance-eligible `e2-micro` CPU host and paid accelerator machines such as G4;
 Cloudmake will not imply that GPUs are free. Google Cloud Storage is no longer a
 2.4 objective and may remain a future optional storage adapter rather than a
 second Colab execution model. The storage-neutral lifecycle and runtime
@@ -971,7 +971,7 @@ The flag has an explicit backend-dependent implementation:
 | `local` | `native` | Use the existing local project tree; no checkpoint transfer occurs. |
 | `host-ssh` | `native` | Use the existing remote SSH workspace; Cloudmake does not copy it to another store. |
 | `codespaces-ssh` | `native` | Use the Codespace's `/workspaces` storage across stop/start while that Codespace exists. |
-| `gcp-compute-ssh` | `native` | Use the attached Persistent Disk across stop/start; no checkpoint transfer occurs. |
+| `gcp-compute-ssh` | `native` | Use the attached persistent disk across stop/start; no checkpoint transfer occurs. |
 | `lightning-studio-ssh` | `native` | Use the Studio's provider-persistent workspace while that Studio exists. |
 | `kaggle-notebook` | `checkpoint` | Alternate two private kernel-output slots; restore the last completed workspace cloud-to-cloud and publish its successor after Make. |
 | `colab-ssh` | `unsupported` | Reject because this transport has no cross-VM checkpoint store for the ephemeral Colab VM. |
@@ -1337,15 +1337,16 @@ private loopback reachability; it does not request public visibility.
 
 The `gcp` backend adapts one already-provisioned Compute Engine VM as a
 stop-persistent remote workstation. It is implemented and covered by an offline
-provider simulation, but remains **unqualified** until the documented live
-`e2-micro` and G4 gates pass. It does not create a project, network, VM, disk,
+provider simulation. Its live `e2-micro` CPU gate has passed, but the backend
+remains **unqualified** until the documented paid G4 GPU/CDI gate passes. It
+does not create a project, network, VM, disk,
 IAM binding, billing account, or quota.
 
 Prerequisites:
 
 1. Install the official Google Cloud CLI and authenticate locally with
    `gcloud auth login`.
-2. Provision one Linux VM with an attached Persistent Disk, working SSH access,
+2. Provision one Linux VM with an attached persistent boot/storage disk, working SSH access,
    and remote Make, `rsync`, and `tar`.
 3. For OCI/Dev Container execution, install at least one declared runtime on the
    VM. Docker is preferred; Podman, nerdctl, and the restricted-host PRoot path
@@ -1377,13 +1378,14 @@ disk. `cloudmake --stop` stops compute and explicitly retains the disk. A later
 target starts the same VM and resumes the incremental workspace. `--persist`
 therefore records native persistence but transfers no checkpoint.
 
-The free Compute Engine allowance is conditional, region- and resource-limited,
-and excludes GPUs. Cloudmake labels a plain `e2-micro` in an eligible region as
-`conditional-free-allowance`; every other shape, including G4, is
-`paid-capable`. This is a diagnostic, never a promise of zero cost. Provider
-billing, disk/network charges, accelerator quota, and pricing remain
-authoritative. A paid-capable instance produces a warning before Cloudmake
-starts it, and provider quota errors are returned without target submission.
+GCP is always classified as a paid-tier backend because it requires an active
+billing account and separately metered resources can apply. Cloudmake reports
+when a plain `e2-micro` in an eligible region has a conditionally eligible
+compute shape, but that is an allowance property rather than a free-backend
+label. External IPv4, disk/network usage outside the allowance, accelerator
+quota, and excess usage remain billable. Every GCP start or reuse produces a
+compact billing warning, and provider quota errors return without target
+submission.
 
 By default, `gcloud compute ssh` uses the VM's normal connection route. For a
 private VM reached through Identity-Aware Proxy, save the selection with
@@ -1570,7 +1572,7 @@ The three service-adapter roles are visible in each backend's contract:
 | `colab-notebook` | Supported | Provider-managed | Ephemeral | No | Adapter; no ports | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
 | `kaggle-notebook` | Deprecated; not recommended | Per target | Ephemeral | No | Not qualified | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
 | `codespaces-ssh` | Supported | Provider-managed | Stop-persistent | Yes | Provider-native | Native provider workspace | Provider dev container; CPU | Incremental rsync |
-| `gcp-compute-ssh` | Unqualified 2.4 candidate | Provider-managed | Stop-persistent | No | Adapter | Attached Persistent Disk | Docker, Podman, nerdctl, or PRoot; CDI on qualified GPU host | Incremental rsync through `gcloud compute ssh` |
+| `gcp-compute-ssh` | Unqualified 2.4 candidate | Provider-managed | Stop-persistent | No | Adapter | Attached persistent disk (Persistent Disk or machine-compatible Hyperdisk) | Docker, Podman, nerdctl, or PRoot; CDI on qualified GPU host | Incremental rsync through `gcloud compute ssh` |
 | `colab-ssh` | Deprecated | Provider-managed | Ephemeral | No | Adapter | Unsupported | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
 | `host-ssh` | Supported | Externally managed | Host-persistent | No | Adapter | Host filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
 | `lightning-studio-ssh` | Unqualified | Provider-managed | Stop-persistent | No | Adapter | Studio filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
@@ -1760,10 +1762,10 @@ models without maintaining a second unqualified Colab transport.
 
 Google Compute Engine is the implemented v2.4 candidate. Its fake-provider
 lifecycle, `gcloud` remote-shell adaptation, incremental synchronization,
-stop/start disk persistence, and credential-boundary tests pass, but it remains
-unqualified until both the live `e2-micro` CPU gate and paid G4 GPU/CDI gate are
-retained. No Google Cloud project or paid resource is created by the offline
-suite.
+stop/start disk persistence, and credential-boundary tests pass. The live
+`e2-micro` CPU gate also passes; the backend remains unqualified until the paid
+G4 GPU/CDI gate is retained. No Google Cloud project or paid resource is
+created by the offline suite.
 
 The Kaggle notebook implementation remains available but is deprecated after
 live evaluation showed that its fresh-VM-per-target lifecycle makes the

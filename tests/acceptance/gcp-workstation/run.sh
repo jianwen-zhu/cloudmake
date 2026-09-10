@@ -34,13 +34,19 @@ export CLOUDMAKE_CACHE_HOME=$state_root/cache
 
 selected=
 target_pid=
+gcloud_bin=${GCLOUD_BIN:-gcloud}
 cleanup() {
 	if [ -n "$target_pid" ]; then
 		kill "$target_pid" >/dev/null 2>&1 || :
 		wait "$target_pid" >/dev/null 2>&1 || :
 	fi
 	if [ -n "$selected" ]; then
-		"$cloudmake" -C "$project" --stop >"$evidence/cleanup-stop.log" 2>&1 || :
+		if ! "$cloudmake" -C "$project" --stop >"$evidence/cleanup-stop.log" 2>&1; then
+			echo 'cloudmake stop failed; using the provider CLI as a billing-safe fallback' >>"$evidence/cleanup-stop.log"
+			"$gcloud_bin" compute instances stop "$GCP_INSTANCE" \
+				--project "$GCP_PROJECT" --zone "$GCP_ZONE" --quiet \
+				>>"$evidence/cleanup-stop.log" 2>&1 || :
+		fi
 	fi
 }
 trap cleanup EXIT HUP INT TERM
@@ -48,7 +54,13 @@ trap cleanup EXIT HUP INT TERM
 run_logged() {
 	name=$1
 	shift
-	"$@" 2>&1 | tee "$evidence/$name.log"
+	if "$@" >"$evidence/$name.log" 2>&1; then
+		cat "$evidence/$name.log"
+	else
+		status=$?
+		cat "$evidence/$name.log" >&2
+		return "$status"
+	fi
 }
 
 if [ "$gate" = cpu ]; then
@@ -63,7 +75,16 @@ selected=1
 
 run_logged environment "$cloudmake" -C "$project" --environment
 run_logged increment-1 "$cloudmake" -C "$project" increment
+first_count=$(sed -n 's/^persistent-count=//p' "$evidence/increment-1.log" | tail -n 1)
+case "$first_count" in
+	''|*[!0-9]*) echo 'first persistent counter was not observed' >&2; exit 1 ;;
+esac
 run_logged increment-2 "$cloudmake" -C "$project" increment
+second_count=$(sed -n 's/^persistent-count=//p' "$evidence/increment-2.log" | tail -n 1)
+case "$second_count" in
+	''|*[!0-9]*) echo 'second persistent counter was not observed' >&2; exit 1 ;;
+esac
+test "$second_count" -eq $((first_count + 1))
 
 if [ "$gate" = cpu ]; then
 	run_logged outbound "$cloudmake" -C "$project" outbound
@@ -88,7 +109,7 @@ PY
 			echo 'GCP foreground target exited before its loopback tunnel was reachable' >&2
 			exit 1
 		fi
-		if [ "$attempt" -ge 30 ]; then
+		if [ "$attempt" -ge "${GCP_FORWARD_WAIT_SECONDS:-180}" ]; then
 			echo 'GCP loopback-forwarded workload did not become reachable' >&2
 			exit 1
 		fi
@@ -104,9 +125,9 @@ fi
 run_logged stop-midpoint "$cloudmake" -C "$project" --stop
 run_logged verify-after-restart "$cloudmake" -C "$project" verify
 grep 'resource=started' "$evidence/verify-after-restart.log" >/dev/null
-grep 'persistent-count=2' "$evidence/verify-after-restart.log" >/dev/null
+grep "persistent-count=$second_count" "$evidence/verify-after-restart.log" >/dev/null
 run_logged collect "$cloudmake" -C "$project" --collect dist export-artifact
-test "$(cat "$project/artifacts/count.txt")" = 2
+test "$(cat "$project/artifacts/count.txt")" = "$second_count"
 run_logged stop-final "$cloudmake" -C "$project" --stop
 selected=
 trap - EXIT HUP INT TERM

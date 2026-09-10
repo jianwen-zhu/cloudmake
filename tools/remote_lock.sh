@@ -44,8 +44,15 @@ release() {
     fi
 }
 
+reset_after_restart() {
+    # The caller may use this only after positively starting a previously
+    # stopped VM. No process from the prior boot can still own this lock.
+    rm -rf "$lock_dir"
+}
+
 case "$operation" in
     acquire) acquire ;;
     release) release ;;
+    reset-after-restart) reset_after_restart ;;
     *) echo "unknown remote lock operation: $operation" >&2; exit 2 ;;
 esac

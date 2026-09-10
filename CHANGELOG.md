@@ -12,14 +12,20 @@ once a version is published as a GitHub release.
 - Persist only non-secret project, zone, instance, and optional IAP-routing
   selection. Keep Cloud SDK authentication, OAuth material, service-account
   keys, access tokens, and SSH private keys in their official host clients.
-- Report observed machine type, accelerator attachment, lifecycle, and a
-  conditional-free-allowance versus paid-capable billing class before work.
-  Paid-capable resources warn before start; provider quota/billing errors fail
-  without submitting the project target.
+- Classify GCP consistently as paid-tier and report observed machine type,
+  accelerator attachment, lifecycle, and conditional `e2-micro` compute
+  allowance eligibility before work. Networking, storage, and excess usage
+  remain explicitly billable; provider quota/billing errors fail without
+  submitting the project target.
 - Add fake-provider coverage for lifecycle ambiguity, start/reuse/stop,
   native-disk persistence, the `gcloud` remote-shell adapter, real incremental
   rsync, target-at-most-once provenance, selection persistence, and credential
-  exclusion. Live `e2-micro` and paid G4 qualification remain release gates.
+  exclusion. The live `e2-micro` CPU gate passes; paid G4 GPU/CDI qualification
+  remains the release gate.
+- Wait independently for SSH/IAP readiness after Compute Engine reports a VM
+  running, without syncing or submitting the project target during retries.
+- Propagate host cancellation through the foreground Make process tree so
+  remote locks are released and interrupted provenance remains accurate.
 
 ## 2.3.1 - 2026-09-10
 

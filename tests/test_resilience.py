@@ -375,6 +375,10 @@ def test_remote_lock_has_token_safe_release_and_stale_recovery(tmp_path: Path) -
     assert "stale" in recovered.stdout
     assert (directory / "token").read_text(encoding="utf-8").strip() == "new"
 
+    reset = remote_lock("reset-after-restart", directory, "restarted")
+    assert reset.returncode == 0
+    assert not directory.exists()
+
 
 def test_manifest_archive_ignore_and_dry_run_share_one_selection(tmp_path: Path) -> None:
     (tmp_path / "keep.txt").write_text("one", encoding="utf-8")

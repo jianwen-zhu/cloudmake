@@ -101,9 +101,7 @@ def instance_profile(value: dict[str, Any], zone: str) -> dict[str, Any]:
         "status": value["status"],
         "region": region,
         "free_tier_compute_shape": eligible_baseline,
-        "billing_exposure": "conditional-free-allowance"
-        if eligible_baseline
-        else "paid-capable",
+        "billing_exposure": "paid-tier",
     }
 
 
@@ -149,6 +147,8 @@ def compact_context(profile: dict[str, Any]) -> str:
         f"lifecycle={profile['status'].lower()}",
         f"billing={profile['billing_exposure']}",
     ]
+    if profile["free_tier_compute_shape"]:
+        fields.append("compute-allowance=eligible-shape")
     if profile["accelerators"]:
         fields.insert(1, f"accelerator={','.join(profile['accelerators'])}")
     return "[gcp] " + " ".join(fields)
@@ -160,13 +160,18 @@ def ensure_running(arguments: argparse.Namespace) -> int:
     )
     profile = instance_profile(value, arguments.zone)
     print(compact_context(profile), flush=True)
-    if not profile["free_tier_compute_shape"]:
-        print(
-            "[cloudmake] warning: selected GCP resource is paid-capable; "
-            "provider billing and quota remain authoritative.",
-            file=sys.stderr,
-            flush=True,
-        )
+    allowance = (
+        " The selected e2-micro compute shape may qualify for a conditional "
+        "allowance; networking, storage, and excess usage remain billable."
+        if profile["free_tier_compute_shape"]
+        else ""
+    )
+    print(
+        "[cloudmake] warning: GCP is a paid-tier backend; provider billing and "
+        f"quota remain authoritative.{allowance}",
+        file=sys.stderr,
+        flush=True,
+    )
     initial = value["status"]
     if initial == RUNNING:
         outcome = "reused"

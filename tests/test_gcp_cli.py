@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
+import time
 
 from conftest import run_command, write_executable
 
@@ -259,3 +261,77 @@ def test_doctor_rejects_absent_gcloud_auth_without_starting_compute(
     assert result.returncode == 2
     assert "authentication or access probe failed" in result.stdout
     assert provider_state.read_text(encoding="utf-8") == "TERMINATED\n"
+
+
+def test_sigterm_reaches_remote_make_and_releases_operation_lock(
+    prototype: Path, tmp_path: Path
+) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    (project / "Makefile").write_text(
+        "slow:\n"
+        "\t@mkdir -p build; touch build/started; sleep 30\n"
+        "smoke:\n"
+        "\t@printf 'after-cancel=passed\\n'\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gcloud(fake_bin / "gcloud")
+    provider_state = tmp_path / "provider-state"
+    provider_state.write_text("RUNNING\n", encoding="utf-8")
+    remote_home = tmp_path / "remote"
+    environment = {
+        **os.environ,
+        **isolated_environment(tmp_path),
+        "PATH": os.pathsep.join((os.fspath(fake_bin), os.environ["PATH"])),
+        "GCP_PROJECT": "example-project",
+        "GCP_ZONE": "us-central1-a",
+        "GCP_INSTANCE": "workstation",
+        "FAKE_GCP_STATE": os.fspath(provider_state),
+        "FAKE_GCP_HOME": os.fspath(remote_home),
+    }
+    command = [
+        os.fspath(prototype / "bin" / "cloudmake"),
+        "-C",
+        os.fspath(project),
+        "-b",
+        "gcp",
+        "slow",
+    ]
+    running = subprocess.Popen(
+        command,
+        cwd=prototype,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if list(remote_home.glob(".cloudmake/*/src/build/started")):
+            break
+        if running.poll() is not None:
+            raise AssertionError(f"slow target exited early: {running.communicate()[0]}")
+        time.sleep(0.05)
+    else:
+        running.kill()
+        raise AssertionError("slow target did not start")
+
+    running.terminate()
+    output, _ = running.communicate(timeout=10)
+    assert running.returncode == 143, output
+
+    resumed = run_command(
+        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
+        cwd=prototype,
+        env=environment,
+        timeout=30,
+    )
+    assert "after-cancel=passed" in resumed.stdout
+    records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (tmp_path / "state").glob("projects/*/runs/*.json")
+        if path.name != "latest.json"
+    ]
+    assert {record["status"] for record in records} == {"interrupted", "succeeded"}

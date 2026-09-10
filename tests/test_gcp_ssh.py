@@ -142,3 +142,66 @@ def test_generated_wrapper_rejects_unsafe_control_directory(tmp_path: Path) -> N
 
     with pytest.raises(module.AdapterError, match="safe user-owned"):
         module.create_wrapper(selected)
+
+
+def test_readiness_retries_before_success(tmp_path: Path, monkeypatch, capsys) -> None:
+    module = load("gcp_ssh_readiness_success")
+    selected = arguments(tmp_path)
+    selected.timeout = 10.0
+    selected.poll_interval = 1.0
+    results = iter(
+        [
+            subprocess.CompletedProcess([], 255, stdout="", stderr="not ready"),
+            subprocess.CompletedProcess([], 255, stdout="", stderr="not ready"),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        ]
+    )
+    clock = [0.0]
+    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: next(results))
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        module.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+
+    assert module.wait_ready(selected) == 0
+    output = capsys.readouterr()
+    assert "ssh=waiting" in output.err
+    assert "ssh=ready attempt=3" in output.out
+
+
+def test_readiness_timeout_is_bounded_and_preserves_detail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("gcp_ssh_readiness_timeout")
+    selected = arguments(tmp_path)
+    selected.timeout = 2.0
+    selected.poll_interval = 1.0
+    clock = [0.0]
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [], 255, stdout="", stderr="IAP tunnel unavailable"
+        ),
+    )
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        module.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+
+    with pytest.raises(module.AdapterError, match="IAP tunnel unavailable"):
+        module.wait_ready(selected)
+
+    assert clock[0] == 2.0
+
+
+def test_cli_reports_expected_interrupt_without_traceback(monkeypatch, capsys) -> None:
+    module = load("gcp_ssh_interrupt")
+    monkeypatch.setattr(
+        module,
+        "main",
+        lambda: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    assert module.cli() == 130
+    assert capsys.readouterr().err == "cloudmake: GCP SSH operation interrupted\n"

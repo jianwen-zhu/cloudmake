@@ -12,19 +12,20 @@ cloudmake TARGET
   -> incrementally synchronize the local project
   -> qualify the selected Dev Container and CDI requirements
   -> execute the project Make target exactly once
-  -> leave generated work on Persistent Disk for the next invocation
+  -> leave generated work on the VM's persistent disk for the next invocation
 ```
 
-The same backend represents both an eligible
-[free-tier `e2-micro` CPU VM](https://docs.cloud.google.com/free/docs/free-cloud-features)
-and paid CPU or accelerator machines, including a user-provisioned G4 VM. The
-backend reports what the selected resource actually is; it never labels a GPU
-as free merely because some Compute Engine usage has a free allowance.
+Cloudmake consistently classifies GCP as paid-tier because an active
+billing account is mandatory and separately metered resources can apply. An
+eligible [`e2-micro` compute allowance](https://docs.cloud.google.com/free/docs/free-cloud-features)
+is reported as a secondary property, not as the backend identity. The same
+backend also represents paid CPU and accelerator machines, including a
+user-provisioned G4 VM.
 
 The adapter is currently an **unqualified release candidate**. Its offline
-provider simulation passes, including real rsync through the remote-shell
-adapter and stop/start persistence, but the live `e2-micro` and G4 gates below
-must pass before its status becomes supported.
+provider simulation and live `e2-micro` CPU gate pass, including real rsync,
+OCI execution, networking, and stop/start persistence. The paid G4 GPU/CDI
+gate below must still pass before its status becomes supported.
 
 ## Onboarding and daily use
 
@@ -57,7 +58,11 @@ cloudmake benchmark
 cloudmake --stop
 ```
 
-Each target describes and starts or reuses the VM before synchronizing source.
+Each target describes and starts or reuses the VM, then waits separately for
+SSH/IAP readiness before synchronizing source.
+After a positively observed stop/start cycle, Cloudmake removes any abandoned
+workspace lock from the prior boot; it never does so when merely reusing an
+already-running VM.
 The compact output distinguishes `resource=started` from `resource=reused`.
 The VM name selects its already-provisioned hardware; `--gpu` does not change a
 Compute Engine machine and is therefore rejected rather than pretending to
@@ -68,7 +73,7 @@ next target starts the same VM automatically.
 ## Responsibility boundary
 
 The user or infrastructure administrator provisions the project, network,
-instance, boot image, Persistent Disk, IAM policy, quota, and billing account.
+instance, boot image, persistent disk, IAM policy, quota, and billing account.
 Cloudmake does not create or delete those resources in 2.4. This preserves the
 existing boundary between workstation execution and infrastructure management.
 
@@ -93,14 +98,17 @@ a mandatory project format.
 
 ## Persistence model
 
-Compute Engine Persistent Disk is the backend's native persistence service.
+The VM's attached persistent boot/storage disk is the backend's native
+persistence service. This is Persistent Disk on the qualified `e2-micro`
+profile. G4 does not support regional or zonal Persistent Disk, so a G4 profile
+must use a supported Hyperdisk configuration.
 [Stopping an instance](https://docs.cloud.google.com/compute/docs/instances/suspend-stop-reset-instances-overview)
 retains its attached disks and configuration, so stopping compute does not
 require packing, uploading, restoring, or decrypting a Cloudmake checkpoint.
 `--persist` therefore retains the existing high-level contract but reports
 native persistence and performs no checkpoint transfer.
 
-Persistent Disk is an optimization, not an authority. A deleted or corrupted VM
+The attached disk is an optimization, not an authority. A deleted or corrupted VM
 must remain recoverable from source, the declared workstation image, and project
 Make targets. GCS is not required by this backend and is not a replacement for
 the disk in the 2.4 release.
@@ -110,12 +118,13 @@ the disk in the 2.4 release.
 Long-lived Google credentials remain exclusively in the official host client.
 Cloudmake must not upload Application Default Credentials, OAuth refresh tokens,
 service-account keys, SSH private keys, or `gcloud` configuration to the VM,
-project, provenance, artifact bundle, or persistent disk.
+project, provenance, artifact bundle, or attached disk.
 
-Compute Engine's free allowance is conditional and excludes GPUs and TPUs.
-Cloudmake describes observed machine configuration, lifecycle, and billing
-exposure, but it cannot guarantee zero cost. A paid-capable resource
-must produce an explicit compact warning before Cloudmake starts it. Provider
+Compute Engine's `e2-micro` allowance is conditional and excludes GPUs and
+TPUs. External IPv4, storage outside the allowance, outbound transfer, and
+excess compute can still be billed. Cloudmake therefore identifies every GCP
+resource as paid-tier and produces an explicit compact warning before starting
+or reusing it. Provider
 quota errors retain their provider diagnostic and fail before source sync or
 target submission. Cloudmake does not attempt to reproduce Google's
 machine/accelerator-specific quota model locally; provider quota and pricing
@@ -138,7 +147,7 @@ The 2.4 release requires:
    zone, missing instance, quota failure, start/reuse/stop, ambiguous readiness,
    interrupted SSH, and cost-warning behavior.
 2. A live eligible `e2-micro` CPU gate proving start, incremental source reuse,
-   Dev Container execution, Persistent Disk survival across stop/start, outbound
+   Dev Container execution, attached-disk survival across stop/start, outbound
    access, bounded inbound forwarding, and clean stop.
 3. A live paid GPU gate on the selected G4 profile proving driver and CDI
    qualification, immutable OCI execution, target-at-most-once behavior, quota

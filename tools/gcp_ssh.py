@@ -15,6 +15,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import time
 
 
 class AdapterError(RuntimeError):
@@ -111,8 +112,9 @@ def split_ssh(arguments: list[str], expected_host: str) -> tuple[list[str], list
     return ssh_options, arguments[index + 1 :]
 
 
-def execute(arguments: argparse.Namespace, remainder: list[str]) -> int:
-    ssh_options, remote = split_ssh(remainder, arguments.instance)
+def provider_command(
+    arguments: argparse.Namespace, ssh_options: list[str], remote: list[str]
+) -> list[str]:
     command = [
         arguments.gcloud,
         "compute",
@@ -134,7 +136,47 @@ def execute(arguments: argparse.Namespace, remainder: list[str]) -> int:
         command.extend(["--command", remote_command])
     if ssh_options:
         command.extend(["--", *ssh_options])
+    return command
+
+
+def execute(arguments: argparse.Namespace, remainder: list[str]) -> int:
+    ssh_options, remote = split_ssh(remainder, arguments.instance)
+    command = provider_command(arguments, ssh_options, remote)
     return subprocess.run(command, check=False).returncode
+
+
+def wait_ready(arguments: argparse.Namespace) -> int:
+    if arguments.timeout <= 0 or arguments.poll_interval <= 0:
+        raise AdapterError("readiness timeout and poll interval must be positive")
+    deadline = time.monotonic() + arguments.timeout
+    attempt = 0
+    announced = False
+    last_detail = ""
+    command = provider_command(arguments, [], ["true"])
+    while True:
+        attempt += 1
+        result = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode == 0:
+            print(f"[gcp] ssh=ready attempt={attempt}", flush=True)
+            return 0
+        last_detail = (result.stderr or result.stdout).strip()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = f": {last_detail}" if last_detail else ""
+            raise AdapterError(
+                f"GCP SSH/IAP did not become ready within {arguments.timeout:g}s"
+                f"{detail}"
+            )
+        if not announced:
+            print("[gcp] instance=running ssh=waiting", file=sys.stderr, flush=True)
+            announced = True
+        time.sleep(min(arguments.poll_interval, remaining))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -145,25 +187,39 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--instance", required=True)
     result.add_argument("--tunnel-through-iap", action="store_true")
     result.add_argument("--create-wrapper", type=Path)
+    result.add_argument("--wait-ready", action="store_true")
     result.add_argument("--control-directory", type=Path)
     result.add_argument("--python", default=sys.executable)
+    result.add_argument("--timeout", type=float, default=180)
+    result.add_argument("--poll-interval", type=float, default=5)
     return result
 
 
 def main() -> int:
     selected, remainder = parser().parse_known_args()
     if selected.create_wrapper is not None:
-        if remainder:
+        if remainder or selected.wait_ready:
             raise AdapterError("wrapper creation does not accept SSH arguments")
         return create_wrapper(selected)
+    if selected.wait_ready:
+        if remainder:
+            raise AdapterError("readiness probing does not accept SSH arguments")
+        return wait_ready(selected)
     if remainder[:1] == ["--"]:
         remainder = remainder[1:]
     return execute(selected, remainder)
 
 
-if __name__ == "__main__":
+def cli() -> int:
     try:
-        raise SystemExit(main())
+        return main()
     except AdapterError as error:
         print(f"cloudmake: {error}", file=sys.stderr)
-        raise SystemExit(2)
+        return 2
+    except KeyboardInterrupt:
+        print("cloudmake: GCP SSH operation interrupted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())

@@ -74,7 +74,8 @@ def test_reuses_running_free_tier_shape_without_start(
     assert (tmp_path / "resource-state").read_text(encoding="utf-8") == "reused\n"
     output = capsys.readouterr()
     assert "machine=e2-micro" in output.out
-    assert "paid-capable" not in output.err
+    assert "GCP is a paid-tier backend" in output.err
+    assert "may qualify for a conditional allowance" in output.err
 
 
 def test_stopped_paid_gpu_starts_once_then_waits(
@@ -103,7 +104,7 @@ def test_stopped_paid_gpu_starts_once_then_waits(
     receipt = json.loads((tmp_path / "resource.json").read_text(encoding="utf-8"))
     assert receipt["resource_state"] == "started"
     assert receipt["accelerators"] == ["nvidia-rtx-pro-6000x1"]
-    assert receipt["billing_exposure"] == "paid-capable"
+    assert receipt["billing_exposure"] == "paid-tier"
     assert "provider billing and quota remain authoritative" in capsys.readouterr().err
 
 

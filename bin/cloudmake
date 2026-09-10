@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import shutil
 import socket
 import subprocess
@@ -1463,6 +1464,47 @@ def collect_directory(value: str) -> str:
     return path.as_posix()
 
 
+def run_foreground_command(command: list[str], *, cwd: Path) -> int:
+    """Run one foreground command and propagate cancellation to its process tree."""
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        start_new_session=os.name == "posix",
+    )
+    terminated = False
+
+    def forward(signum: int, _frame: Any) -> None:
+        nonlocal terminated
+        terminated = True
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signum)
+            else:
+                process.send_signal(signum)
+        except ProcessLookupError:
+            pass
+
+    previous_sigterm: Any = None
+    handler_installed = False
+    try:
+        previous_sigterm = signal.signal(signal.SIGTERM, forward)
+        handler_installed = True
+    except ValueError:
+        # signal handlers can be installed only by Python's main thread.
+        pass
+    try:
+        try:
+            return_code = process.wait()
+        except KeyboardInterrupt:
+            forward(signal.SIGINT, None)
+            process.wait()
+            raise
+    finally:
+        if handler_installed:
+            signal.signal(signal.SIGTERM, previous_sigterm)
+    return 128 + signal.SIGTERM if terminated else return_code
+
+
 def engine_command(
     *,
     project: Path,
@@ -1602,7 +1644,7 @@ def engine_command(
     command.append(target)
     if verbose:
         print("+", " ".join(command), file=sys.stderr)
-    return subprocess.run(command, cwd=TOOL_ROOT, check=False).returncode
+    return run_foreground_command(command, cwd=TOOL_ROOT)
 
 
 def print_local_execution_context(accelerator: str | None, accelerator_set: bool) -> None:
@@ -1687,7 +1729,7 @@ def local_make_command(
     command.extend([target, *assignments])
     if verbose:
         print("+", " ".join(command), file=sys.stderr)
-    return subprocess.run(command, cwd=project, check=False).returncode
+    return run_foreground_command(command, cwd=project)
 
 
 def local_oci_command(
@@ -1755,7 +1797,7 @@ def local_oci_command(
     ]
     if verbose:
         print("+", " ".join(command), file=sys.stderr)
-    exit_code = subprocess.run(command, cwd=project, check=False).returncode
+    exit_code = run_foreground_command(command, cwd=project)
     return exit_code, load_json(result)
 
 
@@ -1807,7 +1849,7 @@ def collect_local_artifacts(
             command.extend([option, os.environ[variable]])
     if verbose:
         print("+", " ".join(command), file=sys.stderr)
-    return subprocess.run(command, cwd=project, check=False).returncode
+    return run_foreground_command(command, cwd=project)
 
 
 def run(arguments: list[str]) -> int:
@@ -2546,7 +2588,7 @@ def run(arguments: list[str]) -> int:
         status=(
             "succeeded"
             if exit_code == 0
-            else "interrupted" if exit_code == 130 else "failed"
+            else "interrupted" if exit_code in {130, 143} else "failed"
         ),
         exit_code=exit_code,
         finished_at=utc_timestamp(),

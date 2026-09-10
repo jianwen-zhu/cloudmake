@@ -1,10 +1,10 @@
 # An already-provisioned single Google Compute Engine VM. Cloudmake owns the
 # operational start/reuse/stop cycle; Google Cloud owns provisioning and disks.
 BACKEND_TRANSPORT := ssh
-BACKEND_ACCESS_CLASS := paid-capable
+BACKEND_ACCESS_CLASS := paid-tier
 BACKEND_API_VERSION := 1
 BACKEND_PRODUCT_STATUS := unqualified
-BACKEND_PRODUCT_STATUS_REASON := GCP Compute Engine has not yet passed the live e2-micro and G4 release gates
+BACKEND_PRODUCT_STATUS_REASON := GCP Compute Engine passed the live e2-micro CPU gate; the paid G4 GPU/CDI gate remains pending
 BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := provider-managed
 BACKEND_WORKSPACE_DURABILITY := stop-persistent
@@ -69,6 +69,14 @@ gcp-connection: doctor
 		--instance '$(GCP_INSTANCE)' $(if $(filter yes,$(GCP_TUNNEL_THROUGH_IAP)),--tunnel-through-iap,) \
 		--create-wrapper '$(GCP_SSH_WRAPPER)' --python '$(PYTHON_BIN)' \
 		--control-directory '$(GCP_CONTROL_DIR)'
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/gcp_ssh.py' \
+		--gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' \
+		--instance '$(GCP_INSTANCE)' $(if $(filter yes,$(GCP_TUNNEL_THROUGH_IAP)),--tunnel-through-iap,) \
+		--wait-ready
+	@if test "$$(cat '$(GCP_RESOURCE_STATE)')" = started; then \
+		$(SSH) "sh -s -- reset-after-restart '$(REMOTE_LOCK)' restarted 0" \
+			< '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh'; \
+	fi
 
 refresh-ssh-config: prerequisites
 	@rm -f '$(GCP_SSH_WRAPPER)'

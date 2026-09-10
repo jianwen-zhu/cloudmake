@@ -13,6 +13,8 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-server = HTTPServer(("127.0.0.1", 18080), Handler)
+# The service must be reachable through the container runtime's published
+# interface. Cloudmake still binds the host-side SSH tunnel to loopback only.
+server = HTTPServer(("0.0.0.0", 18080), Handler)
 server.handle_request()
 server.server_close()
