@@ -34,8 +34,11 @@ printf '%s\n' "$first" | grep 'oci-environment=provider-native' >/dev/null
 one=$("$cloudmake" -C "$project" increment)
 two=$("$cloudmake" -C "$project" increment)
 printf '%s\n%s\n' "$one" "$two"
-printf '%s\n' "$one" | grep 'incremental workstation count=1' >/dev/null
-printf '%s\n' "$two" | grep 'incremental workstation count=2' >/dev/null
+one_count=$(printf '%s\n' "$one" | sed -n 's/.*incremental workstation count=\([0-9][0-9]*\).*/\1/p')
+two_count=$(printf '%s\n' "$two" | sed -n 's/.*incremental workstation count=\([0-9][0-9]*\).*/\1/p')
+test -n "$one_count"
+test -n "$two_count"
+test "$two_count" -eq "$((one_count + 1))"
 
 "$cloudmake" -C "$project" --stop
 woken=$("$cloudmake" -C "$project" verify)

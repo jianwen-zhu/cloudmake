@@ -21,6 +21,13 @@ from typing import Any
 SCHEMA = 1
 ADAPTER_REVISION = 1
 IMAGE_PATTERN = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+TRANSIENT_SSH_ERRORS = (
+    "connection reset by peer",
+    "context deadline exceeded",
+    "deadlineexceeded",
+    "failed to invoke ssh rpc",
+    "timed out while waiting for the codespace to start",
+)
 
 
 class EnvironmentError(RuntimeError):
@@ -53,10 +60,30 @@ def run(
 def gh_ssh(
     gh: str, codespace: str, script: str, *, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
-    return run(
-        [gh, "codespace", "ssh", "-c", codespace, "--", "sh", "-c", script],
-        input_text=input_text,
-    )
+    # gh treats the post-`--` command as one remote shell string. Supplying
+    # `sh`, `-c`, and the program as separate argv entries loses the program's
+    # quoting when gh reconstructs that string.
+    remote_command = shlex.join(["sh", "-c", script])
+    command = [gh, "codespace", "ssh", "-c", codespace, "--", remote_command]
+    delays = (2, 5, 10)
+    for attempt in range(1, len(delays) + 2):
+        completed = run(command, input_text=input_text)
+        if completed.returncode == 0:
+            return completed
+        detail = (completed.stderr or completed.stdout).lower()
+        if not any(pattern in detail for pattern in TRANSIENT_SSH_ERRORS):
+            return completed
+        if attempt > len(delays):
+            return completed
+        delay = delays[attempt - 1]
+        print(
+            "[cloudmake] Codespaces SSH temporarily unavailable; "
+            f"retrying preparation in {delay}s "
+            f"(attempt {attempt + 1}/{len(delays) + 1})",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def checked(completed: subprocess.CompletedProcess[str], description: str) -> str:
@@ -68,16 +95,35 @@ def checked(completed: subprocess.CompletedProcess[str], description: str) -> st
 
 
 def workspace_root(gh: str, codespace: str) -> PurePosixPath:
+    # `gh codespace ssh` starts in the remote user's home directory, not in
+    # the repository mounted by Codespaces. Discover the dedicated anchor
+    # from the provider-persistent /workspaces tree instead. Requiring one
+    # top-level Git checkout avoids silently rebuilding the wrong repository
+    # when a Codespace has been repurposed as a multi-repository workspace.
+    script = (
+        "for path in /workspaces/*; do "
+        "test -d \"$path\" || continue; "
+        "test -e \"$path/.git\" || continue; "
+        "printf '%s\\n' \"$path\"; "
+        "done"
+    )
     output = checked(
-        gh_ssh(gh, codespace, "pwd -P"),
+        gh_ssh(gh, codespace, script),
         "Codespaces workspace discovery",
-    ).strip()
-    if "\n" in output:
-        raise EnvironmentError("Codespaces returned an ambiguous workspace path")
-    path = PurePosixPath(output)
+    )
+    candidates = [line for line in output.splitlines() if line]
+    if not candidates:
+        raise EnvironmentError(
+            "Codespaces anchor repository under /workspaces was not found"
+        )
+    if len(candidates) != 1:
+        raise EnvironmentError(
+            "Codespaces anchor repository under /workspaces is ambiguous"
+        )
+    path = PurePosixPath(candidates[0])
     if not path.is_absolute() or len(path.parts) < 3 or path.parts[1] != "workspaces":
         raise EnvironmentError(
-            f"Codespaces workspace is outside /workspaces: {output!r}"
+            f"Codespaces workspace is outside /workspaces: {candidates[0]!r}"
         )
     return path
 

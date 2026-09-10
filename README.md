@@ -1181,7 +1181,8 @@ Prerequisites:
 
 1. A GitHub account with Codespaces access and available included quota or a
    configured billing method.
-2. The official [GitHub CLI](https://cli.github.com/).
+2. A current official [GitHub CLI](https://cli.github.com/). The v2.2 live
+   acceptance gate uses the 2.100.x line.
 3. GitHub CLI authentication with Codespaces permission:
 
    ```sh
@@ -1223,7 +1224,10 @@ Source synchronization uses rsync over the SSH configuration produced by
 project. Every ordinary target first observes the provider state; connecting
 wakes a stopped Codespace automatically and the compact context line reports
 `resource=started` or `resource=reused`. The project target itself is still
-submitted exactly once.
+submitted exactly once. Before submission, Cloudmake bounds retries to
+positively classified transient GitHub API or SSH-tunnel failures and reuses a
+short-lived local SSH control connection. It never applies those retries to the
+project target.
 
 Cloudmake keeps its remote tree under `/workspaces`, the
 [provider-persistent Codespaces volume](https://docs.github.com/en/codespaces/developing-in-a-codespace/persisting-environment-variables-and-temporary-files).

@@ -4,6 +4,8 @@ import base64
 import importlib.util
 import json
 from pathlib import Path, PurePosixPath
+import shlex
+import subprocess
 from types import SimpleNamespace
 import sys
 
@@ -26,6 +28,117 @@ def load(name: str):
 
 def encoded(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii")
+
+
+def completed(stdout: str = "", returncode: int = 0, stderr: str = ""):
+    return subprocess.CompletedProcess(
+        ["gh", "codespace", "ssh"], returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def test_gh_ssh_preserves_compound_script_as_one_remote_command(monkeypatch) -> None:
+    module = load("codespaces_environment_ssh_quoting")
+    calls: list[tuple[list[str], str | None]] = []
+
+    def fake_run(command, *, input_text=None):
+        calls.append((command, input_text))
+        return completed()
+
+    monkeypatch.setattr(module, "run", fake_run)
+    script = "for path in /workspaces/*; do printf '%s\\n' \"$path\"; done"
+
+    module.gh_ssh("gh", "example", script, input_text="payload")
+
+    command, input_text = calls[0]
+    assert command[:-1] == ["gh", "codespace", "ssh", "-c", "example", "--"]
+    assert shlex.split(command[-1]) == ["sh", "-c", script]
+    assert input_text == "payload"
+
+
+def test_gh_ssh_retries_only_classified_transient_provider_failures(
+    monkeypatch, capsys
+) -> None:
+    module = load("codespaces_environment_ssh_retry")
+    results = iter(
+        [
+            completed(returncode=1, stderr="rpc error: DeadlineExceeded"),
+            completed(returncode=1, stderr="connection reset by peer"),
+            completed(stdout="ready\n"),
+        ]
+    )
+    delays: list[int] = []
+    monkeypatch.setattr(module, "run", lambda *_args, **_kwargs: next(results))
+    monkeypatch.setattr(module.time, "sleep", delays.append)
+
+    result = module.gh_ssh("gh", "example", "true")
+
+    assert result.stdout == "ready\n"
+    assert delays == [2, 5]
+    assert "attempt 2/4" in capsys.readouterr().err
+
+
+def test_gh_ssh_does_not_retry_authentication_failure(monkeypatch) -> None:
+    module = load("codespaces_environment_ssh_no_auth_retry")
+    calls: list[int] = []
+
+    def fake_run(*_args, **_kwargs):
+        calls.append(1)
+        return completed(returncode=1, stderr="Permission denied")
+
+    monkeypatch.setattr(module, "run", fake_run)
+    monkeypatch.setattr(
+        module.time,
+        "sleep",
+        lambda _delay: (_ for _ in ()).throw(AssertionError("unexpected retry")),
+    )
+
+    result = module.gh_ssh("gh", "example", "true")
+
+    assert result.returncode == 1
+    assert calls == [1]
+
+
+def test_workspace_discovery_uses_the_provider_persistent_anchor(monkeypatch) -> None:
+    module = load("codespaces_environment_workspace_discovery")
+    calls: list[str] = []
+
+    def fake_ssh(_gh, _codespace, script, **_kwargs):
+        calls.append(script)
+        return completed("/workspaces/cloudmake\n")
+
+    monkeypatch.setattr(module, "gh_ssh", fake_ssh)
+
+    assert module.workspace_root("gh", "example") == PurePosixPath(
+        "/workspaces/cloudmake"
+    )
+    assert "/workspaces/*" in calls[0]
+    assert "pwd" not in calls[0]
+
+
+def test_workspace_discovery_rejects_missing_or_ambiguous_anchor(monkeypatch) -> None:
+    module = load("codespaces_environment_workspace_rejection")
+
+    monkeypatch.setattr(module, "gh_ssh", lambda *_args, **_kwargs: completed())
+    try:
+        module.workspace_root("gh", "example")
+    except module.EnvironmentError as error:
+        assert "was not found" in str(error)
+    else:
+        raise AssertionError("missing anchor unexpectedly accepted")
+
+    monkeypatch.setattr(
+        module,
+        "gh_ssh",
+        lambda *_args, **_kwargs: completed(
+            "/workspaces/cloudmake\n/workspaces/another-repository\n"
+        ),
+    )
+    try:
+        module.workspace_root("gh", "example")
+    except module.EnvironmentError as error:
+        assert "is ambiguous" in str(error)
+    else:
+        raise AssertionError("ambiguous anchor unexpectedly accepted")
 
 
 def arguments(tmp_path: Path, mode: str = "oci") -> SimpleNamespace:

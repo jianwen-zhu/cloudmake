@@ -26,7 +26,7 @@ BACKEND_INSTALL_HINT := Install GitHub CLI, OpenSSH, and rsync; then run: gh aut
 BACKEND_VALIDATE := case '$(CODESPACE)' in ''|*[!A-Za-z0-9._-]*) echo 'CODESPACE contains unsupported characters' >&2; exit 2;; esac
 BACKEND_DOCTOR_PROBE := $(GH_BIN) auth status -h github.com >/dev/null && $(GH_BIN) codespace view -c $(CODESPACE) >/dev/null
 BACKEND_VERSION_COMMAND := $(GH_BIN) --version
-BACKEND_TESTED_CLIENT := GitHub CLI 2.55.x
+BACKEND_TESTED_CLIENT := GitHub CLI 2.100.x
 BACKEND_RESOURCE_ID := $(CODESPACE)
 BACKEND_CONTEXT_RESOURCE_LABEL := codespace
 BACKEND_REMOTE_REQUIRED_COMMANDS := make rsync tar
@@ -44,11 +44,9 @@ SSH_OPTIONS := -F $(CODESPACE_SSH_CONFIG)
 REMOTE_ROOT ?= /workspaces/.cloudmake/$(PROJECT_SLUG)
 REMOTE_MAKEFILE ?= $(PROJECT_MAKEFILE)
 
-BACKEND_PREREQUISITE := $(CODESPACE_SSH_CONFIG)
+BACKEND_PREREQUISITE := codespaces-connection
 BACKEND_CONTEXT_RESOURCE_STATE_FILE := $(CODESPACE_RESOURCE_STATE)
-BACKEND_PRE_CONNECT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
-	--gh '$(GH_BIN)' --codespace '$(CODESPACE)' --output '$(CODESPACE_RESOURCE_STATE)' && \
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_environment.py' \
+BACKEND_PRE_CONNECT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_environment.py' \
 	--gh '$(GH_BIN)' --codespace '$(CODESPACE)' --mode '$(CLOUDMAKE_RUNNER)' \
 	--image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
 	--native-config '$(CLOUDMAKE_TOOL_ROOT)/.devcontainer/devcontainer.json' \
@@ -60,17 +58,32 @@ BACKEND_OCI_REMOTE_REQUIRED_COMMANDS := make rsync tar
 # is necessary. The common SSH transport verifies the connection with `ssh true`.
 BACKEND_START := :
 BACKEND_STATUS = $(GH_BIN) codespace view -c $(CODESPACE)
-BACKEND_STOP = $(GH_BIN) codespace stop -c $(CODESPACE)
+BACKEND_STOP = if test -f '$(CODESPACE_SSH_CONFIG)' && test -n '$(SSH_HOST)'; then \
+	$(SSH_BIN) $(SSH_OPTIONS) -O exit $(SSH_HOST) >/dev/null 2>&1 || :; fi; \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+		--gh '$(GH_BIN)' --codespace '$(CODESPACE)' \
+		--output '$(CODESPACE_RESOURCE_STATE)' --stop
 
-$(CODESPACE_SSH_CONFIG): doctor
+.PHONY: codespaces-connection
+codespaces-connection: doctor
 	@if test -z '$(CODESPACE)'; then \
 		echo 'Set CODESPACE to the permanent name from: gh codespace list' >&2; \
 		exit 2; \
 	fi
 	@mkdir -p '$(CODESPACE_STATE_DIR)'
-	@$(GH_BIN) codespace ssh --config -c '$(CODESPACE)' > '$@.tmp'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_config.py' '$@.tmp'
-	@mv '$@.tmp' '$@'
+	@if test -f '$(CODESPACE_SSH_CONFIG)'; then \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+			--gh '$(GH_BIN)' --codespace '$(CODESPACE)' \
+			--output '$(CODESPACE_RESOURCE_STATE)'; \
+	else \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+			--gh '$(GH_BIN)' --codespace '$(CODESPACE)' \
+			--output '$(CODESPACE_RESOURCE_STATE)' \
+			--ssh-config '$(CODESPACE_SSH_CONFIG).tmp'; \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_config.py' \
+			'$(CODESPACE_SSH_CONFIG).tmp'; \
+		mv '$(CODESPACE_SSH_CONFIG).tmp' '$(CODESPACE_SSH_CONFIG)'; \
+	fi
 
 .PHONY: refresh-ssh-config
 refresh-ssh-config: doctor
@@ -79,6 +92,16 @@ refresh-ssh-config: doctor
 		exit 2; \
 	fi
 	@mkdir -p '$(CODESPACE_STATE_DIR)'
-	@$(GH_BIN) codespace ssh --config -c '$(CODESPACE)' > '$(CODESPACE_SSH_CONFIG).tmp'
+	@previous="$$(cat '$(CODESPACE_RESOURCE_STATE)' 2>/dev/null || :)"; \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+			--gh '$(GH_BIN)' --codespace '$(CODESPACE)' \
+			--output '$(CODESPACE_RESOURCE_STATE).refresh' \
+			--ssh-config '$(CODESPACE_SSH_CONFIG).tmp'; \
+		if test -n "$$previous"; then \
+			printf '%s\n' "$$previous" > '$(CODESPACE_RESOURCE_STATE)'; \
+		else \
+			mv '$(CODESPACE_RESOURCE_STATE).refresh' '$(CODESPACE_RESOURCE_STATE)'; \
+		fi; \
+		rm -f '$(CODESPACE_RESOURCE_STATE).refresh'
 	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_config.py' '$(CODESPACE_SSH_CONFIG).tmp'
 	@mv '$(CODESPACE_SSH_CONFIG).tmp' '$(CODESPACE_SSH_CONFIG)'

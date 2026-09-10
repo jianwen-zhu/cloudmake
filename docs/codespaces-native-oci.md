@@ -27,6 +27,21 @@ immutable reference and asks Codespaces to rebuild. The selected image and
 adapter revision are recorded in the provider-persistent `/workspaces` tree.
 Later targets using the same image skip the rebuild. Selecting another image
 rebuilds the environment; selecting `--native` restores the neutral anchor.
+The anchor is a dedicated Codespace with one top-level Git checkout under
+`/workspaces`; Cloudmake rejects an absent or ambiguous anchor rather than
+rebuilding an arbitrary repository.
+
+Cloudmake multiplexes the short-lived SSH operations of one invocation through
+a user-owned local control socket. `--stop` closes that socket before requesting
+shutdown and returns only after GitHub confirms `Shutdown`; the next target can
+therefore report a genuine `resource=started` transition.
+
+Provider state inspection, SSH-configuration discovery, and environment
+preparation happen before Make is submitted. Cloudmake retries only positively
+classified transient GitHub control-plane or tunnel failures during that safe
+pre-submission phase. It does not retry a target after execution begins. A
+current GitHub CLI is recommended; the v2.2 live gate was qualified with the
+2.100.x line.
 
 The project workspace also remains below `/workspaces`, so an environment
 rebuild does not discard source synchronization state or project-generated

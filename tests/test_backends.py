@@ -338,6 +338,7 @@ def install_fake_checkpoint_host(fake_bin: Path) -> Path:
         r'''#!/usr/bin/env python3
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -547,6 +548,7 @@ def install_fake_ssh_tools(fake_bin: Path) -> None:
         r'''#!/usr/bin/env python3
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 arguments = sys.argv[1:]
@@ -562,6 +564,8 @@ if arguments[:2] == ["auth", "status"]:
 elif arguments == ["--version"]:
     print("gh version 2.55.0")
 elif arguments[:3] == ["codespace", "ssh", "--config"]:
+    if os.environ.get("FAKE_GH_CONFIG_WAKES"):
+        (remote / "codespace-state").write_text("Available\n", encoding="utf-8")
     identity = remote / "codespaces.auto"
     identity.write_text("fake private key", encoding="utf-8")
     Path(f"{identity}.pub").write_text("fake public key", encoding="utf-8")
@@ -570,8 +574,13 @@ elif arguments[:3] == ["codespace", "ssh", "--config"]:
     print("    User codespace")
     print(f"    IdentityFile {identity}")
 elif arguments[:2] == ["codespace", "ssh"]:
-    script = arguments[-1]
-    if script == "pwd -P":
+    remote_command = shlex.split(arguments[-1])
+    script = (
+        remote_command[2]
+        if remote_command[:2] == ["sh", "-c"] and len(remote_command) == 3
+        else arguments[-1]
+    )
+    if "/workspaces/*" in script and '"$path/.git"' in script:
         print("/workspaces/cloudmake")
     elif "native-oci-environment.json" in script and "cat >" in script:
         (remote / "native-oci-environment.json").write_text(
@@ -2772,6 +2781,7 @@ def test_codespaces_uses_anchor_only_for_ssh_and_never_clones_project(
     assert "git push" not in serialized
     assert "/workspaces/.cloudmake/cloud-build-prototype/src" in serialized
     assert any(call[0] == "rsync" and f"{prototype}/" in call for call in all_calls)
+    assert any("-O" in call and "exit" in call for call in all_calls if call[0] == "ssh")
     assert ["gh", "codespace", "stop", "-c", "test-space"] in all_calls
 
 
@@ -2782,6 +2792,9 @@ def test_codespaces_stopped_resource_is_woken_transparently(
     install_fake_ssh_tools(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
     env["FAKE_CODESPACE_STATE"] = "Shutdown"
+    # The real provider may start a stopped Codespace while producing its SSH
+    # config. Cloudmake must retain the state observed before that side effect.
+    env["FAKE_GH_CONFIG_WAKES"] = "1"
 
     result = run_command(
         [
