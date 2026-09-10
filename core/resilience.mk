@@ -8,6 +8,7 @@ CLOUDMAKE_IDENTITY_DIR ?= $(CLOUDMAKE_STATE_ROOT)/identity
 CLOUDMAKE_OWNER_FILE := $(CLOUDMAKE_IDENTITY_DIR)/owner.json
 CLOUDMAKE_OWNER_ID_FILE := $(CLOUDMAKE_IDENTITY_DIR)/owner.id
 CLOUDMAKE_LOCK_TIMEOUT ?= 30
+CLOUDMAKE_LOCK_FILE_OVERRIDE ?=
 CLOUDMAKE_ADOPT ?= 0
 CLOUDMAKE_PROJECT_ROOT ?= $(PROJECT_DIR)
 CLOUDMAKE_PROJECT_ARGS_B64 ?= W10=
@@ -43,8 +44,17 @@ BACKEND_LIFECYCLE ?=
 BACKEND_PRODUCT_STATUS ?= supported
 BACKEND_PRODUCT_STATUS_REASON ?=
 BACKEND_SESSION_REUSE ?= $(if $(filter batch,$(BACKEND_LIFECYCLE)),no,$(if $(filter local session,$(BACKEND_LIFECYCLE)),yes,))
+# API-1 backends predating v2.2 remain valid and explicitly unqualified. These
+# two orthogonal properties describe control authority and working-filesystem
+# lifetime without changing the public target surface.
+BACKEND_LIFECYCLE_CONTROL ?= unknown
+BACKEND_WORKSPACE_DURABILITY ?= unknown
 BACKEND_CAPABILITIES ?=
 BACKEND_OCI_RUNTIMES ?=
+# A native OCI backend asks the provider to construct its execution environment
+# from the selected image. API-1 descriptors pre-dating this distinction retain
+# the existing adapter behavior.
+BACKEND_OCI_NATIVE ?= no
 # Public Internet reachability is independent of the provider control
 # transport.  A notebook backend can accept authenticated command submission
 # while exposing no inbound socket at all.  API-1 descriptors that predate
@@ -56,6 +66,7 @@ BACKEND_CONTEXT_RESOURCE_LABEL ?= resource
 BACKEND_CONTEXT_RESOURCE ?= $(BACKEND_RESOURCE_ID)
 BACKEND_CONTEXT_ACCELERATOR ?= $(CLOUDMAKE_CONTEXT_ACCELERATOR)
 BACKEND_CONTEXT_RESOURCE_STATE ?=
+BACKEND_CONTEXT_RESOURCE_STATE_FILE ?=
 BACKEND_CONTEXT_RUNNER ?= $(if $(filter-out native,$(CLOUDMAKE_RUNNER)),$(CLOUDMAKE_RUNNER),)
 
 # A compact, backend-neutral execution banner. Callers may set the shell
@@ -88,6 +99,15 @@ endif
 ifeq ($(filter $(BACKEND_SESSION_REUSE),yes no),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_SESSION_REUSE "$(BACKEND_SESSION_REUSE)"; expected yes or no)
 endif
+ifeq ($(filter $(BACKEND_LIFECYCLE_CONTROL),local provider-managed externally-managed per-target unknown),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_LIFECYCLE_CONTROL "$(BACKEND_LIFECYCLE_CONTROL)")
+endif
+ifeq ($(filter $(BACKEND_WORKSPACE_DURABILITY),ephemeral stop-persistent host-persistent unknown),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_WORKSPACE_DURABILITY "$(BACKEND_WORKSPACE_DURABILITY)")
+endif
+ifeq ($(filter $(BACKEND_OCI_NATIVE),yes no),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_OCI_NATIVE "$(BACKEND_OCI_NATIVE)"; expected yes or no)
+endif
 ifeq ($(strip $(BACKEND_OCI_RUNTIMES)),)
 $(error Backend "$(BACKEND)" does not declare BACKEND_OCI_RUNTIMES)
 endif
@@ -99,6 +119,11 @@ ifneq ($(words $(BACKEND_OCI_RUNTIMES)),1)
 $(error Backend "$(BACKEND)" must declare OCI runtime "none" alone)
 endif
 endif
+ifeq ($(BACKEND_OCI_NATIVE),yes)
+ifneq ($(BACKEND_OCI_RUNTIMES),none)
+$(error Backend "$(BACKEND)" with BACKEND_OCI_NATIVE=yes must declare OCI runtime "none")
+endif
+endif
 ifneq ($(filter-out yes no conditional inherited unknown,$(BACKEND_INTERNET_INBOUND)),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_INTERNET_INBOUND "$(BACKEND_INTERNET_INBOUND)")
 endif
@@ -106,7 +131,7 @@ ifneq ($(filter-out yes no conditional inherited unknown,$(BACKEND_INTERNET_OUTB
 $(error Backend "$(BACKEND)" has invalid BACKEND_INTERNET_OUTBOUND "$(BACKEND_INTERNET_OUTBOUND)")
 endif
 
-CLOUDMAKE_LOCK_FILE := $(CLOUDMAKE_STATE_ROOT)/locks/$(BACKEND)/$(BACKEND_RESOURCE_ID).lock
+CLOUDMAKE_LOCK_FILE := $(if $(strip $(CLOUDMAKE_LOCK_FILE_OVERRIDE)),$(CLOUDMAKE_LOCK_FILE_OVERRIDE),$(CLOUDMAKE_STATE_ROOT)/locks/$(BACKEND)/$(BACKEND_RESOURCE_ID).lock)
 CLOUDMAKE_MANIFEST_DIR := $(CLOUDMAKE_STATE_ROOT)/manifests/$(BACKEND)
 CLOUDMAKE_MANIFEST := $(CLOUDMAKE_MANIFEST_DIR)/$(BACKEND_RESOURCE_ID).json
 CLOUDMAKE_CURRENT_MANIFEST := $(CLOUDMAKE_MANIFEST).current
@@ -131,6 +156,9 @@ backend-info: backend-contract
 	@echo 'product-status=$(BACKEND_PRODUCT_STATUS)'
 	@echo 'product-status-reason=$(BACKEND_PRODUCT_STATUS_REASON)'
 	@echo 'session-reuse=$(BACKEND_SESSION_REUSE)'
+	@echo 'lifecycle-control=$(BACKEND_LIFECYCLE_CONTROL)'
+	@echo 'workspace-durability=$(BACKEND_WORKSPACE_DURABILITY)'
+	@echo 'oci-native=$(BACKEND_OCI_NATIVE)'
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'
 	@echo 'oci-runtimes=$(BACKEND_OCI_RUNTIMES)'

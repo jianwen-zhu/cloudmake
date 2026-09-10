@@ -4,8 +4,11 @@ BACKEND_ACCESS_CLASS := quota-tier
 BACKEND_API_VERSION := 1
 BACKEND_PRODUCT_STATUS := supported
 BACKEND_SESSION_REUSE := yes
+BACKEND_LIFECYCLE_CONTROL := provider-managed
+BACKEND_WORKSPACE_DURABILITY := stop-persistent
+BACKEND_OCI_NATIVE := yes
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts cancel native-persistence oci-runner
-BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
+BACKEND_OCI_RUNTIMES := none
 BACKEND_INTERNET_INBOUND := conditional
 BACKEND_INTERNET_OUTBOUND := conditional
 
@@ -30,6 +33,8 @@ BACKEND_REMOTE_REQUIRED_COMMANDS := make rsync tar
 
 CODESPACE_STATE_DIR := $(CLOUDMAKE_STATE_ROOT)/codespaces-ssh/$(CODESPACE)
 CODESPACE_SSH_CONFIG := $(CODESPACE_STATE_DIR)/ssh_config
+CODESPACE_RESOURCE_STATE := $(CODESPACE_STATE_DIR)/resource-state
+CODESPACE_ENVIRONMENT_RECEIPT := $(CODESPACE_STATE_DIR)/environment.json
 
 # `gh codespace ssh --config` chooses the canonical Host alias. Resolve it
 # lazily because the config file is created as a Make prerequisite.
@@ -40,6 +45,16 @@ REMOTE_ROOT ?= /workspaces/.cloudmake/$(PROJECT_SLUG)
 REMOTE_MAKEFILE ?= $(PROJECT_MAKEFILE)
 
 BACKEND_PREREQUISITE := $(CODESPACE_SSH_CONFIG)
+BACKEND_CONTEXT_RESOURCE_STATE_FILE := $(CODESPACE_RESOURCE_STATE)
+BACKEND_PRE_CONNECT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+	--gh '$(GH_BIN)' --codespace '$(CODESPACE)' --output '$(CODESPACE_RESOURCE_STATE)' && \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_environment.py' \
+	--gh '$(GH_BIN)' --codespace '$(CODESPACE)' --mode '$(CLOUDMAKE_RUNNER)' \
+	--image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
+	--native-config '$(CLOUDMAKE_TOOL_ROOT)/.devcontainer/devcontainer.json' \
+	--native-dockerfile '$(CLOUDMAKE_TOOL_ROOT)/.devcontainer/Dockerfile' \
+	--receipt '$(CODESPACE_ENVIRONMENT_RECEIPT)'
+BACKEND_OCI_REMOTE_REQUIRED_COMMANDS := make rsync tar
 
 # Connecting over SSH starts a stopped codespace, so no separate start command
 # is necessary. The common SSH transport verifies the connection with `ssh true`.

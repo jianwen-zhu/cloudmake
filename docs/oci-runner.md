@@ -98,6 +98,12 @@ additional device-related binds must come from an explicit CDI request. The
 selected native runtime remains responsible for translating those options into
 an OCI runtime specification and rejecting an unsupported combination.
 
+Codespaces is deliberately outside this nested-runtime continuum. Its backend
+declares `oci-native=yes`, so the selected digest becomes the provider dev
+container and Make runs directly in that workstation environment. The adapter
+adds its non-root SSH/Make transport surface during provider rebuild; it does
+not launch Docker, Podman, crun, or PRoot for each target.
+
 The Colab notebook backend declares one provider-qualified runtime profile.
 Cloudmake installs `skopeo`, `umoci`, and `crun` when absent, materializes the
 rootfs, and adapts its OCI runtime specification to Colab's managed-VM limits.

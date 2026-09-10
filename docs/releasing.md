@@ -12,7 +12,9 @@ pushed to `main` only after their gates pass.
 3. Run the pinned real-GitHub project gate.
 4. Run live backends affected by the release. Accelerator or transport changes
    require the live Colab CUDA gate; provider-specific changes require that
-   provider's smoke test.
+   provider's smoke test. Codespaces provider-native OCI changes require
+   `tests/acceptance/codespaces-workstation/run.sh`, including neutral-anchor
+   restoration and confirmed stop.
 5. Confirm `git diff --check`, a clean working tree, and no active temporary
    compute.
 6. Create an annotated `v<VERSION>` tag and push `main` plus that tag.

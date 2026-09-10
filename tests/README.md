@@ -133,6 +133,15 @@ Drive authorization is required because the full gate destroys and replaces
 the VM between ORFS stages. The harness stops only after confirmed success and
 leaves an ambiguous session intact for inspection.
 
+## Codespaces provider-native workstation acceptance
+
+The opt-in gate in
+[`acceptance/codespaces-workstation`](acceptance/codespaces-workstation/README.md)
+rebuilds an existing Cloudmake anchor Codespace from a digest-pinned public OCI
+image, proves target and stop/start reuse, collects an artifact, restores the
+neutral anchor, and stops the resource. It consumes Codespaces quota and is
+never part of the offline suite.
+
 `tests/contract/` exercises the public `cloudmake` launcher interface, including
 configuration precedence, aliases, external project isolation, arbitrary target
 dispatch, zero reserved project names, target-agnostic artifact collection,
@@ -185,6 +194,10 @@ internals:
 - portable Make build, test, run, package, clean, and incremental behavior;
 - reproducible Makefile overlays for pinned NVIDIA and GPU MODE CUDA lessons;
 - backend lifecycle and command construction through fake provider clients;
+- Codespaces provider-state classification, transparent wake/reuse banners,
+  stop-persistent workspace preservation, and locally persisted non-secret
+  resource selection; provider-native OCI rebuild/reuse and neutral-anchor
+  restoration without a nested runtime;
 - Lightning Studio start/reuse/machine-switch/stop behavior, persistent paths,
   exact key references, and the absence of Git-based project transfer;
 - user-managed host SSH synchronization, lifecycle preservation, local alias

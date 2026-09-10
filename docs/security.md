@@ -55,6 +55,15 @@ The Codespaces anchor checkout and uploaded project are separate. The anchor
 repository provisions a VM; cloudmake does not use its repository token to
 clone, commit, or push the actual project.
 
+For provider-native Codespaces OCI selection, Cloudmake requests no privileged
+mode, added capability, relaxed security option, host socket, or CDI device.
+GitHub's Dev Container implementation may still consume metadata embedded in a
+selected image before Cloudmake can inspect the resulting environment. The
+digest-pinned workstation image is therefore trusted input governed by the
+provider's VM boundary. This is deliberately distinct from a Cloudmake-managed
+OCI adapter, whose effective runtime specification Cloudmake can validate
+before target submission.
+
 For `host-ssh`, Cloudmake passes the locally selected `SSH_HOST` alias to the
 local `ssh` and `rsync` clients. It does not generate SSH configuration, copy
 an identity, or administer the selected machine. Access policy and machine

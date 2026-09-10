@@ -641,6 +641,13 @@ def backend_oci_runtimes(backend: str) -> list[str]:
     return values
 
 
+def backend_oci_native(backend: str) -> bool:
+    value = backend_declaration(backend, "BACKEND_OCI_NATIVE")
+    if value not in {"yes", "no"}:
+        raise UsageError(f"backend {backend!r} has invalid OCI-native value {value!r}")
+    return value == "yes"
+
+
 def backend_status(backend: str) -> tuple[str, str]:
     status = backend_declaration(backend, "BACKEND_PRODUCT_STATUS")
     if status not in {"supported", "deprecated"}:
@@ -664,7 +671,8 @@ def warn_deprecated_backend(backend: str) -> None:
 
 def show_backends() -> None:
     print(
-        f"{'BACKEND':22} {'STATUS':10} {'SESSION REUSE':13} {'PERSISTENCE':12} "
+        f"{'BACKEND':22} {'STATUS':10} {'SESSION REUSE':13} {'LIFECYCLE':18} "
+        f"{'WORKSPACE':17} {'OCI NATIVE':10} {'PERSISTENCE':12} "
         f"{'TRANSPORT':36} {'OCI RUNTIMES':34} {'INTERNET IN':12} "
         f"{'INTERNET OUT':12} HOST CLIENT"
     )
@@ -672,11 +680,19 @@ def show_backends() -> None:
         installed = "found" if shutil.which(client) else "missing"
         status, _ = backend_status(name)
         runtimes = backend_oci_runtimes(name)
-        runtime_text = ",".join(runtimes) if runtimes else "unsupported"
+        oci_native = backend_oci_native(name)
+        runtime_text = (
+            "provider-native"
+            if oci_native
+            else ",".join(runtimes) if runtimes else "unsupported"
+        )
+        lifecycle = backend_declaration(name, "BACKEND_LIFECYCLE_CONTROL")
+        workspace = backend_declaration(name, "BACKEND_WORKSPACE_DURABILITY")
         internet_in = backend_declaration(name, "BACKEND_INTERNET_INBOUND")
         internet_out = backend_declaration(name, "BACKEND_INTERNET_OUTBOUND")
         print(
-            f"{name:22} {status:10} {session_reuse:13} {PERSISTENCE_MODES[name]:12} "
+            f"{name:22} {status:10} {session_reuse:13} {lifecycle:18} "
+            f"{workspace:17} {'yes' if oci_native else 'no':10} {PERSISTENCE_MODES[name]:12} "
             f"{transport:36} {runtime_text:34} {internet_in:12} "
             f"{internet_out:12} {client} ({installed})"
         )
@@ -1073,6 +1089,19 @@ def resolve_ssh_host(
     return value
 
 
+def resolve_codespace(config_home: Path, key: str) -> str | None:
+    value: Any = os.environ.get("CODESPACE")
+    if value is None:
+        value = load_json(config_home / "projects" / f"{key}.json").get("codespace")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not COLAB_SESSION_NAME.fullmatch(value):
+        raise UsageError(
+            "Codespace names may contain only letters, numbers, dot, dash, and underscore"
+        )
+    return value
+
+
 def resolve_preferences(
     project: Path, options: dict[str, Any], config_home: Path, key: str
 ) -> tuple[str, str | None, bool, str | None, bool, str]:
@@ -1153,8 +1182,13 @@ def validate_backend_oci_selection(
     runtimes = backend_oci_runtimes(backend)
     if runner == "native":
         return runtimes
-    if not runtimes:
+    native = backend_oci_native(backend)
+    if not runtimes and not native:
         raise UsageError(f"backend {backend!r} does not support the managed OCI runner")
+    if native and devices:
+        raise UsageError(
+            f"backend {backend!r} does not expose CDI devices through its native OCI environment"
+        )
     cdi_capable = {"podman", "docker", "nerdctl", "proot", "crun"}
     if devices and not cdi_capable.intersection(runtimes):
         raise UsageError(
@@ -1299,6 +1333,7 @@ def engine_command(
     target: str,
     assignments: list[str],
     retry_seconds: int | None,
+    codespace: str | None = None,
     allocation_result: Path | None = None,
     remote_target: str | None = None,
     remote_collect_dir: str | None = None,
@@ -1360,6 +1395,16 @@ def engine_command(
         variables.append("CLOUDMAKE_VERBOSE=1")
     if backend == "host-ssh" and ssh_host is not None:
         variables.append(f"SSH_HOST={ssh_host}")
+    if backend == "codespaces-ssh" and codespace is not None:
+        variables.extend(
+            [
+                f"CODESPACE={codespace}",
+                # A Codespace has one active provider-native OCI environment.
+                # Serialize the complete operation across local projects that
+                # share that resource, including reconciliation and dispatch.
+                f"CLOUDMAKE_LOCK_FILE_OVERRIDE={state_home / 'resource-locks' / 'codespaces-ssh' / (codespace + '.lock')}",
+            ]
+        )
     if workspace_id != key:
         variables.append("CLOUDMAKE_ADOPT=1")
     if accelerator_set:
@@ -1720,6 +1765,16 @@ def run(arguments: list[str]) -> int:
             saved["accelerator"] = accelerator or ""
         if backend == "host-ssh":
             saved["host"] = ssh_host
+        selected_codespace = None
+        if backend == "codespaces-ssh" and not options["global"]:
+            selected_codespace = os.environ.get("CODESPACE")
+            if selected_codespace is not None:
+                if COLAB_SESSION_NAME.fullmatch(selected_codespace) is None:
+                    raise UsageError(
+                        "Codespace names may contain only letters, numbers, dot, "
+                        "dash, and underscore"
+                    )
+                saved["codespace"] = selected_codespace
         if selected_colab_session is not None:
             saved["colab_session"] = selected_colab_session
         if options["checkpoint"] is not None:
@@ -1766,6 +1821,11 @@ def run(arguments: list[str]) -> int:
             if selected_colab_session is not None
             else ""
         )
+        codespace_note = (
+            f", codespace={selected_codespace}"
+            if selected_codespace is not None
+            else ""
+        )
         checkpoint_note = (
             f", {persistence_selection_note(selected_persistence, persistence_mode)}"
             if options["checkpoint"] is not None or selected_persistence
@@ -1779,7 +1839,7 @@ def run(arguments: list[str]) -> int:
         device_note = f", devices={','.join(devices)}" if devices else ""
         print(
             f"Saved {scope} backend={backend}{host_note}{accelerator_note}"
-            f"{session_note}{checkpoint_note}{runner_note}{device_note}; "
+            f"{session_note}{codespace_note}{checkpoint_note}{runner_note}{device_note}; "
             "subsequent targets reuse this selection."
         )
         if (
@@ -1816,6 +1876,7 @@ def run(arguments: list[str]) -> int:
     runner, image, devices = resolve_runner_preferences(
         options, project, config_home, key
     )
+    codespace = resolve_codespace(config_home, key) if backend == "codespaces-ssh" else None
     if options["host"] is not None and backend != "host-ssh":
         raise UsageError("--host is valid only with the ssh backend")
     if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
@@ -1980,6 +2041,7 @@ def run(arguments: list[str]) -> int:
             target=engine_target,
             assignments=assignments,
             retry_seconds=retry_seconds,
+            codespace=codespace,
             allocation_result=operation_allocation_path,
             remote_target=remote_target,
             remote_collect_dir=remote_collect_dir,
@@ -2138,6 +2200,7 @@ def run(arguments: list[str]) -> int:
                 target=engine_target,
                 assignments=assignments,
                 retry_seconds=retry_seconds,
+                codespace=codespace,
                 allocation_result=allocation_path,
                 remote_target=remote_target,
                 remote_collect_dir=remote_collect_dir,

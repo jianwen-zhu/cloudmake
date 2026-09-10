@@ -195,6 +195,50 @@ def test_oci_selection_persists_and_is_encoded_for_later_targets(
     ]
 
 
+def test_codespaces_selection_persists_native_image_and_uses_resource_lock(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    environment["CODESPACE"] = "stable-workstation"
+    image = "registry.example/science/tools@sha256:" + "c" * 64
+
+    selected = invoke(
+        project,
+        environment,
+        "--use",
+        "codespaces",
+        "--image",
+        image,
+    )
+    invoke(project, environment, "analyze")
+
+    assert "codespace=stable-workstation" in selected.stdout
+    assert "runner=oci" in selected.stdout
+    assert "subsequent targets reuse this selection" in selected.stdout
+    call = engine_calls(log)[0]
+    assert_assignment(call, "BACKEND", "codespaces-ssh")
+    lock = next(
+        argument.split("=", 1)[1]
+        for argument in call
+        if argument.startswith("CLOUDMAKE_LOCK_FILE_OVERRIDE=")
+    )
+    assert lock == str(
+        tmp_path
+        / "state"
+        / "resource-locks"
+        / "codespaces-ssh"
+        / "stable-workstation.lock"
+    )
+    encoded_image = next(
+        argument.split("=", 1)[1]
+        for argument in call
+        if argument.startswith("CLOUDMAKE_OCI_IMAGE_B64=")
+    )
+    assert base64.urlsafe_b64decode(encoded_image).decode() == image
+    assert_remote_target(call, "analyze")
+
+
 def test_native_clears_saved_oci_runner_without_changing_make_surface(
     tmp_path: Path, fake_bin: Path
 ) -> None:
@@ -288,6 +332,8 @@ def test_backends_reports_persistence_mode_for_every_backend(
     result = invoke(project, environment, "--backends")
 
     assert "STATUS" in result.stdout
+    assert "LIFECYCLE" in result.stdout
+    assert "WORKSPACE" in result.stdout
     assert "PERSISTENCE" in result.stdout
     assert "OCI RUNTIMES" in result.stdout
     assert "INTERNET IN" in result.stdout
@@ -298,15 +344,23 @@ def test_backends_reports_persistence_mode_for_every_backend(
         if line.split()
     }
     assert rows["colab-notebook"][1] == "supported"
-    assert rows["colab-notebook"][3] == "checkpoint"
+    assert rows["colab-notebook"][3] == "provider-managed"
+    assert rows["colab-notebook"][4] == "ephemeral"
+    assert rows["colab-notebook"][5] == "no"
+    assert rows["colab-notebook"][6] == "checkpoint"
     assert "crun" in rows["colab-notebook"]
     assert "no" in rows["colab-notebook"]
     assert "yes" in rows["colab-notebook"]
     assert rows["kaggle-notebook"][1] == "deprecated"
     assert rows["kaggle-notebook"][2] == "no"
-    assert rows["kaggle-notebook"][3] == "checkpoint"
+    assert rows["kaggle-notebook"][3] == "per-target"
+    assert rows["kaggle-notebook"][4] == "ephemeral"
+    assert rows["kaggle-notebook"][5] == "no"
+    assert rows["kaggle-notebook"][6] == "checkpoint"
     assert "proot" in rows["kaggle-notebook"]
     assert "conditional" in rows["kaggle-notebook"]
+    assert rows["codespaces-ssh"][5] == "yes"
+    assert "provider-native" in rows["codespaces-ssh"]
     assert "podman,docker,nerdctl,proot" in rows["host-ssh"]
     for backend in (
         "local",
@@ -314,8 +368,10 @@ def test_backends_reports_persistence_mode_for_every_backend(
         "host-ssh",
         "lightning-studio-ssh",
     ):
-        assert rows[backend][3] == "native"
-    assert rows["colab-ssh"][3] == "unsupported"
+        assert rows[backend][6] == "native"
+    assert rows["codespaces-ssh"][3:5] == ["provider-managed", "stop-persistent"]
+    assert rows["host-ssh"][3:5] == ["externally-managed", "host-persistent"]
+    assert rows["colab-ssh"][6] == "unsupported"
     assert engine_calls(log) == []
 
 
@@ -1460,6 +1516,21 @@ def test_credentials_are_not_written_to_project_or_cloudmake_preferences(
         for path in project.rglob("*")
         if path.is_file()
     )
+
+
+def test_codespace_name_can_be_persisted_as_non_secret_project_selection(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    environment["CODESPACE"] = "steady-cpu-workspace"
+
+    selected = invoke(project, environment, "--use", "codespaces")
+    environment.pop("CODESPACE")
+    invoke(project, environment, "build")
+
+    assert "codespace=steady-cpu-workspace" in selected.stdout
+    assert_assignment(engine_calls(log)[0], "CODESPACE", "steady-cpu-workspace")
 
 
 def test_execution_provenance_hashes_assignment_values_and_tracks_result(

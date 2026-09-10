@@ -213,6 +213,14 @@ that same fact rather than separate capabilities. Adding checkpoint restore may
 make the logical workspace durable, but it does not change session reuse or hide
 the fixed per-target startup, restore, and publication cost.
 
+Two further properties keep that simple boolean honest without expanding the
+daily CLI. Lifecycle control says whether Cloudmake may operate a
+provider-managed resource, must leave an externally managed host alone, runs
+locally, or submits a per-target job. Workspace durability says whether the
+working filesystem is ephemeral, survives stop/start of the same provider
+resource, or belongs to an independently managed host. These properties affect
+backend behavior and diagnostics, not the project's Make interface.
+
 Network reachability is directional and independent of command transport.
 Cloudmake records public Internet inbound access separately from workload
 Internet outbound access. An authenticated notebook API or SSH proxy can submit
@@ -230,7 +238,11 @@ The capability ladder follows naturally from this model. Cloudmake 2.0 added
 opt-in persistent workspaces, preserving project-generated state across
 ephemeral accelerator VMs. Cloudmake 2.1 adds one managed non-native runner:
 registry-backed OCI images with CDI device requirements, keeping immutable
-tools separate from mutable work. The storage-neutral lifecycle and runtime
+tools separate from mutable work. Cloudmake 2.2 qualifies provider-managed,
+stop-persistent Codespaces as a CPU remote-workstation reference: ordinary
+targets wake or reuse the named resource while its `/workspaces` tree avoids
+checkpoint transfer, and a selected OCI image becomes the native Codespaces
+workstation environment instead of a nested container. The storage-neutral lifecycle and runtime
 contracts are documented in [Stateful workspaces](docs/stateful-workspaces.md)
 and [Execution environments and OCI runner](docs/execution-environments.md).
 
@@ -495,7 +507,8 @@ cloudmake --backends
 ```
 
 `cloudmake --backends` reports the adapters, directional Internet declarations,
-and whether their main host clients are installed. `cloudmake --doctor` checks the selected backend's complete local
+compute-lifecycle control, workspace durability, and whether their main host
+clients are installed. `cloudmake --doctor` checks the selected backend's complete local
 prerequisites and provider authentication without allocating a VM. It also
 prints the installed client version and the client line used for Cloudmake's
 latest compatibility validation.
@@ -847,7 +860,9 @@ target is not run. After preflight, Make is submitted exactly once and ordinary
 target failures retain their exit status and output.
 
 Local and SSH backends prefer Podman, Docker, then nerdctl, with a PRoot
-fallback. Colab declares exactly one provider-qualified OCI
+fallback. Codespaces instead declares `oci-native=yes`: the digest-pinned image
+is adapted into the provider's dev container and Make runs directly in that
+environment. Colab declares exactly one provider-qualified OCI
 runtime: Cloudmake's `crun` adapter. It materializes the digest-pinned rootfs,
 uses the namespace and cgroup profile established by live qualification, and
 applies NVIDIA devices and host driver libraries from a generated CDI
@@ -1194,16 +1209,45 @@ Verify the connection independently before using cloudmake:
 gh codespace ssh -c CODESPACE-NAME
 ```
 
-Select an existing Codespace by name:
+Select an existing Codespace by name and save that non-secret resource choice
+for the current project:
 
 ```sh
-export CODESPACE=CODESPACE-NAME
+CODESPACE=CODESPACE-NAME cloudmake --use codespaces
+# compile is a target supplied by this project's Makefile.
+cloudmake compile
 ```
 
 Source synchronization uses rsync over the SSH configuration produced by
 `gh codespace ssh --config`. Cloudmake never commits or pushes the uploaded
-project. Stop the Codespace when it is not in use because active and retained
-Codespaces consume account quota according to GitHub's current policy.
+project. Every ordinary target first observes the provider state; connecting
+wakes a stopped Codespace automatically and the compact context line reports
+`resource=started` or `resource=reused`. The project target itself is still
+submitted exactly once.
+
+Cloudmake keeps its remote tree under `/workspaces`, the
+[provider-persistent Codespaces volume](https://docs.github.com/en/codespaces/developing-in-a-codespace/persisting-environment-variables-and-temporary-files).
+`cloudmake --stop` stops compute but does not transfer or delete that tree, so
+later targets restart the resource and retain incremental Make output and OCI
+cache. The provider may still delete the Codespace according to its
+[retention policy](https://docs.github.com/en/codespaces/setting-your-user-preferences/configuring-automatic-deletion-of-your-codespaces),
+at which point the project must rebuild from local source. This is deliberate:
+the remote tree is a disposable acceleration cache, not source control or
+archival storage. Stop the Codespace when it is not in use because active and
+retained Codespaces consume account quota according to GitHub's current policy.
+
+The included anchor image installs the common SSH tools and an unprivileged
+execution identity. With `--image`, Cloudmake derives the Codespaces dev
+container from that digest, adds only its SSH/Make transport prerequisites, and
+rebuilds once. Later targets reuse the same workstation image. Selecting a new
+image rebuilds the tool environment; `--native` restores the neutral anchor.
+No Docker-in-Docker, host socket, PRoot, or other nested runtime is used.
+Codespaces is qualified as CPU-only, so CDI device requests are rejected before
+rebuild. One Codespace has one active workstation image; Cloudmake serializes
+its complete operation by resource name on the controlling host. The selected
+image is trusted input because GitHub may consume embedded Dev Container
+metadata during its provider-native rebuild. See
+[Codespaces native OCI](docs/codespaces-native-oci.md).
 
 ### Colab SSH backend
 
@@ -1386,15 +1430,15 @@ project target requests a machine.
 
 The three service-adapter roles are visible in each backend's contract:
 
-| Backend | Status | Compute adapter | Persistence adapter | Bundle-runtime adapter | Source transfer |
-| --- | --- | --- | --- | --- | --- |
-| `local` | Supported | Existing local process | Native tree; no transfer | Podman, Docker, nerdctl, or CPU PRoot | None |
-| `colab-notebook` | Supported | Reusable named Colab session | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
-| `kaggle-notebook` | Deprecated; not recommended | Fresh Kaggle VM per target (`session-reuse=no`) | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
-| `codespaces-ssh` | Supported | Reusable quota-backed VM over SSH | Provider workspace | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
-| `colab-ssh` | Supported | Reusable paid Colab VM over SSH | Unsupported | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
-| `host-ssh` | Supported | Existing user-managed SSH host | Host filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
-| `lightning-studio-ssh` | Supported | Reusable quota/credit-backed Studio | Studio filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| Backend | Status | Lifecycle control | Workspace durability | OCI native | Persistence adapter | Bundle-runtime adapter | Source transfer |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `local` | Supported | Local | Host-persistent | No | Native tree; no transfer | Podman, Docker, nerdctl, or CPU PRoot | None |
+| `colab-notebook` | Supported | Provider-managed | Ephemeral | No | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
+| `kaggle-notebook` | Deprecated; not recommended | Per target | Ephemeral | No | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
+| `codespaces-ssh` | Supported | Provider-managed | Stop-persistent | Yes | Native provider workspace | Provider dev container; CPU | Incremental rsync |
+| `colab-ssh` | Supported | Provider-managed | Ephemeral | No | Unsupported | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| `host-ssh` | Supported | Externally managed | Host-persistent | No | Host filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| `lightning-studio-ssh` | Supported | Provider-managed | Stop-persistent | No | Studio filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
 
 Network direction is a separate backend property, not an implication of the
 transport:
@@ -1411,7 +1455,8 @@ example, `colab exec` can submit work over Google's runtime proxy even though
 the VM exposes no public listening endpoint. Inspect the declarations with
 `cloudmake --backends`, or invoke the maintainer-facing
 `make BACKEND=NAME backend-info`; older API-1 third-party descriptors remain
-valid and report unqualified directions as `unknown`.
+valid and report unqualified lifecycle, workspace, and network properties as
+`unknown`.
 
 The roles intentionally converge at the project Makefile, not at their
 transport, storage, or bundle layer. Project developers should use the
@@ -1521,6 +1566,13 @@ lessons, installs regression-only Makefile overlays, and exercises them without
 vendoring either repository. Explicitly enabled live gates run both overlays on
 Colab or Lightning T4 sessions. See [`tests/README.md`](tests/README.md) for the
 commands and allocation warning.
+
+The separate opt-in Codespaces gate rebuilds an existing anchor from a
+digest-pinned public image, proves provider-native image and stop/start reuse,
+retrieves an artifact, restores the neutral anchor, and stops the resource. It
+consumes Codespaces quota and therefore runs only from an explicitly
+authenticated maintainer host. See
+[`tests/acceptance/codespaces-workstation`](tests/acceptance/codespaces-workstation/README.md).
 
 GitHub Actions runs only credential-free automation: the offline suite on Linux
 and macOS, syntax and notebook checks, and weekly pinned-upstream CUDA project

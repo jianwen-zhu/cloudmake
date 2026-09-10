@@ -55,6 +55,8 @@ Each backend declares:
 - its `BACKEND_PRODUCT_STATUS`, `supported` or `deprecated`, plus
   `BACKEND_PRODUCT_STATUS_REASON` when deprecated;
 - whether its execution environment is reusable across target invocations;
+- who controls compute lifecycle;
+- how long the working filesystem survives;
 - an ordered set of capabilities, including any persistence and bundle-runtime
   roles;
 - an ordered OCI runtime list, or `none`; and
@@ -78,6 +80,27 @@ Capabilities describe real behavior rather than provider branding. Examples
 include synchronization, execution, artifact retrieval, status, opening a web
 interface, stopping reusable compute, and an interactive shell. A backend must
 not advertise a shell merely because its provider has a browser terminal.
+
+Lifecycle control and workspace durability are separate from session reuse and
+checkpoint mode:
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `BACKEND_LIFECYCLE_CONTROL` | `local` | No remote compute lifecycle exists. |
+|  | `provider-managed` | Cloudmake may wake, reuse, and stop the named provider resource through its official client. |
+|  | `externally-managed` | Cloudmake may connect but must not power or delete the host. |
+|  | `per-target` | The provider creates one execution resource for each submitted target. |
+|  | `unknown` | API-1 compatibility default for an unqualified third-party backend. |
+| `BACKEND_WORKSPACE_DURABILITY` | `ephemeral` | The working filesystem does not survive the relevant VM/session boundary. |
+|  | `stop-persistent` | It survives stop/start of the same provider resource, but provider deletion or retention still applies. |
+|  | `host-persistent` | Its lifetime belongs to the local or externally managed host. |
+|  | `unknown` | API-1 compatibility default for an unqualified third-party backend. |
+
+These fields do not create new lifecycle commands. The common CLI remains
+target-first; a provider-managed backend performs any required wake/reuse work
+before dispatch. Explicit `--start`, `--status`, and `--stop` remain optional
+operations and debugging/cost controls. Native persistence on a
+`stop-persistent` workspace performs no transfer.
 
 Public Internet reachability is also independent of the control transport.
 Every maintained backend declares `BACKEND_INTERNET_INBOUND` and
@@ -144,6 +167,22 @@ BACKEND_OCI_RUNTIMES := crun
 # A fresh managed VM with a least-privileged materialization adapter.
 BACKEND_OCI_RUNTIMES := proot
 ```
+
+Every backend also declares `BACKEND_OCI_NATIVE := yes|no`. `yes` means the
+provider constructs the execution environment itself from the selected OCI
+image; it does not mean that a nested runtime command is present. Codespaces is
+the initial native example and therefore declares:
+
+```make
+BACKEND_OCI_NATIVE := yes
+BACKEND_OCI_RUNTIMES := none
+```
+
+With `oci-native=no`, a non-`none` runtime list names Cloudmake adapters inside
+the selected environment. With `oci-native=yes`, `none` is not an unsupported
+signal: the separate field authorizes provider-native image selection. API-1
+descriptors that omit the field retain `no` for compatibility. A native backend
+must declare `none` alone; it cannot also advertise a nested runtime path.
 
 The declaration describes mechanisms the backend permits, not commands proven
 to work on every instance. Cloudmake rejects selections that no declared option

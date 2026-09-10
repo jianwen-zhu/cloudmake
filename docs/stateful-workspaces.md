@@ -54,6 +54,12 @@ provenance say `native`, and provider deletion or expiry remains authoritative.
 An enabled selection must be explicitly disabled before choosing an unsupported
 backend. The legacy `--checkpoint` spelling remains an alias for `--persist`.
 
+For Codespaces, `/workspaces` is `stop-persistent`: Cloudmake may wake or stop
+the named provider resource, while the same volume remains attached. No archive
+is created and no host round trip occurs. A provider rebuild retains that
+directory, but deletion or retention expiry does not; the next resource must be
+able to reconstruct it from local source and Make.
+
 ## Non-goals
 
 - Cloudmake does not extend, evade, or promise a provider's VM lifetime.

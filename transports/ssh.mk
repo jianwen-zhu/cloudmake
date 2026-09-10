@@ -12,11 +12,14 @@ RSYNC_BIN ?= rsync
 SSH_OPTIONS ?=
 BACKEND_PREREQUISITE ?=
 BACKEND_START ?= :
+BACKEND_PRE_CONNECT ?= :
 BACKEND_STATUS ?= :
 BACKEND_STOP ?= :
 BACKEND_STOP_PREREQUISITE ?= doctor
 BACKEND_REMOTE_REQUIRED_COMMANDS ?= $(if $(filter oci,$(CLOUDMAKE_RUNNER)),python3,make) rsync tar
-CLOUDMAKE_REMOTE_REQUIRED_COMMANDS := $(if $(filter oci,$(CLOUDMAKE_RUNNER)),python3 rsync tar,$(BACKEND_REMOTE_REQUIRED_COMMANDS))
+BACKEND_OCI_REMOTE_REQUIRED_COMMANDS ?= python3 rsync tar
+CLOUDMAKE_REMOTE_REQUIRED_COMMANDS := $(if $(filter oci,$(CLOUDMAKE_RUNNER)),$(BACKEND_OCI_REMOTE_REQUIRED_COMMANDS),$(BACKEND_REMOTE_REQUIRED_COMMANDS))
+CLOUDMAKE_REMOTE_RUNNER := $(if $(and $(filter oci,$(CLOUDMAKE_RUNNER)),$(filter yes,$(BACKEND_OCI_NATIVE))),native,$(CLOUDMAKE_RUNNER))
 REMOTE_MAKEFILE ?= $(PROJECT_MAKEFILE)
 SSH_REFRESH_MESSAGE ?= SSH connection failed; refreshing generated configuration once.
 
@@ -88,6 +91,7 @@ _ssh-backend-start: ensure-owner
 	@$(BACKEND_START)
 
 _ssh-start: ensure-owner $(BACKEND_PREREQUISITE)
+	@$(BACKEND_PRE_CONNECT)
 	@if ! $(SSH) true; then \
 		echo '[cloudmake] $(SSH_REFRESH_MESSAGE)' >&2; \
 		$(MAKE) --no-print-directory refresh-ssh-config; \
@@ -104,7 +108,12 @@ _ssh-start: ensure-owner $(BACKEND_PREREQUISITE)
 		echo 'Install the missing tool in the remote image before running cloudmake.' >&2; \
 		exit 2; \
 	fi
-	@CLOUDMAKE_RESOURCE_STATE='$(BACKEND_CONTEXT_RESOURCE_STATE)'; $(CLOUDMAKE_PRINT_CONTEXT)
+	@resource_state='$(BACKEND_CONTEXT_RESOURCE_STATE)'; \
+		if test -n '$(BACKEND_CONTEXT_RESOURCE_STATE_FILE)' \
+			&& test -f '$(BACKEND_CONTEXT_RESOURCE_STATE_FILE)'; then \
+			resource_state="$$(cat '$(BACKEND_CONTEXT_RESOURCE_STATE_FILE)')"; \
+		fi; \
+		CLOUDMAKE_RESOURCE_STATE="$$resource_state"; $(CLOUDMAKE_PRINT_CONTEXT)
 
 _ssh-sync: _ssh-start
 	@set -eu; \
@@ -149,7 +158,7 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 		'$(PROJECT_DIR)/' $(SSH_HOST):$(REMOTE_SRC)/
 	$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
 		'$(CLOUDMAKE_OWNER_FILE)' $(SSH_HOST):$(REMOTE_OWNER_FILE)
-	@if test '$(CLOUDMAKE_RUNNER)' = oci; then \
+	@if test '$(CLOUDMAKE_RUNNER)' = oci && test '$(BACKEND_OCI_NATIVE)' != yes; then \
 		$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
 			'$(CLOUDMAKE_TOOL_ROOT)/tools/oci_runner.py' $(SSH_HOST):$(REMOTE_OCI_TOOL); \
 	fi
@@ -165,7 +174,7 @@ _ssh-execute: _ssh-start
 	if test -n '$(REMOTE_COLLECT_DIR_B64)'; then \
 		$(SSH) "rm -f '$(REMOTE_ARTIFACT_ARCHIVE)'"; \
 	fi; \
-	if test '$(CLOUDMAKE_RUNNER)' = oci; then \
+	if test '$(CLOUDMAKE_RUNNER)' = oci && test '$(BACKEND_OCI_NATIVE)' != yes; then \
 		$(SSH) "rm -f '$(REMOTE_OCI_RESULT)'"; \
 	fi; \
 	command="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_make_command.py' \
@@ -173,7 +182,7 @@ _ssh-execute: _ssh-start
 		--jobs '$(JOBS)' --target '$(REMOTE_TARGET)' \
 		--target-b64 '$(REMOTE_TARGET_B64)' \
 		--arguments-b64 '$(CLOUDMAKE_PROJECT_ARGS_B64)' \
-		--runner '$(CLOUDMAKE_RUNNER)' \
+		--runner '$(CLOUDMAKE_REMOTE_RUNNER)' \
 		--oci-image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
 		--oci-devices-b64 '$(CLOUDMAKE_OCI_DEVICES_B64)' \
 		--oci-runtimes-b64 '$(CLOUDMAKE_OCI_RUNTIMES_B64)' \
@@ -183,11 +192,18 @@ _ssh-execute: _ssh-start
 	rm -f '$(SSH_OCI_RESULT)' '$(SSH_OCI_RESULT).tmp'; \
 	set +e; $(SSH) "$$command"; execute_status=$$?; set -e; \
 	if test '$(CLOUDMAKE_RUNNER)' = oci; then \
-		mkdir -p '$(dir $(SSH_OCI_RESULT))'; \
-		$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
-			$(SSH_HOST):$(REMOTE_OCI_RESULT) '$(SSH_OCI_RESULT).tmp' >/dev/null 2>&1 || :; \
-		if test -f '$(SSH_OCI_RESULT).tmp'; then \
-			mv '$(SSH_OCI_RESULT).tmp' '$(SSH_OCI_RESULT)'; \
+		if test '$(BACKEND_OCI_NATIVE)' = yes; then \
+			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/provider_oci_result.py' \
+				--result '$(SSH_OCI_RESULT)' --runtime provider-native \
+				--image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
+				--target-b64 '$(REMOTE_TARGET_B64)' --exit-code "$$execute_status"; \
+		else \
+			mkdir -p '$(dir $(SSH_OCI_RESULT))'; \
+			$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
+				$(SSH_HOST):$(REMOTE_OCI_RESULT) '$(SSH_OCI_RESULT).tmp' >/dev/null 2>&1 || :; \
+			if test -f '$(SSH_OCI_RESULT).tmp'; then \
+				mv '$(SSH_OCI_RESULT).tmp' '$(SSH_OCI_RESULT)'; \
+			fi; \
 		fi; \
 		set +e; \
 		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/oci_result.py' \

@@ -65,8 +65,9 @@ def test_codespaces_anchor_provides_common_ssh_transport_prerequisites() -> None
         encoding="utf-8"
     )
     assert "ghcr.io/devcontainers/features/sshd:1" in configuration["features"]
+    assert not any("docker-in-docker" in name for name in configuration["features"])
     assert configuration["remoteUser"] == "vscode"
-    for command in ("make", "rsync", "tar"):
+    for command in ("make", "python3", "rsync", "tar"):
         assert command in dockerfile
 
 
@@ -88,6 +89,9 @@ def test_api1_backend_lifecycle_remains_a_compatible_session_reuse_input(
     result = run_command(["make", "-f", descriptor, "backend-info"], cwd=tmp_path)
 
     assert "session-reuse=no" in result.stdout
+    assert "lifecycle-control=unknown" in result.stdout
+    assert "workspace-durability=unknown" in result.stdout
+    assert "oci-native=no" in result.stdout
     assert "internet-inbound=unknown" in result.stdout
     assert "internet-outbound=unknown" in result.stdout
 
@@ -565,9 +569,58 @@ elif arguments[:3] == ["codespace", "ssh", "--config"]:
     print("    HostName localhost")
     print("    User codespace")
     print(f"    IdentityFile {identity}")
+elif arguments[:2] == ["codespace", "ssh"]:
+    script = arguments[-1]
+    if script == "pwd -P":
+        print("/workspaces/cloudmake")
+    elif "native-oci-environment.json" in script and "cat >" in script:
+        (remote / "native-oci-environment.json").write_text(
+            sys.stdin.read(), encoding="utf-8"
+        )
+    elif "native-oci-environment.json" in script and "cat" in script:
+        marker = remote / "native-oci-environment.json"
+        if marker.exists():
+            print(marker.read_text(encoding="utf-8"), end="")
+    elif "native-oci-environment.json" in script and "rm -f" in script:
+        (remote / "native-oci-environment.json").unlink(missing_ok=True)
+    elif "cloudmake-oci.Dockerfile" in script:
+        (remote / "cloudmake-oci.Dockerfile").write_text(
+            sys.stdin.read(), encoding="utf-8"
+        )
+    elif ".devcontainer/devcontainer.json" in script:
+        (remote / "devcontainer.json").write_text(sys.stdin.read(), encoding="utf-8")
+    elif ".devcontainer/Dockerfile" in script:
+        (remote / "Dockerfile").write_text(sys.stdin.read(), encoding="utf-8")
+    elif script == "true":
+        pass
+    else:
+        raise SystemExit(f"unsupported fake Codespaces SSH script: {script}")
+elif arguments[:2] == ["codespace", "rebuild"]:
+    if os.environ.get("FAKE_GH_REBUILD_FAIL"):
+        print("rebuild failed", file=sys.stderr)
+        raise SystemExit(1)
+    with (remote / "rebuild-count").open("a", encoding="utf-8") as stream:
+        stream.write("rebuild\n")
+    print("Rebuilt")
 elif arguments[:2] == ["codespace", "view"]:
-    print("Available")
+    if os.environ.get("FAKE_GH_VIEW_FAIL"):
+        print("Codespace state unavailable", file=sys.stderr)
+        raise SystemExit(1)
+    state_path = remote / "codespace-state"
+    state = (
+        state_path.read_text(encoding="utf-8").strip()
+        if state_path.exists()
+        else os.environ.get("FAKE_CODESPACE_STATE", "Available")
+    )
+    if "--json" in arguments:
+        if os.environ.get("FAKE_GH_VIEW_MALFORMED"):
+            print("not-json")
+        else:
+            print(json.dumps({"state": state}))
+    else:
+        print(state)
 elif arguments[:2] == ["codespace", "stop"]:
+    (remote / "codespace-state").write_text("Shutdown\n", encoding="utf-8")
     print("Stopped")
 else:
     raise SystemExit(f"unsupported fake gh command: {arguments}")
@@ -585,6 +638,10 @@ from pathlib import Path
 with Path(os.environ["FAKE_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(["ssh", *sys.argv[1:]]) + "\n")
 joined = " ".join(sys.argv[1:])
+if "fake-codespace" in sys.argv[1:] and sys.argv[-1:] == ["true"]:
+    remote = Path(os.environ["FAKE_REMOTE"])
+    remote.mkdir(parents=True, exist_ok=True)
+    (remote / "codespace-state").write_text("Available\n", encoding="utf-8")
 if sys.argv[1:] == ["-V"]:
     print("OpenSSH_9.9 test")
 if os.environ.get("FAKE_SSH_AUTH_FAIL") and "BatchMode=yes" in joined:
@@ -791,7 +848,7 @@ def test_launcher_runs_external_project_through_codespaces_ssh(
     env = launcher_environment(fake_bin, tmp_path)
     env["CODESPACE"] = "test-space"
 
-    run_command(
+    result = run_command(
         [
             LAUNCHER,
             "-b",
@@ -804,6 +861,21 @@ def test_launcher_runs_external_project_through_codespaces_ssh(
     )
 
     all_calls = calls(Path(env["FAKE_LOG"]))
+    assert "backend=codespaces-ssh" in result.stdout
+    assert "codespace=test-space" in result.stdout
+    assert "resource=reused" in result.stdout
+
+    reused = run_command(
+        [
+            LAUNCHER,
+            "-b",
+            "codespaces",
+            "build",
+        ],
+        cwd=project,
+        env=env,
+    )
+    assert "resource=reused" in reused.stdout
     assert any(
         call[0] == "ssh" and "fake-codespace" in call and call[-1] == "true"
         for call in all_calls
@@ -2704,6 +2776,189 @@ def test_codespaces_uses_anchor_only_for_ssh_and_never_clones_project(
 
 
 @pytest.mark.integration
+def test_codespaces_stopped_resource_is_woken_transparently(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_CODESPACE_STATE"] = "Shutdown"
+
+    result = run_command(
+        [
+            "make",
+            "BACKEND=codespaces-ssh",
+            "CODESPACE=test-space",
+            *engine_dispatch("build"),
+        ],
+        cwd=prototype,
+        env=env,
+    )
+
+    assert "backend=codespaces-ssh" in result.stdout
+    assert "codespace=test-space" in result.stdout
+    assert "resource=started" in result.stdout
+    all_calls = calls(Path(env["FAKE_LOG"]))
+    assert [
+        "gh",
+        "codespace",
+        "view",
+        "-c",
+        "test-space",
+        "--json",
+        "state",
+    ] in all_calls
+    assert any(call[0] == "ssh" and call[-1] == "true" for call in all_calls)
+
+
+@pytest.mark.integration
+def test_codespaces_state_failure_blocks_before_connection_and_sync(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    env["FAKE_GH_VIEW_MALFORMED"] = "1"
+
+    result = run_command(
+        [
+            "make",
+            "BACKEND=codespaces-ssh",
+            "CODESPACE=test-space",
+            *engine_dispatch("build"),
+        ],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "invalid state" in result.stdout
+    all_calls = calls(Path(env["FAKE_LOG"]))
+    assert not any(call[0] in {"ssh", "rsync"} for call in all_calls)
+
+
+@pytest.mark.integration
+def test_codespaces_stop_preserves_provider_workspace_state(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    env = fake_environment(fake_bin, tmp_path)
+    sentinel = Path(env["FAKE_REMOTE"]) / "provider-workspace-sentinel"
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.write_text("rebuildable cache\n", encoding="utf-8")
+
+    run_command(
+        ["make", "BACKEND=codespaces-ssh", "CODESPACE=test-space", "stop"],
+        cwd=prototype,
+        env=env,
+    )
+    result = run_command(
+        [
+            "make",
+            "BACKEND=codespaces-ssh",
+            "CODESPACE=test-space",
+            *engine_dispatch("build"),
+        ],
+        cwd=prototype,
+        env=env,
+    )
+
+    assert sentinel.read_text(encoding="utf-8") == "rebuildable cache\n"
+    assert "resource=started" in result.stdout
+
+    reused = run_command(
+        [
+            "make",
+            "BACKEND=codespaces-ssh",
+            "CODESPACE=test-space",
+            *engine_dispatch("build"),
+        ],
+        cwd=prototype,
+        env=env,
+    )
+    assert "resource=reused" in reused.stdout
+
+
+@pytest.mark.integration
+def test_codespaces_native_oci_rebuilds_once_and_restores_anchor(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    project = external_project(tmp_path / "codespaces-native-oci")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["CODESPACE"] = "test-space"
+    image = "registry.example/science/tools@sha256:" + "a" * 64
+
+    first = run_command(
+        [LAUNCHER, "-b", "codespaces", "--image", image, "build"],
+        cwd=project,
+        env=env,
+    )
+    second = run_command(
+        [LAUNCHER, "-b", "codespaces", "--image", image, "build"],
+        cwd=project,
+        env=env,
+    )
+
+    remote = Path(env["FAKE_REMOTE"])
+    assert (remote / "rebuild-count").read_text(encoding="utf-8").splitlines() == [
+        "rebuild"
+    ]
+    assert (remote / "cloudmake-oci.Dockerfile").read_text(
+        encoding="utf-8"
+    ).startswith(f"FROM {image}\n")
+    assert "Codespaces OCI environment changed" in first.stdout
+    assert "oci-environment=provider-native" in first.stdout
+    assert "state=rebuilt" in first.stdout
+    assert "Codespaces OCI environment changed" not in second.stdout
+    assert "state=reused" in second.stdout
+    latest = next(Path(env["CLOUDMAKE_STATE_HOME"]).rglob("runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["runner"]["runtime"] == "provider-native"
+    assert provenance["runner"]["digest"] == "sha256:" + "a" * 64
+    serialized = json.dumps(calls(Path(env["FAKE_LOG"])))
+    assert ".cloudmake-oci-runner.py" not in serialized
+
+    restored = run_command(
+        [LAUNCHER, "-b", "codespaces", "--native", "build"],
+        cwd=project,
+        env=env,
+    )
+    assert "Codespaces OCI environment changed" in restored.stdout
+    assert "oci-environment=native state=restored" in restored.stdout
+    assert len((remote / "rebuild-count").read_text(encoding="utf-8").splitlines()) == 2
+    assert not (remote / "native-oci-environment.json").exists()
+
+
+@pytest.mark.integration
+def test_codespaces_native_oci_rebuild_failure_never_submits_target(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    project = external_project(tmp_path / "codespaces-native-oci-rebuild-failure")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["CODESPACE"] = "test-space"
+    env["FAKE_GH_REBUILD_FAIL"] = "1"
+    image = "registry.example/science/tools@sha256:" + "a" * 64
+
+    result = run_command(
+        [LAUNCHER, "-b", "codespaces", "--image", image, "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "environment preparation failed" in result.stdout
+    remote = Path(env["FAKE_REMOTE"])
+    marker = json.loads(
+        (remote / "native-oci-environment.json").read_text(encoding="utf-8")
+    )
+    assert marker["status"] == "preparing"
+    all_calls = calls(Path(env["FAKE_LOG"]))
+    assert not any(call[0] in {"ssh", "rsync"} for call in all_calls)
+
+
+@pytest.mark.integration
 def test_colab_ssh_builds_proxy_configuration_and_uses_common_transport(
     prototype: Path, fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -2877,6 +3132,8 @@ def test_engine_defines_no_project_target_shortcuts(
         "session_reuse",
         "capability",
         "persistence_capability",
+        "lifecycle_control",
+        "workspace_durability",
         "internet_inbound",
         "internet_outbound",
     ),
@@ -2886,6 +3143,8 @@ def test_engine_defines_no_project_target_shortcuts(
             "yes",
             "execute",
             "native-persistence",
+            "local",
+            "host-persistent",
             "inherited",
             "inherited",
         ),
@@ -2894,6 +3153,8 @@ def test_engine_defines_no_project_target_shortcuts(
             "yes",
             "incremental-sync",
             "checkpoint-persistence",
+            "provider-managed",
+            "ephemeral",
             "no",
             "yes",
         ),
@@ -2902,6 +3163,8 @@ def test_engine_defines_no_project_target_shortcuts(
             "no",
             "gpu",
             "checkpoint-persistence",
+            "per-target",
+            "ephemeral",
             "no",
             "conditional",
         ),
@@ -2910,15 +3173,28 @@ def test_engine_defines_no_project_target_shortcuts(
             "yes",
             "shell",
             "native-persistence",
+            "provider-managed",
+            "stop-persistent",
             "conditional",
             "conditional",
         ),
-        ("colab-ssh", "yes", "gpu", None, "no", "yes"),
+        (
+            "colab-ssh",
+            "yes",
+            "gpu",
+            None,
+            "provider-managed",
+            "ephemeral",
+            "no",
+            "yes",
+        ),
         (
             "host-ssh",
             "yes",
             "incremental-sync",
             "native-persistence",
+            "externally-managed",
+            "host-persistent",
             "inherited",
             "inherited",
         ),
@@ -2927,6 +3203,8 @@ def test_engine_defines_no_project_target_shortcuts(
             "yes",
             "persistent-storage",
             "native-persistence",
+            "provider-managed",
+            "stop-persistent",
             "conditional",
             "conditional",
         ),
@@ -2938,6 +3216,8 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
     session_reuse: str,
     capability: str,
     persistence_capability: str | None,
+    lifecycle_control: str,
+    workspace_durability: str,
     internet_inbound: str,
     internet_outbound: str,
 ) -> None:
@@ -2948,6 +3228,8 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
     if backend == "kaggle-notebook":
         assert "product-status-reason=fresh VM and full checkpoint materialization" in result.stdout
     assert f"session-reuse={session_reuse}" in result.stdout
+    assert f"lifecycle-control={lifecycle_control}" in result.stdout
+    assert f"workspace-durability={workspace_durability}" in result.stdout
     assert capability in result.stdout
     if persistence_capability is None:
         assert "native-persistence" not in result.stdout
@@ -2959,9 +3241,12 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
         if backend == "kaggle-notebook"
         else "crun"
         if backend == "colab-notebook"
+        else "none"
+        if backend == "codespaces-ssh"
         else "podman docker nerdctl proot"
     )
     assert f"oci-runtimes={expected_oci}" in result.stdout
+    assert f"oci-native={'yes' if backend == 'codespaces-ssh' else 'no'}" in result.stdout
     assert f"internet-inbound={internet_inbound}" in result.stdout
     assert f"internet-outbound={internet_outbound}" in result.stdout
 
@@ -2995,6 +3280,52 @@ def test_backend_contract_rejects_unknown_internet_capability_values(
 
     assert result.returncode != 0
     assert f"invalid {field}" in result.stdout
+
+
+def test_backend_contract_rejects_invalid_native_oci_value(tmp_path: Path) -> None:
+    descriptor = tmp_path / "invalid-native-oci-backend.mk"
+    descriptor.write_text(
+        "BACKEND := invalid-native-oci\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_SESSION_REUSE := no\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_OCI_NATIVE := maybe\n"
+        "BACKEND_OCI_RUNTIMES := none\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert "invalid BACKEND_OCI_NATIVE" in result.stdout
+
+
+def test_backend_contract_rejects_nested_runtime_for_native_oci(
+    tmp_path: Path,
+) -> None:
+    descriptor = tmp_path / "invalid-native-oci-runtime.mk"
+    descriptor.write_text(
+        "BACKEND := invalid-native-oci-runtime\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_SESSION_REUSE := yes\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_OCI_NATIVE := yes\n"
+        "BACKEND_OCI_RUNTIMES := docker\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert "BACKEND_OCI_NATIVE=yes must declare OCI runtime" in result.stdout
 
 
 def test_backend_contract_rejects_unknown_backend_status(tmp_path: Path) -> None:

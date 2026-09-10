@@ -195,7 +195,8 @@ is known.
 | Backend | OCI execution | Runtime selection | CDI |
 | --- | --- | --- | --- |
 | `local` | supported | Podman, Docker, nerdctl, then PRoot fallback | native CDI or validated PRoot bind/environment translation |
-| `host-ssh`, `codespaces-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | native CDI or validated PRoot translation |
+| `host-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | native CDI or validated PRoot translation |
+| `codespaces-ssh` | supported | selected image becomes the provider dev container; no nested runtime | none; qualified CPU backend |
 | `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one provider-qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
 | `kaggle-notebook` | deprecated experimental profile for trusted Linux images | `skopeo` + `umoci` materialization and PRoot | qualified NVIDIA `all` device translated from generated CDI; fail closed when absent |
 
@@ -205,6 +206,8 @@ These choices are backend declarations rather than launcher special cases:
 BACKEND_OCI_RUNTIMES := podman docker nerdctl proot  # local and SSH hosts
 BACKEND_OCI_RUNTIMES := crun                         # Colab notebook
 BACKEND_OCI_RUNTIMES := proot                        # Kaggle notebook
+BACKEND_OCI_NATIVE := yes                            # Codespaces dev container
+BACKEND_OCI_RUNTIMES := none                         # no nested runtime there
 ```
 
 The list is ordered and may contain multiple dynamically qualified options.
@@ -213,6 +216,14 @@ the selected VM. For example, if Podman is installed but its machine or daemon
 is unavailable, Docker may qualify next. This readiness fallback occurs before
 image preparation and target submission; Cloudmake never switches runtimes and
 replays a project target after submission.
+
+Codespaces uses the orthogonal `oci-native=yes` contract. Its anchor supplies
+SSH and synchronization; a selected digest becomes the dev-container base and
+Cloudmake adds the same small transport surface. The provider rebuild is image
+preparation, not target submission, and is skipped while the recorded digest
+and adapter revision match. Codespaces is qualified as a CPU backend and
+rejects CDI requests before rebuild. The complete boundary is documented in
+[Codespaces native OCI](codespaces-native-oci.md).
 
 Cloudmake installs `skopeo`, `umoci`, and `crun` as transient runner plumbing on
 a Colab VM when needed. It does not install the project's compiler or tool

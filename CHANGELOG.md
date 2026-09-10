@@ -3,6 +3,37 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## 2.2.0 - 2026-09-09
+
+- Qualify GitHub Codespaces as the reference CPU remote workstation with
+  provider-managed wake/reuse/stop behavior and a stop-persistent `/workspaces`
+  tree that avoids checkpoint transfer while remaining disposable and
+  rebuildable from source plus Make.
+- Add orthogonal backend declarations for lifecycle control, workspace
+  durability, and provider-native OCI execution without changing API 1 or the
+  target-first CLI surface; existing third-party descriptors receive explicit
+  compatibility defaults.
+- Make a digest-pinned OCI image the native Codespaces dev-container
+  workstation environment. Cloudmake performs one provider rebuild on image
+  transition, reuses the same prepared image across targets and stop/start,
+  restores the neutral anchor with `--native`, and never launches a nested OCI
+  runtime.
+- Persist a non-secret Codespace selection locally per project and report
+  started versus reused resource state plus rebuilt versus reused native OCI
+  environment state in compact execution diagnostics.
+- Serialize full operations by Codespace name on the controlling host, record
+  pre-rebuild intent for interrupted-transition recovery, fail before source
+  synchronization or target submission when preparation is unsuccessful, and
+  preserve target exit status through provider-native OCI receipts and normal
+  execution provenance.
+- Keep Codespaces CPU-only and reject CDI requests before rebuild. The adapter
+  adds no privileged mode, capabilities, relaxed security options, host socket,
+  or device mount; selected Dev Container image metadata remains trusted input
+  under GitHub's provider-native VM boundary.
+- Add fake-provider lifecycle, image-transition, recovery, locking, target
+  failure, and backward-compatibility coverage plus an opt-in live Codespaces
+  workstation gate that restores and stops its resource.
+
 ## 2.1.1 - 2026-09-09
 
 - Inspect digest-pinned images through the selected native runtime after pull,
