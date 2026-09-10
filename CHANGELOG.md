@@ -3,7 +3,7 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
-## 2.2.0 - 2026-09-09
+## 2.2.0 - 2026-09-10
 
 - Qualify GitHub Codespaces as the reference CPU remote workstation with
   provider-managed wake/reuse/stop behavior and a stop-persistent `/workspaces`
@@ -33,6 +33,11 @@ once a version is published as a GitHub release.
 - Add fake-provider lifecycle, image-transition, recovery, locking, target
   failure, and backward-compatibility coverage plus an opt-in live Codespaces
   workstation gate that restores and stops its resource.
+- Harden the live Codespaces transport with current GitHub CLI qualification,
+  bounded retries for classified pre-submission control-plane failures, SSH
+  connection reuse through a short user-owned control socket, confirmed
+  shutdown, and accurate stopped-to-started lifecycle reporting. Project Make
+  execution remains once-only and is never covered by these retries.
 
 ## 2.1.1 - 2026-09-09
 
