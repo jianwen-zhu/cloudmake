@@ -142,6 +142,36 @@ image, proves target and stop/start reuse, collects an artifact, restores the
 neutral anchor, and stops the resource. It consumes Codespaces quota and is
 never part of the offline suite.
 
+The release-level CPU-consumer gate then uses one digest-pinned Python
+workstation and the same Codespace for ECE326 and a bounded ECE467 path:
+
+```sh
+export CODESPACE=cloudmake-course-gate-name
+export CLOUDMAKE_TEST_LIVE_CODESPACES_COURSES=1
+tests/acceptance/codespaces-courses/run.sh \
+  /path/to/ece326-lab1 /path/to/ece326-lab4-pair \
+  /path/to/ece467-labs /tmp/cloudmake-codespaces-course-evidence
+```
+
+It proves separate project identities, provider-native OCI reuse, ECE326
+outbound downloads/tests/workload, ECE326 paired Lab 4 calibration, and ECE467
+project plus short CPU reference paths. See the
+[consumer gate contract](acceptance/codespaces-courses/README.md).
+
+Finally, the Codespaces network gate starts a project-provided HTTP listener,
+reaches a unique marker through GitHub's authenticated private port forwarding,
+and stops both listener and resource:
+
+```sh
+export CODESPACE=cloudmake-network-gate-name
+export CLOUDMAKE_TEST_LIVE_CODESPACES_NETWORK=1
+tests/acceptance/codespaces-network/run.sh \
+  /tmp/cloudmake-codespaces-network-evidence
+```
+
+This proves workload ingress without public exposure or credential custody. See
+the [network gate contract](acceptance/codespaces-network/README.md).
+
 `tests/contract/` exercises the public `cloudmake` launcher interface, including
 configuration precedence, aliases, external project isolation, arbitrary target
 dispatch, zero reserved project names, target-agnostic artifact collection,

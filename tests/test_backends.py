@@ -3189,7 +3189,7 @@ def test_engine_defines_no_project_target_shortcuts(
             "provider-managed",
             "stop-persistent",
             "conditional",
-            "conditional",
+            "yes",
         ),
         (
             "colab-ssh",

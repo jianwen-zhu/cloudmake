@@ -14,7 +14,10 @@ pushed to `main` only after their gates pass.
    require the live Colab CUDA gate; provider-specific changes require that
    provider's smoke test. Codespaces provider-native OCI changes require
    `tests/acceptance/codespaces-workstation/run.sh`, including neutral-anchor
-   restoration and confirmed stop.
+   restoration and confirmed stop. Codespaces release qualification also runs
+   the bounded ECE326/ECE467 CPU-consumer gate documented in
+   `tests/acceptance/codespaces-courses/README.md` and the authenticated inbound
+   workload gate in `tests/acceptance/codespaces-network/README.md`.
 5. Confirm `git diff --check`, a clean working tree, and no active temporary
    compute.
 6. Create an annotated `v<VERSION>` tag and push `main` plus that tag.

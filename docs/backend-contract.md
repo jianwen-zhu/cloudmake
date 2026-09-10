@@ -115,12 +115,13 @@ Every maintained backend declares `BACKEND_INTERNET_INBOUND` and
 | `inherited` | Cloudmake uses the already configured local or user-managed host behavior. |
 | `unknown` | Not yet qualified; also the API-1 compatibility default for older third-party descriptors. |
 
-“Inbound” means a public Internet connection initiated toward the workload. It
-does not include authenticated provider control channels such as `colab exec`,
-Kaggle notebook submission, an SSH proxy, or a provider port-forwarding
-service. Cloudmake reports these properties; it does not configure firewalls,
-publish ports, or promise that every external host is reachable. A conditional
-outbound declaration requires a bounded pre-target probe when the selected
+“Inbound” means a connection initiated from outside the provider toward a
+project-selected workload port. A provider workload-forwarding service counts;
+authenticated control channels used only to submit commands, such as
+`colab exec`, Kaggle notebook submission, or Cloudmake's SSH transport, do not.
+Cloudmake reports these properties; it does not configure firewalls, publish
+ports, or promise that every external host is reachable. A conditional outbound
+declaration requires a bounded pre-target probe when the selected
 invocation explicitly asks Cloudmake for network-dependent preparation. Native
 project targets remain opaque; Cloudmake does not infer their network needs
 from target names or recipes. A provider metadata request alone is not positive

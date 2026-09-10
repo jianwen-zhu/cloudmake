@@ -48,6 +48,30 @@ rebuild does not discard source synchronization state or project-generated
 files. Those files remain a disposable acceleration cache: source plus Make
 must still be sufficient to reconstruct them after provider deletion.
 
+## Network boundary
+
+GitHub documents public-Internet outbound connections as part of the
+[Codespaces security model](https://docs.github.com/en/codespaces/reference/security-in-github-codespaces),
+so this backend declares `internet-outbound=yes`. The v2.2 consumer gate
+exercises that capability through ECE326's actual package, Git, and model
+downloads rather than a synthetic connectivity probe.
+
+Codespaces blocks direct incoming Internet connections. Applications can be
+exposed through GitHub's
+[port-forwarding service](https://docs.github.com/en/codespaces/developing-in-a-codespace/forwarding-ports-in-your-codespace),
+whose private, organization, and public visibility options depend on account
+and organization policy. The backend therefore declares
+`internet-inbound=conditional`. Cloudmake does not create or change forwarded
+ports. Its authenticated SSH tunnel is a provider control channel and, by the
+backend contract, is not public inbound access.
+
+Cloudmake v2.2 qualifies this provider capability through a separate live gate:
+a project Make target starts a loopback HTTP listener, `gh codespace ports
+forward` creates an authenticated private tunnel, and the host retrieves a
+unique marker before both listener and compute are stopped. Public visibility
+is deliberately outside the gate. Standard Dev Container `forwardPorts`
+consumption belongs to the v2.3 cross-backend workstation milestone.
+
 ## Adapter boundary
 
 A general OCI image is not automatically a usable Codespaces development
@@ -91,3 +115,18 @@ the image. A selected workstation image is therefore trusted input and remains
 subject to GitHub's policy. This is a documented provider-native boundary, not
 the stricter Cloudmake-controlled OCI adapter boundary used on Colab and other
 hosts.
+
+## Consumer qualification
+
+The v2.2 release gate uses the same Codespace and digest-pinned Python
+workstation image for two independent course consumers. ECE326 runs its clean
+Lab 1 setup, 17-test suite, Bottle workload, and paired Lab 4 calibration (36
+reference and 36 candidate tests, all repetitions complete, Gold). A bounded
+ECE467 CPU path runs all project starter checks, CPU AXPY and GEMM references,
+and fast llm.c conformance and checkpoint-reload tests. CUDA, TileLang, model
+downloads, and long ECE467 benchmarks are deliberately excluded because this
+backend is qualified as CPU-only.
+
+This gate tests application-level use of the provider-native OCI environment;
+the separate workstation gate tests image transitions, stop/start reuse,
+artifact collection, neutral-anchor restoration, and confirmed shutdown.

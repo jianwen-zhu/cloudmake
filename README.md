@@ -242,9 +242,12 @@ tools separate from mutable work. Cloudmake 2.2 qualifies provider-managed,
 stop-persistent Codespaces as a CPU remote-workstation reference: ordinary
 targets wake or reuse the named resource while its `/workspaces` tree avoids
 checkpoint transfer, and a selected OCI image becomes the native Codespaces
-workstation environment instead of a nested container. The storage-neutral lifecycle and runtime
-contracts are documented in [Stateful workspaces](docs/stateful-workspaces.md)
-and [Execution environments and OCI runner](docs/execution-environments.md).
+workstation environment instead of a nested container. Cloudmake 2.3 will make
+the standard Dev Container description the portable workstation contract
+across qualified backends, retaining `--image` as its minimal intrusion-free
+shorthand. The storage-neutral lifecycle and runtime contracts are documented
+in [Stateful workspaces](docs/stateful-workspaces.md) and
+[Execution environments and OCI runner](docs/execution-environments.md).
 
 ### Tool repository and project repository are separate
 
@@ -1253,6 +1256,28 @@ image is trusted input because GitHub may consume embedded Dev Container
 metadata during its provider-native rebuild. See
 [Codespaces native OCI](docs/codespaces-native-oci.md).
 
+Codespaces permits workload connections to the public Internet, and the v2.2
+course gate proves that path with ECE326's real package, Git, and model
+downloads. Incoming connections are blocked by the VM firewall unless exposed
+through GitHub's authenticated or public port-forwarding service; visibility
+can also be restricted by organization policy. Cloudmake's authenticated SSH
+tunnel is a provider control channel, not public inbound connectivity, and
+Cloudmake does not publish application ports.
+
+A project target may start a listener and the existing GitHub CLI can expose it
+through a private authenticated tunnel without changing the Makefile contract:
+
+```sh
+# serve is supplied by this project's Makefile and listens on port 8080.
+cloudmake serve PORT=8080
+gh codespace ports forward 8080:8080 -c "$CODESPACE"
+```
+
+The v2.2 live network gate verifies this path end to end without making the port
+public. GitHub also supports provider URLs with private, organization, or public
+visibility subject to policy. First-class standard Dev Container
+`forwardPorts` consumption is the v2.3 portability milestone.
+
 ### Colab SSH backend
 
 This is an explicit paid-tier backend, not a fallback for `colab`. It provides a
@@ -1452,7 +1477,8 @@ transport:
 | `local`, `host-ssh` | inherited from the selected host | inherited from the selected host |
 | `colab-notebook`, `colab-ssh` | no | yes |
 | `kaggle-notebook` | no | conditional; requested per job and probed before a network-dependent target |
-| `codespaces-ssh`, `lightning-studio-ssh` | conditional on provider configuration | conditional on provider/account policy |
+| `codespaces-ssh` | conditional on GitHub port-forwarding visibility and policy | yes |
+| `lightning-studio-ssh` | conditional on provider configuration | conditional on provider/account policy |
 
 Authenticated provider control is not public inbound connectivity. For
 example, `colab exec` can submit work over Google's runtime proxy even though
@@ -1577,6 +1603,19 @@ retrieves an artifact, restores the neutral anchor, and stops the resource. It
 consumes Codespaces quota and therefore runs only from an explicitly
 authenticated maintainer host. See
 [`tests/acceptance/codespaces-workstation`](tests/acceptance/codespaces-workstation/README.md).
+
+Release qualification also runs a bounded CPU-consumer gate against ECE326 and
+ECE467. It uses one digest-pinned Python workstation image and one Codespace,
+proves image/resource reuse across separate projects, and stops the compute
+after ECE326 tests and a real workload plus ECE467 project, CPU AXPY/GEMM, and
+fast llm.c checks. See
+[`tests/acceptance/codespaces-courses`](tests/acceptance/codespaces-courses/README.md).
+
+The inbound-network gate starts a project-owned listener, reaches its unique
+marker through GitHub's authenticated private port forwarding, and stops both
+listener and compute. It neither publishes the port nor handles GitHub
+credentials. See
+[`tests/acceptance/codespaces-network`](tests/acceptance/codespaces-network/README.md).
 
 GitHub Actions runs only credential-free automation: the offline suite on Linux
 and macOS, syntax and notebook checks, and weekly pinned-upstream CUDA project

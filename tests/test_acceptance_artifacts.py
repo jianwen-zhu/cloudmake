@@ -10,6 +10,15 @@ HARNESS = PROJECT_ROOT / "tests" / "acceptance" / "orfs-checkpoint" / "run.sh"
 PROJECT = PROJECT_ROOT / "tests" / "acceptance" / "orfs-checkpoint" / "project"
 OCI_HARNESS = PROJECT_ROOT / "tests" / "acceptance" / "orfs-oci" / "run.sh"
 OCI_PROJECT = PROJECT_ROOT / "tests" / "acceptance" / "orfs-oci" / "project"
+CODESPACES_COURSES = (
+    PROJECT_ROOT / "tests" / "acceptance" / "codespaces-courses" / "run.sh"
+)
+CODESPACES_NETWORK = (
+    PROJECT_ROOT / "tests" / "acceptance" / "codespaces-network" / "run.sh"
+)
+CODESPACES_NETWORK_PROJECT = (
+    PROJECT_ROOT / "tests" / "acceptance" / "codespaces-network" / "project"
+)
 
 
 def test_orfs_acceptance_harness_is_valid_posix_shell() -> None:
@@ -92,5 +101,51 @@ def test_orfs_oci_acceptance_does_not_embed_credentials() -> None:
         "RESTIC_PASSWORD",
         "docker login",
         "Authorization:",
+    ):
+        assert forbidden not in combined
+
+
+def test_codespaces_course_gate_is_bounded_and_reuses_one_workstation() -> None:
+    subprocess.run(["sh", "-n", CODESPACES_COURSES], check=True)
+    source = CODESPACES_COURSES.read_text(encoding="utf-8")
+
+    assert "leaderboard-pair-ready" in source
+    assert "lab-axpy-01-cpu" in source
+    assert "lab-gemm-01-cpu" in source
+    assert "llmc-test" in source
+    assert "ttl-build" not in source
+    assert "--gpu" not in source
+    assert source.count("course_image") >= 4
+    assert "--stop" in source
+
+
+def test_codespaces_network_gate_is_private_and_cleans_up() -> None:
+    subprocess.run(["sh", "-n", CODESPACES_NETWORK], check=True)
+    source = CODESPACES_NETWORK.read_text(encoding="utf-8")
+    makefile = (CODESPACES_NETWORK_PROJECT / "Makefile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "codespace ports forward" in source
+    assert "visibility=authenticated-private" in source
+    assert "ports visibility" not in source
+    assert "public" not in source
+    assert "stop-server" in source
+    assert "--stop" in source
+    assert "python3 -m http.server" in makefile
+    assert "CLOUDMAKE" not in makefile
+
+
+def test_codespaces_live_gates_do_not_embed_credentials() -> None:
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (CODESPACES_COURSES, CODESPACES_NETWORK)
+    )
+    for forbidden in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "Authorization:",
+        "gh auth token",
+        "gh auth login",
     ):
         assert forbidden not in combined

@@ -38,6 +38,18 @@ once a version is published as a GitHub release.
   connection reuse through a short user-owned control socket, confirmed
   shutdown, and accurate stopped-to-started lifecycle reporting. Project Make
   execution remains once-only and is never covered by these retries.
+- Qualify the same provider-native CPU workstation against real ECE326 and
+  bounded ECE467 consumers: ECE326 Lab 1 passed 17 tests and a Bottle workload,
+  paired Lab 4 passed 36 reference plus 36 candidate tests and all benchmark
+  repetitions at Gold, while ECE467 passed its project checks, CPU AXPY/GEMM
+  references, and fast llm.c conformance path. The run reused one digest-pinned
+  OCI workstation and one stopped/restarted Codespace, and exercised real
+  outbound package, Git, and model downloads.
+- Qualify inbound workload access through GitHub's authenticated private
+  Codespaces port forwarding with a project-provided listener and a unique
+  end-to-end response marker. Direct VM ingress remains blocked, public
+  visibility remains policy-conditional, and Cloudmake takes no credential
+  custody or implicit public-exposure authority.
 
 ## 2.1.1 - 2026-09-09
 
