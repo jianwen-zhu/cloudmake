@@ -13,13 +13,19 @@ def normalize(backend: str, output: str) -> str:
         return "absent"
     if any(fragment in value for fragment in ("complete", "succeeded", "success")):
         return "succeeded" if backend == "kaggle-notebook" else "ready"
-    if any(fragment in value for fragment in ("pending", "queued", "starting", "provisioning")):
+    if any(
+        fragment in value
+        for fragment in ("pending", "queued", "starting", "provisioning")
+    ):
         return "starting"
     if "running" in value:
         return "running" if backend == "kaggle-notebook" else "ready"
     if any(fragment in value for fragment in ("available", "ready", "active", "idle")):
         return "ready"
-    if any(fragment in value for fragment in ("stopped", "shutdown", "inactive")):
+    if any(
+        fragment in value
+        for fragment in ("stopped", "shutdown", "inactive", "terminated", "suspended")
+    ):
         return "stopped"
     return "unknown"
 

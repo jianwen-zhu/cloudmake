@@ -1,7 +1,7 @@
 # Test suite
 
 The default suite is deliberately offline. Provider integration tests put fake
-`colab`, `kaggle`, `gh`, `lightning`, `ssh`, and `rsync` executables at the front
+`colab`, `kaggle`, `gh`, `gcloud`, `lightning`, `ssh`, and `rsync` executables at the front
 of `PATH`; they never allocate cloud compute or use account credentials.
 
 Run everything that is implemented today:
@@ -23,6 +23,7 @@ python3 -m pytest tests/test_notebooks.py
 python3 -m pytest tests/test_colab_allocate.py
 python3 -m pytest tests/test_target_result.py
 python3 -m pytest tests/test_vm_capabilities.py
+python3 -m pytest tests/test_gcp_lifecycle.py tests/test_gcp_ssh.py tests/test_gcp_cli.py
 python3 -m pytest -m integration
 ```
 
@@ -70,8 +71,26 @@ CLOUDMAKE_TEST_LIVE_LIGHTNING=1 python3 -m pytest \
 
 Do not copy Lightning configuration, login tokens, or SSH keys into GitHub
 Actions. Until this gate succeeds and its evidence is retained for the current
-service and client, `lightning-studio-ssh` remains `unqualified`. The repository
-provides two credential-free hosted automation layers:
+service and client, `lightning-studio-ssh` remains `unqualified`.
+
+The GCP 2.4 candidate has separate local-only CPU and paid G4 gates. They use an
+already-provisioned VM, retain its disk, and stop compute without creating or
+deleting infrastructure:
+
+```sh
+CLOUDMAKE_TEST_LIVE_GCP=1 GCP_GATE=cpu \
+  tests/acceptance/gcp-workstation/run.sh /tmp/cloudmake-gcp-cpu-evidence
+
+CLOUDMAKE_TEST_LIVE_GCP=1 GCP_GATE=g4 \
+  GCP_G4_IMAGE=REGISTRY/IMAGE@sha256:DIGEST \
+  tests/acceptance/gcp-workstation/run.sh /tmp/cloudmake-gcp-g4-evidence
+```
+
+Set `GCP_PROJECT`, `GCP_ZONE`, and `GCP_INSTANCE` first. The detailed contract,
+billing warning, image requirements, and cleanup checks are in
+[`acceptance/gcp-workstation`](acceptance/gcp-workstation/README.md).
+
+The repository provides two credential-free hosted automation layers:
 
 - `CI` runs the offline suite on supported macOS/Linux and Python combinations;
 - `Upstream compatibility` runs the pinned public CUDA projects weekly or on

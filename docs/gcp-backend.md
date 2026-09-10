@@ -2,12 +2,12 @@
 
 ## Objective
 
-Cloudmake 2.4 will add one Google Compute Engine backend that makes an already
+Cloudmake 2.4 adds one Google Compute Engine backend that makes an already
 provisioned, single-node VM behave like the other Cloudmake remote workstations:
 
 ```text
 cloudmake TARGET
-  -> validate account, project, zone, instance, quota, and cost boundary
+  -> validate account, project, zone, instance, and cost boundary
   -> start or reuse the named VM
   -> incrementally synchronize the local project
   -> qualify the selected Dev Container and CDI requirements
@@ -15,11 +15,55 @@ cloudmake TARGET
   -> leave generated work on Persistent Disk for the next invocation
 ```
 
-The same backend must represent both an eligible
+The same backend represents both an eligible
 [free-tier `e2-micro` CPU VM](https://docs.cloud.google.com/free/docs/free-cloud-features)
 and paid CPU or accelerator machines, including a user-provisioned G4 VM. The
 backend reports what the selected resource actually is; it never labels a GPU
 as free merely because some Compute Engine usage has a free allowance.
+
+The adapter is currently an **unqualified release candidate**. Its offline
+provider simulation passes, including real rsync through the remote-shell
+adapter and stop/start persistence, but the live `e2-micro` and G4 gates below
+must pass before its status becomes supported.
+
+## Onboarding and daily use
+
+Provisioning stays outside Cloudmake. After an administrator has created the VM
+and disk, install the official Google Cloud CLI and authenticate locally:
+
+```sh
+gcloud auth login
+gcloud compute instances describe VM --project PROJECT --zone ZONE
+```
+
+Save the non-secret resource selection for one project:
+
+```sh
+export GCP_PROJECT=PROJECT
+export GCP_ZONE=ZONE
+export GCP_INSTANCE=VM
+cloudmake --use gcp
+```
+
+For an IAP-only connection, also set `GCP_TUNNEL_THROUGH_IAP=yes` before
+`--use`. These four values are local project preferences. Later use retains the
+ordinary target-first surface:
+
+```sh
+# provision, verify, and benchmark are project-provided Make targets.
+cloudmake provision
+cloudmake verify
+cloudmake benchmark
+cloudmake --stop
+```
+
+Each target describes and starts or reuses the VM before synchronizing source.
+The compact output distinguishes `resource=started` from `resource=reused`.
+The VM name selects its already-provisioned hardware; `--gpu` does not change a
+Compute Engine machine and is therefore rejected rather than pretending to
+allocate an accelerator.
+`--stop` stops compute, confirms the provider state, and retains the disk. The
+next target starts the same VM automatically.
 
 ## Responsibility boundary
 
@@ -40,7 +84,7 @@ Cloudmake owns the operational adapter:
   least-privileged SSH runtime rules available when the host is restricted;
 - validate requested CDI devices against the VM's real drivers and hardware;
 - expose separate inbound and outbound network capability; and
-- report machine type, accelerator, lifecycle state, quota pressure, and the
+- report machine type, accelerator, lifecycle state, billing class, and the
   fact that the resource can incur charges in a compact execution context.
 
 Project Makefiles remain unchanged. Native Make remains the default, and an
@@ -69,10 +113,13 @@ service-account keys, SSH private keys, or `gcloud` configuration to the VM,
 project, provenance, artifact bundle, or persistent disk.
 
 Compute Engine's free allowance is conditional and excludes GPUs and TPUs.
-Cloudmake can describe observed quota, machine configuration, lifecycle, and
-billing exposure, but it cannot guarantee zero cost. A paid-capable resource
+Cloudmake describes observed machine configuration, lifecycle, and billing
+exposure, but it cannot guarantee zero cost. A paid-capable resource
 must produce an explicit compact warning before Cloudmake starts it. Provider
-pricing remains authoritative.
+quota errors retain their provider diagnostic and fail before source sync or
+target submission. Cloudmake does not attempt to reproduce Google's
+machine/accelerator-specific quota model locally; provider quota and pricing
+remain authoritative.
 
 ## Non-goals
 
@@ -102,4 +149,6 @@ The 2.4 release requires:
    control files, logs, provenance, artifacts, or the remote workspace.
 
 The CPU and GPU gates may use different machine profiles, but they qualify one
-backend and one user-facing Make workflow.
+backend and one user-facing Make workflow. The local-only harness and its
+billing-safe cleanup contract are documented in
+[`tests/acceptance/gcp-workstation`](../tests/acceptance/gcp-workstation/README.md).

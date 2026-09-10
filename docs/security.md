@@ -71,6 +71,15 @@ lifecycle remain with the user and host administrator or cloud provider. The
 host alias may be saved in local user preferences, but repository-shared
 configuration cannot select it.
 
+For `gcp-compute-ssh`, Cloudmake stores only the selected project, zone,
+instance name, and IAP-routing boolean in local per-project configuration. The
+official `gcloud` client retains authentication and SSH-key custody. Cloudmake
+must not read, upload, serialize, or copy Cloud SDK configuration, OAuth refresh
+tokens, Application Default Credentials, service-account keys, access tokens,
+or SSH private keys. Its generated remote-shell wrapper contains only those
+non-secret resource coordinates and invokes `gcloud compute ssh`; it is kept in
+the local state directory with user-only permissions.
+
 Bundled host templates are inert examples. Cloudmake can list or print them, but
 does not install a fragment into `~/.ssh`, replace existing configuration, set
 host-key policy, or generate a key. Users must review and install a fragment

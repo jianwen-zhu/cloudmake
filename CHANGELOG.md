@@ -3,6 +3,24 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## Unreleased (2.4.0 candidate)
+
+- Add an unqualified single-node Google Compute Engine backend for an existing
+  VM. It starts or reuses the named instance, adapts `gcloud compute ssh` to the
+  common SSH/rsync transport, preserves generated work on attached Persistent
+  Disk across stop/start, and never provisions or deletes infrastructure.
+- Persist only non-secret project, zone, instance, and optional IAP-routing
+  selection. Keep Cloud SDK authentication, OAuth material, service-account
+  keys, access tokens, and SSH private keys in their official host clients.
+- Report observed machine type, accelerator attachment, lifecycle, and a
+  conditional-free-allowance versus paid-capable billing class before work.
+  Paid-capable resources warn before start; provider quota/billing errors fail
+  without submitting the project target.
+- Add fake-provider coverage for lifecycle ambiguity, start/reuse/stop,
+  native-disk persistence, the `gcloud` remote-shell adapter, real incremental
+  rsync, target-at-most-once provenance, selection persistence, and credential
+  exclusion. Live `e2-micro` and paid G4 qualification remain release gates.
+
 ## 2.3.1 - 2026-09-10
 
 - Make the local OCI runtime-selection regression hermetic when the test host

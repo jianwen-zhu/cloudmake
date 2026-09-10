@@ -44,7 +44,7 @@ mechanism:
 | --- | --- | --- |
 | Managed checkpoint | `colab-notebook` | Incrementally restore and publish an encrypted workspace through Google Drive. |
 | Experimental managed checkpoint | `kaggle-notebook` | Retain the deprecated provider-private alternating-output implementation for compatibility and coarse batch experiments. |
-| Native persistence | `local`, `host-ssh`, `codespaces-ssh`, `lightning-studio-ssh` | Keep using the backend's existing durable project tree; perform no checkpoint transfer. |
+| Native persistence | `local`, `host-ssh`, `codespaces-ssh`, `gcp-compute-ssh`, `lightning-studio-ssh` | Keep using the backend's existing durable project tree; perform no checkpoint transfer. |
 | Unsupported | `colab-ssh` | Reject before provider contact rather than imply durability the transport cannot supply. |
 
 Persistence remains an explicit per-project selection in every mode. Native
@@ -59,6 +59,13 @@ the named provider resource, while the same volume remains attached. No archive
 is created and no host round trip occurs. A provider rebuild retains that
 directory, but deletion or retention expiry does not; the next resource must be
 able to reconstruct it from local source and Make.
+
+For Compute Engine, the attached Persistent Disk is likewise
+`stop-persistent`. Cloudmake 2.4 starts or stops compute but neither snapshots
+nor transfers that disk. The incremental SSH workspace survives only while the
+selected VM and disk survive; deletion, corruption, zone availability, billing,
+and retention remain Google Cloud responsibilities. `--persist` acknowledges
+this native optimization and adds no GCS or Google Drive dependency.
 
 ## Non-goals
 

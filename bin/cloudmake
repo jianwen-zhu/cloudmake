@@ -45,6 +45,9 @@ ALIASES = {
     "kaggle-notebook": "kaggle-notebook",
     "codespaces": "codespaces-ssh",
     "codespaces-ssh": "codespaces-ssh",
+    "gcp": "gcp-compute-ssh",
+    "gcp-compute": "gcp-compute-ssh",
+    "gcp-compute-ssh": "gcp-compute-ssh",
     "colab-ssh": "colab-ssh",
     "ssh": "host-ssh",
     "host-ssh": "host-ssh",
@@ -56,6 +59,7 @@ BACKENDS = {
     "colab-notebook": ("yes", "native notebook API", "colab"),
     "kaggle-notebook": ("no", "private notebook job", "kaggle"),
     "codespaces-ssh": ("yes", "SSH and rsync", "gh"),
+    "gcp-compute-ssh": ("yes", "gcloud SSH and rsync", "gcloud"),
     "colab-ssh": ("yes", "paid-tier SSH and rsync", "colab"),
     "host-ssh": ("yes", "user-managed SSH and rsync", "ssh"),
     "lightning-studio-ssh": ("yes", "persistent Studio SSH and rsync", "lightning"),
@@ -73,6 +77,7 @@ PERSISTENCE_MODES = {
     "colab-notebook": "checkpoint",
     "kaggle-notebook": "checkpoint",
     "codespaces-ssh": "native",
+    "gcp-compute-ssh": "native",
     "colab-ssh": "unsupported",
     "host-ssh": "native",
     "lightning-studio-ssh": "native",
@@ -609,7 +614,8 @@ Persistence selection: --persist/--no-persist are local and per project;
                        --checkpoint/--no-checkpoint remain compatible aliases.
 Persistence modes: Colab notebook=encrypted checkpoint; deprecated Kaggle=
                    experimental private-output checkpoint;
-                   local/persistent SSH=native storage (no transfer);
+                   local/persistent SSH=native storage; GCP disk=native
+                   storage (no transfer);
                    Colab SSH=unsupported.
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
@@ -1118,6 +1124,51 @@ def resolve_codespace(config_home: Path, key: str) -> str | None:
     return value
 
 
+def resolve_gcp_resource(config_home: Path, key: str) -> dict[str, str] | None:
+    """Resolve the project-local Compute Engine selection without credentials."""
+    configured = load_json(config_home / "projects" / f"{key}.json").get("gcp")
+    if configured is None:
+        configured = {}
+    if not isinstance(configured, dict):
+        raise UsageError("configured GCP resource must be a JSON object")
+    names = {
+        "project": "GCP_PROJECT",
+        "zone": "GCP_ZONE",
+        "instance": "GCP_INSTANCE",
+    }
+    selected: dict[str, str] = {}
+    for name, environment in names.items():
+        value = os.environ.get(environment, configured.get(name))
+        if value is not None:
+            if not isinstance(value, str) or not value:
+                raise UsageError(f"configured GCP {name} must be a non-empty string")
+            selected[name] = value
+    iap: Any = os.environ.get(
+        "GCP_TUNNEL_THROUGH_IAP", configured.get("tunnel_through_iap", "no")
+    )
+    if iap not in {"yes", "no"}:
+        raise UsageError("GCP_TUNNEL_THROUGH_IAP must be yes or no")
+    selected["tunnel_through_iap"] = str(iap)
+    if not any(name in selected for name in names):
+        return None
+    missing = [
+        environment for name, environment in names.items() if name not in selected
+    ]
+    if missing:
+        raise UsageError(
+            "incomplete GCP resource selection; set " + ", ".join(missing)
+        )
+    patterns = {
+        "project": re.compile(r"^[A-Za-z0-9._:-]+$"),
+        "zone": re.compile(r"^[A-Za-z0-9-]+$"),
+        "instance": re.compile(r"^[A-Za-z0-9-]+$"),
+    }
+    for name, pattern in patterns.items():
+        if pattern.fullmatch(selected[name]) is None:
+            raise UsageError(f"GCP {name} contains unsupported characters")
+    return selected
+
+
 def resolve_preferences(
     project: Path, options: dict[str, Any], config_home: Path, key: str
 ) -> tuple[str, str | None, bool, str | None, bool, str]:
@@ -1429,6 +1480,7 @@ def engine_command(
     assignments: list[str],
     retry_seconds: int | None,
     codespace: str | None = None,
+    gcp_resource: dict[str, str] | None = None,
     allocation_result: Path | None = None,
     remote_target: str | None = None,
     remote_collect_dir: str | None = None,
@@ -1512,6 +1564,19 @@ def engine_command(
                 # Serialize the complete operation across local projects that
                 # share that resource, including reconciliation and dispatch.
                 f"CLOUDMAKE_LOCK_FILE_OVERRIDE={state_home / 'resource-locks' / 'codespaces-ssh' / (codespace + '.lock')}",
+            ]
+        )
+    if backend == "gcp-compute-ssh" and gcp_resource is not None:
+        resource_id = "--".join(
+            (gcp_resource["project"], gcp_resource["zone"], gcp_resource["instance"])
+        )
+        variables.extend(
+            [
+                f"GCP_PROJECT={gcp_resource['project']}",
+                f"GCP_ZONE={gcp_resource['zone']}",
+                f"GCP_INSTANCE={gcp_resource['instance']}",
+                f"GCP_TUNNEL_THROUGH_IAP={gcp_resource['tunnel_through_iap']}",
+                f"CLOUDMAKE_LOCK_FILE_OVERRIDE={state_home / 'resource-locks' / 'gcp-compute-ssh' / (resource_id + '.lock')}",
             ]
         )
     if workspace_id != key:
@@ -1818,6 +1883,8 @@ def run(arguments: list[str]) -> int:
             raise UsageError("workstation runner selection is per project, not global")
         backend = options["use_backend"]
         warn_backend_status(backend)
+        if options["global"] and backend == "gcp-compute-ssh":
+            raise UsageError("the GCP VM selection is per project, not global")
         accelerator_set = options["accelerator_set"]
         accelerator = options["accelerator"]
         if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
@@ -1885,6 +1952,14 @@ def run(arguments: list[str]) -> int:
             saved["accelerator"] = accelerator or ""
         if backend == "host-ssh":
             saved["host"] = ssh_host
+        selected_gcp = None
+        if backend == "gcp-compute-ssh":
+            selected_gcp = resolve_gcp_resource(config_home, key)
+            if selected_gcp is None:
+                raise UsageError(
+                    "the GCP backend requires GCP_PROJECT, GCP_ZONE, and GCP_INSTANCE"
+                )
+            saved["gcp"] = selected_gcp
         selected_codespace = None
         if backend == "codespaces-ssh" and not options["global"]:
             selected_codespace = os.environ.get("CODESPACE")
@@ -1957,6 +2032,12 @@ def run(arguments: list[str]) -> int:
             if selected_codespace is not None
             else ""
         )
+        gcp_note = (
+            f", project={selected_gcp['project']}, zone={selected_gcp['zone']}, "
+            f"instance={selected_gcp['instance']}"
+            if selected_gcp is not None
+            else ""
+        )
         checkpoint_note = (
             f", {persistence_selection_note(selected_persistence, persistence_mode)}"
             if options["checkpoint"] is not None or selected_persistence
@@ -1972,7 +2053,7 @@ def run(arguments: list[str]) -> int:
         device_note = f", devices={','.join(devices)}" if devices else ""
         print(
             f"Saved {scope} backend={backend}{host_note}{accelerator_note}"
-            f"{session_note}{codespace_note}{checkpoint_note}{runner_note}{device_note}; "
+            f"{session_note}{codespace_note}{gcp_note}{checkpoint_note}{runner_note}{device_note}; "
             "subsequent targets reuse this selection."
         )
         if (
@@ -2010,6 +2091,11 @@ def run(arguments: list[str]) -> int:
         options, project, config_home, key
     )
     codespace = resolve_codespace(config_home, key) if backend == "codespaces-ssh" else None
+    gcp_resource = (
+        resolve_gcp_resource(config_home, key)
+        if backend == "gcp-compute-ssh"
+        else None
+    )
     if options["host"] is not None and backend != "host-ssh":
         raise UsageError("--host is valid only with the ssh backend")
     if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
@@ -2026,7 +2112,9 @@ def run(arguments: list[str]) -> int:
         backend=backend, profile=devcontainer, accelerator=accelerator
     )
     managed_checkpoint = checkpoint and persistence_mode == "checkpoint"
-    if action == "environment" and backend not in {"local", "colab-notebook"}:
+    if action == "environment" and backend not in {
+        "local", "colab-notebook", "gcp-compute-ssh"
+    }:
         raise UsageError(
             f"backend {backend!r} does not yet provide an execution-environment profile"
         )
@@ -2058,6 +2146,11 @@ def run(arguments: list[str]) -> int:
         return 0
     if backend == "host-ssh" and ssh_host is None:
         raise UsageError("the ssh backend requires --host HOST")
+    if backend == "gcp-compute-ssh" and gcp_resource is None:
+        raise UsageError(
+            "the GCP backend requires GCP_PROJECT, GCP_ZONE, and GCP_INSTANCE; "
+            "set them once and run: cloudmake --use gcp"
+        )
     warn_backend_status(backend)
 
     if action is None:
@@ -2185,6 +2278,7 @@ def run(arguments: list[str]) -> int:
             assignments=assignments,
             retry_seconds=retry_seconds,
             codespace=codespace,
+            gcp_resource=gcp_resource,
             allocation_result=operation_allocation_path,
             remote_target=remote_target,
             remote_collect_dir=remote_collect_dir,
@@ -2288,6 +2382,14 @@ def run(arguments: list[str]) -> int:
     }
     if ssh_host is not None:
         record["host"] = ssh_host
+    if gcp_resource is not None:
+        record["compute_resource"] = {
+            "provider": "gcp-compute",
+            "project": gcp_resource["project"],
+            "zone": gcp_resource["zone"],
+            "instance": gcp_resource["instance"],
+            "tunnel_through_iap": gcp_resource["tunnel_through_iap"] == "yes",
+        }
     if retry_seconds is not None:
         record["allocation"] = {"attempts": 0, "outcome": "not-attempted"}
     atomic_json(record_path, record)
@@ -2359,6 +2461,7 @@ def run(arguments: list[str]) -> int:
                 assignments=assignments,
                 retry_seconds=retry_seconds,
                 codespace=codespace,
+                gcp_resource=gcp_resource,
                 allocation_result=allocation_path,
                 remote_target=remote_target,
                 remote_collect_dir=remote_collect_dir,
@@ -2417,6 +2520,28 @@ def run(arguments: list[str]) -> int:
         resource_id, source = os.fspath(project), {"mode": "local-working-tree"}
     else:
         resource_id, source = newest_source_manifest(state_root, backend, manifest_before)
+    if gcp_resource is not None:
+        gcp_id = "--".join(
+            (gcp_resource["project"], gcp_resource["zone"], gcp_resource["instance"])
+        )
+        observed = load_json(
+            state_root / "gcp-compute-ssh" / gcp_id / "resource.json"
+        )
+        record["compute_resource"].update(
+            {
+                name: observed[name]
+                for name in (
+                    "resource_state",
+                    "status",
+                    "machine_type",
+                    "accelerators",
+                    "region",
+                    "free_tier_compute_shape",
+                    "billing_exposure",
+                )
+                if name in observed
+            }
+        )
     record.update(
         status=(
             "succeeded"

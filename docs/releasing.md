@@ -18,6 +18,10 @@ pushed to `main` only after their gates pass.
    the bounded ECE326/ECE467 CPU-consumer gate documented in
    `tests/acceptance/codespaces-courses/README.md` and the authenticated inbound
    workload gate in `tests/acceptance/codespaces-network/README.md`.
+   GCP backend changes additionally require the local live `e2-micro` lifecycle,
+   persistence, Dev Container, and network gate plus a paid G4 driver/CDI/OCI
+   gate. Stop both instances after validation and retain their disks; never put
+   Google credentials in hosted CI.
 5. Confirm `git diff --check`, a clean working tree, and no active temporary
    compute.
 6. Create an annotated `v<VERSION>` tag and push `main` plus that tag.
