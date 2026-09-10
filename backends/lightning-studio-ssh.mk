@@ -9,8 +9,8 @@ BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := provider-managed
 BACKEND_WORKSPACE_DURABILITY := stop-persistent
 BACKEND_OCI_NATIVE := no
-BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel persistent-storage native-persistence oci-runner
-BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
+BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel persistent-storage native-persistence oci-runner devcontainer port-forward
+BACKEND_OCI_RUNTIMES := docker podman nerdctl proot
 BACKEND_INTERNET_INBOUND := conditional
 BACKEND_INTERNET_OUTBOUND := conditional
 

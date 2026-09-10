@@ -593,6 +593,41 @@ def test_remote_make_command_preserves_an_encoded_target_as_one_argument(
     assert not any(value.startswith("CLOUD_BACKEND=") for value in command)
 
 
+def test_remote_make_command_applies_devcontainer_environment_to_native_dispatch(
+    tmp_path: Path,
+) -> None:
+    encoded_environment = base64.urlsafe_b64encode(
+        json.dumps(["CLOUDMAKE_PROFILE=codespaces-portable", "VALUE=with spaces"]).encode()
+    ).decode()
+    result = run_command(
+        [
+            sys.executable,
+            REMOTE_MAKE_COMMAND,
+            "--source",
+            "/workspace/source",
+            "--makefile",
+            "Makefile",
+            "--jobs",
+            "4",
+            "--target",
+            "verify",
+            "--runner",
+            "native",
+            "--environment-b64",
+            encoded_environment,
+        ],
+        cwd=tmp_path,
+    )
+
+    command = shlex.split(result.stdout)
+    assert command[:3] == [
+        "env",
+        "CLOUDMAKE_PROFILE=codespaces-portable",
+        "VALUE=with spaces",
+    ]
+    assert command[3:6] == ["make", "-C", "/workspace/source"]
+
+
 def test_remote_make_command_constructs_digest_pinned_oci_dispatch(
     tmp_path: Path,
 ) -> None:

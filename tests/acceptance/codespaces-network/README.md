@@ -27,6 +27,6 @@ another digest-pinned image that supplies Python 3.
 This qualifies authenticated private workload ingress, not unauthenticated
 public hosting. GitHub supports `private`, `org`, and `public` forwarded-port
 visibility, subject to account and organization policy. Cloudmake v2.2 reports
-that inbound capability as conditional but does not yet configure project port
-metadata. Standard `devcontainer.json` `forwardPorts` integration is reserved
-for the v2.3 workstation-portability milestone.
+that inbound capability as conditional. Cloudmake 2.3 additionally consumes the
+standard `devcontainer.json` `forwardPorts` field as bounded private-loopback
+reachability; it still does not request public visibility.

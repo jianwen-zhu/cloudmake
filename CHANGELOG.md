@@ -3,6 +3,36 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## 2.3.0 - 2026-09-10
+
+- Add explicit `--devcontainer[=PATH]` selection while preserving native Make
+  as the default and `--image` as the compatible image-only shorthand. Merely
+  committing a Dev Container file does not change execution.
+- Consume a fail-closed standard subset: digest-pinned image, literal
+  `containerEnv`/`remoteEnv`, CPU/memory/storage/GPU `hostRequirements`,
+  loopback-only `forwardPorts`, and CDI names in
+  `customizations.cloudmake.devices`.
+- Reject unsupported build, Compose, Feature, lifecycle, secret, arbitrary
+  mount/run-argument, user, capability, and privilege requirements locally
+  before provider contact instead of silently weakening them.
+- Align every maintained backend on the profile. Codespaces maps it to the
+  provider-native Dev Container; ordinary local and SSH hosts qualify Docker,
+  Podman, nerdctl, then the rootless PRoot adapter; Colab uses its qualified
+  `crun` profile. The deprecated Kaggle backend remains outside qualification.
+- Harden user-managed and provider SSH hosts for privilege-restricted Linux:
+  runtime readiness falls through before target submission, PRoot requires no
+  daemon/root/user namespace, and Make retains no-new-privileges with current
+  UID/GID and explicit CDI translation.
+- Validate host requirements on the actual execution machine before Make and
+  add bounded local-loopback forwarding for local and SSH foreground targets.
+  Colab notebook rejects ports because it has no corresponding tunnel.
+- Carry normalized Dev Container metadata through Codespaces rebuild receipts,
+  Colab controls, OCI receipts, compact execution banners, and redacted
+  provenance without placing environment values in provenance.
+- Add focused parser, fail-closed privilege, runtime fallback, SSH tunnel,
+  Codespaces translation, Colab control, local execution, and cross-backend
+  capability regression coverage.
+
 ## 2.2.0 - 2026-09-10
 
 - Qualify GitHub Codespaces as the reference CPU remote workstation with

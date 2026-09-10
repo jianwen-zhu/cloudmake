@@ -21,6 +21,22 @@ def decode_arguments(value: str) -> list[str]:
     return arguments
 
 
+def environment_arguments(value: str) -> list[str]:
+    values = decode_arguments(value)
+    for item in values:
+        if "=" not in item or "\0" in item or "\n" in item:
+            raise ValueError("Dev Container environment is invalid")
+    return values
+
+
+def decode_json(value: str, description: str):
+    try:
+        payload = base64.urlsafe_b64decode(value.encode("ascii"))
+        return json.loads(payload.decode("utf-8"))
+    except Exception as error:
+        raise ValueError(f"{description} is not valid encoded JSON") from error
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Construct a quoted remote Make command")
     parser.add_argument("--source", required=True)
@@ -33,6 +49,10 @@ def main() -> int:
     parser.add_argument("--oci-image-b64", default="")
     parser.add_argument("--oci-devices-b64", default="W10=")
     parser.add_argument("--oci-runtimes-b64", default="W10=")
+    parser.add_argument("--environment-b64", default="W10=")
+    parser.add_argument("--host-requirements-b64", default="e30=")
+    parser.add_argument("--forward-ports-b64", default="W10=")
+    parser.add_argument("--devcontainer-tool", default="")
     parser.add_argument("--oci-runtime", default="auto")
     parser.add_argument("--oci-tool", default="")
     parser.add_argument("--oci-cache", default="")
@@ -61,12 +81,20 @@ def main() -> int:
 
     try:
         project_arguments = decode_arguments(arguments.arguments_b64)
+        environment = environment_arguments(arguments.environment_b64)
+        forward_ports = decode_json(
+            arguments.forward_ports_b64, "Dev Container forward ports"
+        )
+        if not isinstance(forward_ports, list):
+            raise ValueError("Dev Container forward ports must be a list")
     except ValueError as error:
         print(f"cloudmake: {error}", file=sys.stderr)
         return 2
 
     if arguments.runner == "native":
+        environment_prefix = ["env", *environment] if environment else []
         command = [
+            *environment_prefix,
             "make",
             "-C",
             arguments.source,
@@ -127,7 +155,32 @@ def main() -> int:
             command.extend(["--device", device])
         for runtime in runtimes:
             command.extend(["--runtime-candidate", runtime])
-    print(shlex.join(command))
+        for value in environment:
+            command.extend(["--env", value])
+        for item in forward_ports:
+            if not isinstance(item, dict) or not isinstance(item.get("port"), int):
+                parser.error("invalid encoded Dev Container forward ports")
+            command.extend(["--forward-port", str(item["port"])])
+        if arguments.host_requirements_b64 != "e30=":
+            command.extend(
+                ["--host-requirements-b64", arguments.host_requirements_b64]
+            )
+    commands: list[list[str]] = []
+    if arguments.host_requirements_b64 != "e30=":
+        if not arguments.devcontainer_tool:
+            parser.error("host requirements require --devcontainer-tool")
+        commands.append(
+            [
+                arguments.python,
+                arguments.devcontainer_tool,
+                "--check-host",
+                arguments.host_requirements_b64,
+                "--workspace",
+                arguments.source,
+            ]
+        )
+    commands.append(command)
+    print(" && ".join(shlex.join(item) for item in commands))
     return 0
 
 

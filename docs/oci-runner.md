@@ -9,7 +9,8 @@ computational workloads, not general-purpose container hosting. Cloudmake
 provides the image userspace, a writable project workspace, temporary storage,
 and explicitly requested CDI devices. It deliberately does not reproduce the
 full `docker run` surface with privileged mode, arbitrary mounts, inherited
-host credentials, port publishing, services, or nested containers. Requiring a
+host credentials, public port publishing, services, or nested containers. A
+portable Dev Container may request a bounded loopback port. Requiring a
 smaller host surface improves both provider compatibility and security.
 
 Least privilege does not by itself imply strong isolation. The selected
@@ -77,7 +78,7 @@ visible as exceptions.
 ## Runtime continuum
 
 On ordinary local and SSH Linux execution surfaces, automatic selection prefers
-Podman, Docker, then nerdctl. If none is installed, Cloudmake can materialize
+Docker, Podman, then nerdctl. If none is ready, Cloudmake can materialize
 the same OCI image using `skopeo` and `umoci` and execute its userspace through
 PRoot. This fallback does not claim native namespace isolation. It can translate
 the strict CDI subset Cloudmake validates—environment entries, bind mounts, and
@@ -97,6 +98,11 @@ dropped, and `no-new-privileges`. The only host data mount is `/workspace`;
 additional device-related binds must come from an explicit CDI request. The
 selected native runtime remains responsible for translating those options into
 an OCI runtime specification and rejecting an unsupported combination.
+
+Cloudmake 2.3 can source the image, literal environment, host requirements,
+loopback ports, and CDI names from the project's standard Dev Container
+description. The runtime policy does not change. See
+[Portable Dev Container workstations](devcontainers.md).
 
 Codespaces is deliberately outside this nested-runtime continuum. Its backend
 declares `oci-native=yes`, so the selected digest becomes the provider dev

@@ -23,25 +23,73 @@ def load(name: str):
 
 
 def control(
-    path: Path, *, devices: list[str] | None = None, runtimes: list[str] | None = None
+    path: Path,
+    *,
+    devices: list[str] | None = None,
+    runtimes: list[str] | None = None,
+    environment: list[str] | None = None,
+    host_requirements: dict[str, object] | None = None,
 ) -> None:
     image = "registry.example/tools@sha256:" + "a" * 64
-    path.write_text(
-        "\n".join(
-            (
-                base64.urlsafe_b64encode(image.encode()).decode(),
-                base64.urlsafe_b64encode(json.dumps(devices or []).encode()).decode(),
-                "/content/project",
-                "/content/cache",
-                "Makefile",
+    lines = [
+        base64.urlsafe_b64encode(image.encode()).decode(),
+        base64.urlsafe_b64encode(json.dumps(devices or []).encode()).decode(),
+        "/content/project",
+        "/content/cache",
+        "Makefile",
+        base64.urlsafe_b64encode(
+            json.dumps(runtimes or ["crun"]).encode()
+        ).decode(),
+    ]
+    if environment is not None or host_requirements is not None:
+        lines.extend(
+            [
                 base64.urlsafe_b64encode(
-                    json.dumps(runtimes or ["crun"]).encode()
+                    json.dumps(environment or []).encode()
                 ).decode(),
-            )
+                base64.urlsafe_b64encode(
+                    json.dumps(host_requirements or {}).encode()
+                ).decode(),
+            ]
         )
+    path.write_text(
+        "\n".join(lines)
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_devcontainer_environment_and_requirements_reach_runner(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("colab_oci_prepare_devcontainer")
+    module.CONTROL = tmp_path / "control"
+    module.RESULT = tmp_path / "result.json"
+    module.RUNNER = tmp_path / "runner.py"
+    control(
+        module.CONTROL,
+        environment=["FLOW=smoke"],
+        host_requirements={"cpus": 1},
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(module, "generate_colab_nvidia_cdi", lambda *_: None)
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        module.RESULT.write_text(
+            json.dumps({"schema": 1, "mode": "preflight", "status": "ready"}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    module.main()
+
+    runner = calls[-1]
+    assert runner[runner.index("--env") + 1] == "FLOW=smoke"
+    assert "--host-requirements-b64" in runner
 
 
 def test_nonqualified_runtime_is_rejected_without_package_install(

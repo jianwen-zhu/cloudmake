@@ -44,6 +44,13 @@ def decode_image(value: str) -> str:
     return image
 
 
+def decode_json(value: str, description: str) -> Any:
+    try:
+        return json.loads(base64.urlsafe_b64decode(value.encode("ascii")).decode("utf-8"))
+    except Exception as error:
+        raise EnvironmentError(f"invalid encoded {description}") from error
+
+
 def run(
     command: list[str], *, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -177,16 +184,21 @@ def remove_remote(gh: str, codespace: str, path: PurePosixPath) -> None:
     )
 
 
-def generated_files(image: str) -> tuple[str, str]:
+def generated_files(
+    image: str,
+    environment: list[str] | None = None,
+    host_requirements: dict[str, Any] | None = None,
+    forward_ports: list[dict[str, Any]] | None = None,
+) -> tuple[str, str]:
     dockerfile = f"""FROM {image}
 USER root
 RUN set -eu; \\
     missing=0; \\
-    for command in make rsync tar; do command -v \"$command\" >/dev/null 2>&1 || missing=1; done; \\
+    for command in make rsync tar python3; do command -v \"$command\" >/dev/null 2>&1 || missing=1; done; \\
     if [ \"$missing\" = 1 ]; then \\
-      command -v apt-get >/dev/null 2>&1 || {{ echo 'cloudmake: native Codespaces OCI images must provide make, rsync, and tar or apt-get' >&2; exit 2; }}; \\
+      command -v apt-get >/dev/null 2>&1 || {{ echo 'cloudmake: native Codespaces OCI images must provide make, rsync, tar, and python3 or apt-get' >&2; exit 2; }}; \\
       apt-get update; \\
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends make rsync tar; \\
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends make rsync tar python3; \\
       rm -rf /var/lib/apt/lists/*; \\
     fi
 """
@@ -206,6 +218,27 @@ RUN set -eu; \\
         },
         "remoteUser": "vscode",
     }
+    if environment:
+        configuration["remoteEnv"] = {
+            value.split("=", 1)[0]: value.split("=", 1)[1]
+            for value in environment
+        }
+    if host_requirements:
+        converted = dict(host_requirements)
+        for field in ("memory", "storage"):
+            if field in converted:
+                converted[field] = str(converted[field])
+        gpu = converted.get("gpu")
+        if isinstance(gpu, dict) and "memory" in gpu:
+            converted["gpu"] = {**gpu, "memory": str(gpu["memory"])}
+        configuration["hostRequirements"] = converted
+    if forward_ports:
+        configuration["forwardPorts"] = [
+            item["port"]
+            if item["host"] == "127.0.0.1"
+            else f"{item['host']}:{item['port']}"
+            for item in forward_ports
+        ]
     return dockerfile, json.dumps(configuration, indent=2, sort_keys=True) + "\n"
 
 
@@ -288,8 +321,33 @@ def reconcile(arguments: argparse.Namespace) -> dict[str, Any]:
         return {"schema": SCHEMA, "mode": "native", "outcome": "rebuilt"}
 
     image = decode_image(arguments.image_b64)
-    dockerfile, configuration = generated_files(image)
+    environment = decode_json(
+        getattr(arguments, "environment_b64", "W10="),
+        "Dev Container environment",
+    )
+    host_requirements = decode_json(
+        getattr(arguments, "host_requirements_b64", "e30="),
+        "Dev Container host requirements",
+    )
+    forward_ports = decode_json(
+        getattr(arguments, "forward_ports_b64", "W10="),
+        "Dev Container ports",
+    )
+    if not isinstance(environment, list) or not all(
+        isinstance(value, str) and "=" in value for value in environment
+    ):
+        raise EnvironmentError("invalid Dev Container environment")
+    if not isinstance(host_requirements, dict) or not isinstance(forward_ports, list):
+        raise EnvironmentError("invalid Dev Container requirements or ports")
+    dockerfile, configuration = generated_files(
+        image, environment, host_requirements, forward_ports
+    )
     digest = configuration_digest(dockerfile, configuration)
+    profile_metadata = {
+        "environment_names": sorted(value.split("=", 1)[0] for value in environment),
+        "host_requirements": host_requirements,
+        "forward_ports": forward_ports,
+    }
     if (
         current.get("status") == "ready"
         and current.get("image") == image
@@ -302,6 +360,7 @@ def reconcile(arguments: argparse.Namespace) -> dict[str, Any]:
             "image": image,
             "runtime": "provider-native",
             "outcome": "reused",
+            **profile_metadata,
         }
     write_remote(
         arguments.gh,
@@ -325,6 +384,7 @@ def reconcile(arguments: argparse.Namespace) -> dict[str, Any]:
         "adapter_revision": ADAPTER_REVISION,
         "image": image,
         "configuration_digest": digest,
+        **profile_metadata,
     }
     write_remote(
         arguments.gh,
@@ -340,6 +400,7 @@ def reconcile(arguments: argparse.Namespace) -> dict[str, Any]:
         "adapter_revision": ADAPTER_REVISION,
         "image": image,
         "configuration_digest": digest,
+        **profile_metadata,
     }
     write_remote(
         arguments.gh,
@@ -353,6 +414,7 @@ def reconcile(arguments: argparse.Namespace) -> dict[str, Any]:
         "image": image,
         "runtime": "provider-native",
         "outcome": "rebuilt",
+        **profile_metadata,
     }
 
 
@@ -362,6 +424,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--codespace", required=True)
     result.add_argument("--mode", choices=("native", "oci"), required=True)
     result.add_argument("--image-b64", default="")
+    result.add_argument("--environment-b64", default="W10=")
+    result.add_argument("--host-requirements-b64", default="e30=")
+    result.add_argument("--forward-ports-b64", default="W10=")
     result.add_argument("--native-config", type=Path, required=True)
     result.add_argument("--native-dockerfile", type=Path, required=True)
     result.add_argument("--receipt", type=Path, required=True)

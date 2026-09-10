@@ -171,6 +171,59 @@ def test_generated_environment_is_native_nonroot_and_not_nested() -> None:
     assert "ghcr.io/devcontainers/features/sshd:1.1.0" in configuration["features"]
 
 
+def test_generated_environment_carries_portable_devcontainer_fields() -> None:
+    module = load("codespaces_environment_portable_profile")
+
+    _, configuration_text = module.generated_files(
+        IMAGE,
+        ["FLOW=smoke"],
+        {"cpus": 2, "memory": 4_000_000_000, "gpu": "optional"},
+        [{"host": "127.0.0.1", "port": 8080}],
+    )
+    configuration = json.loads(configuration_text)
+
+    assert configuration["remoteEnv"] == {"FLOW": "smoke"}
+    assert configuration["hostRequirements"] == {
+        "cpus": 2,
+        "memory": "4000000000",
+        "gpu": "optional",
+    }
+    assert configuration["forwardPorts"] == [8080]
+
+
+def test_reconcile_receipt_redacts_environment_values(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load("codespaces_environment_redacted_receipt")
+    marker: dict[str, object] = {}
+    monkeypatch.setattr(
+        module, "workspace_root", lambda *_: PurePosixPath("/workspaces/cloudmake")
+    )
+    monkeypatch.setattr(module, "read_marker", lambda *_: dict(marker))
+
+    def write_remote(_gh, _codespace, path, content):
+        if path.name == "native-oci-environment.json":
+            marker.clear()
+            marker.update(json.loads(content))
+
+    monkeypatch.setattr(module, "write_remote", write_remote)
+    monkeypatch.setattr(module, "rebuild", lambda *_: None)
+    monkeypatch.setattr(module, "wait_for_ssh", lambda *_: None)
+    selected = arguments(tmp_path)
+    selected.environment_b64 = encoded(json.dumps(["TOKEN=not-a-secret-channel"]))
+    selected.host_requirements_b64 = encoded(json.dumps({"cpus": 1}))
+    selected.forward_ports_b64 = encoded(
+        json.dumps([{"host": "127.0.0.1", "port": 8080}])
+    )
+
+    receipt = module.reconcile(selected)
+
+    assert receipt["environment_names"] == ["TOKEN"]
+    assert "not-a-secret-channel" not in json.dumps(receipt)
+    assert receipt["host_requirements"] == {"cpus": 1}
+    assert receipt["forward_ports"] == [{"host": "127.0.0.1", "port": 8080}]
+
+
 def test_image_change_rebuilds_once_then_reuses(tmp_path: Path, monkeypatch) -> None:
     module = load("codespaces_environment_reconcile")
     writes: list[tuple[PurePosixPath, str]] = []

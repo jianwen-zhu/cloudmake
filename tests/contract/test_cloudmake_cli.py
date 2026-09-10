@@ -151,6 +151,144 @@ def test_help_documents_digest_pinned_oci_runner_selection(
     assert "--device CDI_NAME" in result.stdout
     assert "--native" in result.stdout
     assert "OCI/CDI Make" in result.stdout
+    assert "--devcontainer[=PATH]" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_devcontainer_selection_persists_and_drives_the_existing_oci_surface(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    image = "registry.example/workstation@sha256:" + "d" * 64
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps(
+            {
+                "image": image,
+                "containerEnv": {"COURSE": "ece326"},
+                "hostRequirements": {"cpus": 2},
+                "forwardPorts": [8080],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    selected = invoke(
+        project, environment, "--use", "ssh", "--host", "lab-gpu", "--devcontainer"
+    )
+    invoke(project, environment, "build")
+
+    assert "devcontainer=.devcontainer/devcontainer.json" in selected.stdout
+    preference = next((tmp_path / "config" / "projects").glob("*.json"))
+    saved = json.loads(preference.read_text(encoding="utf-8"))
+    assert saved["devcontainer"] == ".devcontainer/devcontainer.json"
+    assert "image" not in saved
+    call = engine_calls(log)[0]
+    assert_assignment(call, "CLOUDMAKE_RUNNER", "oci")
+    assert_assignment(call, "CLOUDMAKE_OCI_IMAGE_B64", base64.urlsafe_b64encode(image.encode()).decode())
+    environment_b64 = next(
+        value.split("=", 1)[1]
+        for value in call
+        if value.startswith("CLOUDMAKE_OCI_ENVIRONMENT_B64=")
+    )
+    assert json.loads(base64.urlsafe_b64decode(environment_b64)) == ["COURSE=ece326"]
+    assert_assignment(
+        call,
+        "CLOUDMAKE_SSH_FORWARD_OPTIONS",
+        "-o ExitOnForwardFailure=yes -L 8080:127.0.0.1:8080",
+    )
+
+
+def test_devcontainer_privilege_failure_precedes_provider_contact(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps(
+            {
+                "image": "registry.example/workstation@sha256:" + "e" * 64,
+                "privileged": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = invoke(project, environment, "--devcontainer", "build", check=False)
+
+    assert result.returncode == 2
+    assert "least-privilege profile" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_devcontainer_is_explicit_and_does_not_auto_activate(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "registry.example/workstation@sha256:" + "f" * 64}),
+        encoding="utf-8",
+    )
+
+    invoke(project, environment, "build")
+
+    assert_assignment(engine_calls(log)[0], "CLOUDMAKE_RUNNER", "native")
+
+
+def test_unqualified_deprecated_backend_rejects_devcontainer_before_dispatch(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "registry.example/workstation@sha256:" + "a" * 64}),
+        encoding="utf-8",
+    )
+
+    result = invoke(
+        project, environment, "-b", "kaggle", "--devcontainer", "build", check=False
+    )
+
+    assert result.returncode == 2
+    assert "has not qualified" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_managed_gpu_devcontainer_requires_explicit_accelerator_selection(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps(
+            {
+                "image": "registry.example/workstation@sha256:" + "b" * 64,
+                "hostRequirements": {"gpu": True},
+                "customizations": {
+                    "cloudmake": {"devices": ["nvidia.com/gpu=all"]}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = invoke(
+        project, environment, "-b", "colab", "--devcontainer", "build", check=False
+    )
+
+    assert result.returncode == 2
+    assert "requires --gpu" in result.stdout
     assert engine_calls(log) == []
 
 
@@ -338,6 +476,8 @@ def test_backends_reports_persistence_mode_for_every_backend(
     assert "OCI RUNTIMES" in result.stdout
     assert "INTERNET IN" in result.stdout
     assert "INTERNET OUT" in result.stdout
+    assert "DEVCONTAINER" in result.stdout
+    assert "PORTS" in result.stdout
     rows = {
         line.split()[0]: line.split()
         for line in result.stdout.splitlines()[1:]
@@ -361,7 +501,7 @@ def test_backends_reports_persistence_mode_for_every_backend(
     assert "conditional" in rows["kaggle-notebook"]
     assert rows["codespaces-ssh"][5] == "yes"
     assert "provider-native" in rows["codespaces-ssh"]
-    assert "podman,docker,nerdctl,proot" in rows["host-ssh"]
+    assert "docker,podman,nerdctl,proot" in rows["host-ssh"]
     for backend in (
         "local",
         "codespaces-ssh",
@@ -372,6 +512,19 @@ def test_backends_reports_persistence_mode_for_every_backend(
     assert rows["codespaces-ssh"][3:5] == ["provider-managed", "stop-persistent"]
     assert rows["host-ssh"][3:5] == ["externally-managed", "host-persistent"]
     assert rows["colab-ssh"][6] == "unsupported"
+    for backend in (
+        "local",
+        "colab-notebook",
+        "codespaces-ssh",
+        "colab-ssh",
+        "host-ssh",
+        "lightning-studio-ssh",
+    ):
+        assert "yes" in rows[backend][-4:-2]
+    assert "loopback" in rows["host-ssh"]
+    assert "loopback" in rows["codespaces-ssh"]
+    assert "loopback" in rows["local"]
+    assert "no" in rows["colab-notebook"][-3:-1]
     assert engine_calls(log) == []
 
 

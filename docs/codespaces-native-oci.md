@@ -61,16 +61,19 @@ exposed through GitHub's
 [port-forwarding service](https://docs.github.com/en/codespaces/developing-in-a-codespace/forwarding-ports-in-your-codespace),
 whose private, organization, and public visibility options depend on account
 and organization policy. The backend therefore declares
-`internet-inbound=conditional`. Cloudmake does not create or change forwarded
-ports. Its authenticated SSH tunnel is a provider control channel and, by the
-backend contract, is not public inbound access.
+`internet-inbound=conditional`. Cloudmake 2.3 maps a selected portable Dev
+Container's `forwardPorts` into the provider-native configuration and creates a
+local-loopback SSH tunnel while the foreground target runs. It does not request
+public visibility. Its authenticated SSH tunnel is a provider control channel
+and, by the backend contract, is not public inbound access.
 
 Cloudmake v2.2 qualifies this provider capability through a separate live gate:
 a project Make target starts a loopback HTTP listener, `gh codespace ports
 forward` creates an authenticated private tunnel, and the host retrieves a
 unique marker before both listener and compute are stopped. Public visibility
-is deliberately outside the gate. Standard Dev Container `forwardPorts`
-consumption belongs to the v2.3 cross-backend workstation milestone.
+is deliberately outside the gate. The v2.3 cross-backend gate also verifies the
+standard `forwardPorts` mapping; the earlier explicit CLI gate remains useful
+provider evidence.
 
 ## Adapter boundary
 

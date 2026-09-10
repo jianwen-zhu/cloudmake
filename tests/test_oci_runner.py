@@ -276,6 +276,45 @@ def test_native_runtimes_receive_the_same_least_privilege_policy(
     ]
 
 
+def test_devcontainer_environment_is_forwarded_to_native_runtime(
+    tmp_path: Path,
+) -> None:
+    module = load("oci_runner_devcontainer_environment")
+
+    command = module.native_base_command(
+        "docker", tmp_path, IMAGE, [], ["FLOW=smoke", "TOOL_MODE=batch"]
+    )
+
+    assert command[command.index("FLOW=smoke") - 1] == "--env"
+    assert command[command.index("TOOL_MODE=batch") - 1] == "--env"
+
+
+def test_devcontainer_forward_port_is_loopback_only(tmp_path: Path) -> None:
+    module = load("oci_runner_devcontainer_forward_port")
+
+    command = module.native_base_command(
+        "docker", tmp_path, IMAGE, [], forward_ports=[8080]
+    )
+
+    assert command[command.index("127.0.0.1:8080:8080") - 1] == "--publish"
+    assert "0.0.0.0:8080:8080" not in command
+
+
+def test_devcontainer_environment_overrides_image_environment(tmp_path: Path) -> None:
+    module = load("oci_runner_devcontainer_environment_override")
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(
+        json.dumps({"process": {"env": ["FLOW=image", "PATH=/usr/bin"]}}),
+        encoding="utf-8",
+    )
+
+    environment = module.oci_process_environment(bundle, ["FLOW=project"])
+
+    assert "FLOW=project" in environment
+    assert "FLOW=image" not in environment
+
+
 def test_target_failure_is_preserved_after_exactly_one_submission(
     tmp_path: Path, fake_bin: Path
 ) -> None:

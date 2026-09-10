@@ -1,11 +1,16 @@
-.PHONY: verify increment export-artifact
+.PHONY: verify native-anchor increment export-artifact
 
 verify:
+	@test "$${CLOUDMAKE_PROFILE:-}" = codespaces-portable
 	@test "$$(id -u)" -ne 0
+	@command -v make >/dev/null
+	@printf 'codespaces Dev Container workstation verified: uid=%s arch=%s\n' "$$(id -u)" "$$(uname -m)"
+
+native-anchor:
 	@command -v make >/dev/null
 	@command -v rsync >/dev/null
 	@command -v tar >/dev/null
-	@printf 'codespaces workstation verified: uid=%s arch=%s\n' "$$(id -u)" "$$(uname -m)"
+	@printf 'codespaces native anchor verified: arch=%s\n' "$$(uname -m)"
 
 increment:
 	@mkdir -p .generated

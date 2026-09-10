@@ -26,8 +26,8 @@ IMAGE = re.compile(r"^([^\s@]+)@sha256:([0-9a-f]{64})$")
 CDI_DEVICE = re.compile(
     r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+$"
 )
-RUNTIMES = ("auto", "podman", "docker", "nerdctl", "proot", "crun")
-HIGH_LEVEL_RUNTIMES = ("podman", "docker", "nerdctl")
+RUNTIMES = ("auto", "docker", "podman", "nerdctl", "proot", "crun")
+HIGH_LEVEL_RUNTIMES = ("docker", "podman", "nerdctl")
 CDI_RUNTIMES = (*HIGH_LEVEL_RUNTIMES, "proot", "crun")
 STANDARD_DEVICES = ("null", "zero", "full", "random", "urandom")
 CDI_DIRECTORIES = (Path("/etc/cdi"), Path("/var/run/cdi"))
@@ -98,6 +98,82 @@ def decode_arguments(value: str) -> list[str]:
     if not isinstance(decoded, list) or not all(isinstance(item, str) for item in decoded):
         raise RunnerError("project arguments must be a JSON string list")
     return decoded
+
+
+def decode_object(value: str, description: str) -> dict[str, Any]:
+    try:
+        decoded = json.loads(decode_value(value, description))
+    except json.JSONDecodeError as error:
+        raise RunnerError(f"invalid encoded {description}") from error
+    if not isinstance(decoded, dict):
+        raise RunnerError(f"encoded {description} must be an object")
+    return decoded
+
+
+def available_memory() -> int:
+    total = int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                total = int(line.split()[1]) * 1024
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    limits: list[int] = [total]
+    for path in (Path("/sys/fs/cgroup/memory.max"), Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")):
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+            if value != "max":
+                limits.append(int(value))
+        except (OSError, ValueError):
+            pass
+    return min(limits)
+
+
+def gpu_available() -> bool:
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi is not None:
+        try:
+            completed = subprocess.run(
+                [nvidia_smi, "-L"],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            if completed.returncode == 0 and completed.stdout.strip():
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+    dri = Path("/dev/dri")
+    try:
+        return any(path.name.startswith(("card", "renderD")) for path in dri.iterdir())
+    except OSError:
+        return False
+
+
+def check_host_requirements(requirements: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    observed = {
+        "cpus": (
+            len(os.sched_getaffinity(0))
+            if hasattr(os, "sched_getaffinity")
+            else os.cpu_count() or 1
+        ),
+        "memory": available_memory(),
+        "storage": shutil.disk_usage(workspace).free,
+        "gpu": gpu_available(),
+    }
+    failures: list[str] = []
+    for field in ("cpus", "memory", "storage"):
+        required = requirements.get(field)
+        if isinstance(required, int) and observed[field] < required:
+            failures.append(f"{field} requires {required}, observed {observed[field]}")
+    gpu = requirements.get("gpu")
+    if (gpu is True or isinstance(gpu, dict)) and not observed["gpu"]:
+        failures.append("gpu is required but no GPU device was observed")
+    if failures:
+        raise RunnerError("host requirements are not satisfied: " + "; ".join(failures))
+    return observed
 
 
 def normalized_architecture(value: str) -> str:
@@ -374,7 +450,12 @@ def materialize_bundle(
 
 
 def native_base_command(
-    runtime: str, source: Path, reference: str, devices: list[str]
+    runtime: str,
+    source: Path,
+    reference: str,
+    devices: list[str],
+    environment: list[str] | None = None,
+    forward_ports: list[int] | None = None,
 ) -> list[str]:
     command = [
         runtime,
@@ -392,13 +473,31 @@ def native_base_command(
         command.extend(["--userns=keep-id"])
     command.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
     command.extend(["--volume", f"{source}:/workspace:rw"])
+    for value in environment or []:
+        command.extend(["--env", value])
+    for port in forward_ports or []:
+        command.extend(["--publish", f"127.0.0.1:{port}:{port}"])
     for device in devices:
         command.extend(["--device", device])
     command.extend(["--entrypoint", "make", reference])
     return command
 
 
-def oci_process_environment(bundle: Path) -> list[str]:
+def merge_environment(values: list[str], overrides: list[str]) -> list[str]:
+    environment: dict[str, str] = {}
+    for value in [*values, *overrides]:
+        if not isinstance(value, str) or "=" not in value or "\0" in value:
+            raise RunnerError("OCI execution has an invalid environment entry")
+        name, item = value.split("=", 1)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise RunnerError("OCI execution has an invalid environment name")
+        environment[name] = item
+    return [f"{name}={value}" for name, value in sorted(environment.items())]
+
+
+def oci_process_environment(
+    bundle: Path, overrides: list[str] | None = None
+) -> list[str]:
     config = bundle / "config.json"
     try:
         payload = json.loads(config.read_text(encoding="utf-8"))
@@ -419,7 +518,10 @@ def oci_process_environment(bundle: Path) -> list[str]:
         "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     )
     environment.setdefault("HOME", "/tmp")
-    return [f"{name}={value}" for name, value in sorted(environment.items())]
+    return merge_environment(
+        [f"{name}={value}" for name, value in sorted(environment.items())],
+        overrides or [],
+    )
 
 
 def absolute_container_path(value: Any, description: str) -> str:
@@ -861,6 +963,7 @@ def crun_base_command(
     internal_result: Path,
     devices: list[str],
     cdi_directories: list[Path],
+    environment: list[str] | None = None,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -875,6 +978,8 @@ def crun_base_command(
         command.extend(["--cdi-dir", os.fspath(directory)])
     for device in devices:
         command.extend(["--device", device])
+    for value in environment or []:
+        command.extend(["--env", value])
     command.extend(["--", "make"])
     return command
 
@@ -891,6 +996,7 @@ def internal_crun_parser(arguments: list[str]) -> argparse.Namespace:
     result.add_argument("result", type=Path)
     result.add_argument("--cdi-dir", action="append", type=Path, default=[])
     result.add_argument("--device", action="append", default=[])
+    result.add_argument("--env", action="append", default=[])
     parsed = result.parse_args(arguments[:separator])
     parsed.command = arguments[separator + 1 :]
     if not parsed.command:
@@ -952,7 +1058,7 @@ def internal_crun_exec(arguments: list[str]) -> int:
                         "bounding", "effective", "inheritable", "permitted", "ambient"
                     )
                 }
-                process["env"] = oci_process_environment(bundle)
+                process["env"] = oci_process_environment(bundle, parsed.env)
                 process["args"] = [
                     "/bin/sh",
                     "-c",
@@ -1087,6 +1193,8 @@ def prepare(
     cdi_directories: list[Path] | None = None,
     runtime_tmp: Path | None = None,
     runtime_home: Path | None = None,
+    environment_overrides: list[str] | None = None,
+    forward_ports: list[int] | None = None,
 ) -> tuple[list[str], dict[str, Any], str | None]:
     if not source.is_dir():
         raise RunnerError(f"project workspace is unavailable: {source}")
@@ -1107,11 +1215,12 @@ def prepare(
                 runtime_home, bundle / "rootfs"
             )
         bindings: list[tuple[str, str]] = []
-        environment = oci_process_environment(bundle)
+        environment = oci_process_environment(bundle, environment_overrides)
         if devices:
             device_bindings, environment, _ = proot_cdi_configuration(
                 bundle, devices, cdi_directories or []
             )
+            environment = merge_environment(environment, environment_overrides or [])
             bindings.extend(device_bindings)
             prepare_proot_binding_targets(bundle / "rootfs", bindings)
         if runtime_home is not None:
@@ -1176,6 +1285,7 @@ def prepare(
                 internal_result,
                 devices,
                 cdi_directories or [],
+                environment_overrides or [],
             ),
             image,
             identity,
@@ -1187,7 +1297,14 @@ def prepare(
     # an unrelated host skopeo installation must not add a second registry
     # request or change otherwise identical behavior across machines.
     image = inspect_with_runtime(runtime, reference, digest)
-    return native_base_command(runtime, source, reference, devices), image, None
+    return (
+        native_base_command(
+            runtime, source, reference, devices, environment_overrides,
+            forward_ports,
+        ),
+        image,
+        None,
+    )
 
 
 def validate_internal_execution(path: Path, exit_code: int, runtime: str) -> None:
@@ -1213,6 +1330,9 @@ def parser() -> argparse.ArgumentParser:
         "--runtime-candidate", choices=RUNTIMES[1:], action="append", default=[]
     )
     result.add_argument("--device", action="append", default=[])
+    result.add_argument("--env", action="append", default=[])
+    result.add_argument("--host-requirements-b64", default="")
+    result.add_argument("--forward-port", action="append", type=int, default=[])
     result.add_argument("--source", type=Path, required=True)
     result.add_argument("--cache", type=Path, required=True)
     result.add_argument("--makefile", default="Makefile")
@@ -1239,6 +1359,9 @@ def main() -> int:
     try:
         _, digest = image_reference(arguments.image)
         devices = [device_name(value) for value in arguments.device]
+        environment_overrides = merge_environment([], arguments.env)
+        if any(port < 1 or port > 65535 for port in arguments.forward_port):
+            raise RunnerError("forwarded ports must be within 1..65535")
         makefile = relative_makefile(arguments.makefile)
         if arguments.jobs < 1:
             raise RunnerError("parallel job count must be positive")
@@ -1247,6 +1370,14 @@ def main() -> int:
             arguments.runtime_candidate,
             requires_cdi=bool(devices),
         )
+        if arguments.host_requirements_b64:
+            requirements = decode_object(
+                arguments.host_requirements_b64, "host requirements"
+            )
+            receipt["host_requirements"] = requirements
+            receipt["host_observation"] = check_host_requirements(
+                requirements, arguments.source
+            )
         if runtime == "proot":
             runtime_tmp = Path(tempfile.mkdtemp(prefix="cloudmake-proot-tmp-"))
             runtime_tmp.chmod(0o1777)
@@ -1257,6 +1388,8 @@ def main() -> int:
             image=arguments.image,
             digest=digest,
             devices=devices,
+            forwarded_ports=arguments.forward_port,
+            environment_names=[value.split("=", 1)[0] for value in environment_overrides],
             runtime_candidates=arguments.runtime_candidate,
             execution_policy={
                 "profile": "least-privileged-compute-v1",
@@ -1289,6 +1422,8 @@ def main() -> int:
                 if arguments.runtime_home is not None
                 else None
             ),
+            environment_overrides=environment_overrides,
+            forward_ports=arguments.forward_port,
         )
         receipt["image_inspection"] = image
         if identity is not None:

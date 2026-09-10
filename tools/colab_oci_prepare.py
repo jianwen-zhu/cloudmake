@@ -112,16 +112,27 @@ def main() -> None:
     RESULT.unlink(missing_ok=True)
     try:
         lines = CONTROL.read_text(encoding="utf-8").splitlines()
-        if len(lines) not in (5, 6):
+        if len(lines) not in (5, 6, 8):
             raise RuntimeError("invalid Colab OCI preparation control file")
         image = decode(lines[0])
         devices = json.loads(decode(lines[1]))
         source, cache, makefile = lines[2:5]
         runtimes = json.loads(decode(lines[5])) if len(lines) == 6 else ["crun"]
+        if len(lines) == 8:
+            runtimes = json.loads(decode(lines[5]))
+            environment = json.loads(decode(lines[6]))
+            host_requirements_b64 = lines[7]
+        else:
+            environment = []
+            host_requirements_b64 = ""
         if not isinstance(devices, list) or not all(
             isinstance(device, str) for device in devices
         ):
             raise RuntimeError("invalid Colab OCI CDI device list")
+        if not isinstance(environment, list) or not all(
+            isinstance(value, str) and "=" in value for value in environment
+        ):
+            raise RuntimeError("invalid Colab Dev Container environment")
         if runtimes != ["crun"]:
             raise RuntimeError("Colab OCI execution requires its qualified crun profile")
         install_missing = [name for name in PACKAGES if shutil.which(name) is None]
@@ -171,6 +182,10 @@ def main() -> None:
             command.extend(["--device", device])
         for runtime in runtimes:
             command.extend(["--runtime-candidate", runtime])
+        for value in environment:
+            command.extend(["--env", value])
+        if host_requirements_b64 and host_requirements_b64 != "e30=":
+            command.extend(["--host-requirements-b64", host_requirements_b64])
         completed = subprocess.run(command, check=False)
         if completed.returncode and not RESULT.is_file():
             atomic_failure(

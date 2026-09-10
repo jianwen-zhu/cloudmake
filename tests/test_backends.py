@@ -294,7 +294,7 @@ elif command == "exec":
         if os.environ.get("FAKE_COLAB_TARGET_OUTPUT"):
             print(os.environ["FAKE_COLAB_TARGET_OUTPUT"])
         payload = {"schema": 1, "target": target, "exit_code": target_exit}
-        if len(control) in (7, 8) and control[5]:
+        if len(control) in (7, 8, 10) and control[5]:
             image = base64.urlsafe_b64decode(control[5]).decode()
             payload.update(
                 runner="oci",
@@ -306,7 +306,7 @@ elif command == "exec":
         (remote / "target-result.json").write_text(
             json.dumps(payload) + "\n", encoding="utf-8"
         )
-        if target_exit == 0 and len(control) in (5, 7, 8) and control[4]:
+        if target_exit == 0 and len(control) in (5, 7, 8, 10) and control[4]:
             payload = remote / "artifact-payload"
             payload.mkdir(exist_ok=True)
             (payload / "hello").write_text("fake artifact\n", encoding="utf-8")
@@ -1054,6 +1054,55 @@ def test_ssh_oci_mode_requires_runner_plumbing_not_host_make(
 
 
 @pytest.mark.integration
+def test_host_ssh_devcontainer_uses_least_privilege_runtime_continuum_and_tunnel(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_ssh_tools(fake_bin)
+    project = external_project(tmp_path / "external-ssh-devcontainer")
+    config = project / ".devcontainer" / "devcontainer.json"
+    config.parent.mkdir()
+    config.write_text(
+        json.dumps(
+            {
+                "image": "registry.example/eda/tools@sha256:" + "9" * 64,
+                "remoteEnv": {"FLOW": "smoke"},
+                "hostRequirements": {"cpus": 1},
+                "forwardPorts": [8080],
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = launcher_environment(fake_bin, tmp_path)
+
+    result = run_command(
+        [LAUNCHER, "-b", "ssh", "--host", "lab-restricted", "--devcontainer", "route"],
+        cwd=project,
+        env=env,
+    )
+
+    events = calls(Path(env["FAKE_LOG"]))
+    assert any(
+        event[0] == "rsync" and any("devcontainer_config.py" in value for value in event)
+        for event in events
+    )
+    execution = next(
+        event for event in events
+        if event[0] == "ssh" and ".cloudmake-oci-runner.py" in " ".join(event)
+    )
+    serialized = " ".join(execution)
+    assert "-o ExitOnForwardFailure=yes" in serialized
+    assert "-L 8080:127.0.0.1:8080" in serialized
+    assert "--runtime-candidate docker" in serialized
+    assert serialized.index("--runtime-candidate docker") < serialized.index(
+        "--runtime-candidate podman"
+    )
+    assert "--runtime-candidate proot" in serialized
+    assert "--env FLOW=smoke" in serialized
+    assert ".cloudmake-devcontainer.py --check-host" in serialized
+    assert "backend=host-ssh runner=oci" in result.stdout
+
+
+@pytest.mark.integration
 def test_ssh_oci_success_continues_to_artifact_collection(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -1319,6 +1368,56 @@ def test_colab_oci_runner_preflights_before_submitting_target(
     assert provenance["runner"]["devices"] == []
     assert provenance["runner"]["runtime"] == "crun"
     assert provenance["runner"]["digest"] == "sha256:" + "a" * 64
+
+
+@pytest.mark.integration
+def test_colab_devcontainer_profile_reaches_preflight_and_target_control(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "external-devcontainer-project")
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    image = "registry.example/science/tools@sha256:" + "d" * 64
+    configuration.write_text(
+        json.dumps(
+            {
+                "image": image,
+                "remoteEnv": {"FLOW": "smoke"},
+                "hostRequirements": {"cpus": 1, "gpu": "optional"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = launcher_environment(fake_bin, tmp_path)
+    env["COLAB_SESSION"] = "devcontainer-project"
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--devcontainer", "route"],
+        cwd=project,
+        env=env,
+    )
+
+    remote = Path(env["FAKE_REMOTE"])
+    preflight = (remote / "cloudmake-oci-control").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    target = (remote / "cloud-build-target").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(preflight) == 8
+    assert json.loads(base64.urlsafe_b64decode(preflight[6]).decode()) == [
+        "FLOW=smoke"
+    ]
+    assert json.loads(base64.urlsafe_b64decode(preflight[7]).decode()) == {
+        "cpus": 1,
+        "gpu": "optional",
+    }
+    assert len(target) == 10
+    assert json.loads(base64.urlsafe_b64decode(target[8]).decode()) == [
+        "FLOW=smoke"
+    ]
+    assert "workstation=devcontainer" in result.stdout
 
 
 @pytest.mark.integration
@@ -3256,12 +3355,16 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
         if backend == "colab-notebook"
         else "none"
         if backend == "codespaces-ssh"
-        else "podman docker nerdctl proot"
+        else "docker podman nerdctl proot"
     )
     assert f"oci-runtimes={expected_oci}" in result.stdout
     assert f"oci-native={'yes' if backend == 'codespaces-ssh' else 'no'}" in result.stdout
     assert f"internet-inbound={internet_inbound}" in result.stdout
     assert f"internet-outbound={internet_outbound}" in result.stdout
+    if expected_status == "supported":
+        assert "devcontainer" in result.stdout
+    if backend.endswith("-ssh"):
+        assert "port-forward" in result.stdout
 
 
 @pytest.mark.parametrize(

@@ -7,7 +7,7 @@ BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := provider-managed
 BACKEND_WORKSPACE_DURABILITY := stop-persistent
 BACKEND_OCI_NATIVE := yes
-BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts cancel native-persistence oci-runner
+BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts cancel native-persistence oci-runner devcontainer port-forward
 BACKEND_OCI_RUNTIMES := none
 BACKEND_INTERNET_INBOUND := conditional
 BACKEND_INTERNET_OUTBOUND := yes
@@ -49,10 +49,13 @@ BACKEND_CONTEXT_RESOURCE_STATE_FILE := $(CODESPACE_RESOURCE_STATE)
 BACKEND_PRE_CONNECT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_environment.py' \
 	--gh '$(GH_BIN)' --codespace '$(CODESPACE)' --mode '$(CLOUDMAKE_RUNNER)' \
 	--image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
+	--environment-b64 '$(CLOUDMAKE_OCI_ENVIRONMENT_B64)' \
+	--host-requirements-b64 '$(CLOUDMAKE_HOST_REQUIREMENTS_B64)' \
+	--forward-ports-b64 '$(CLOUDMAKE_FORWARD_PORTS_B64)' \
 	--native-config '$(CLOUDMAKE_TOOL_ROOT)/.devcontainer/devcontainer.json' \
 	--native-dockerfile '$(CLOUDMAKE_TOOL_ROOT)/.devcontainer/Dockerfile' \
 	--receipt '$(CODESPACE_ENVIRONMENT_RECEIPT)'
-BACKEND_OCI_REMOTE_REQUIRED_COMMANDS := make rsync tar
+BACKEND_OCI_REMOTE_REQUIRED_COMMANDS := make rsync tar python3
 
 # Connecting over SSH starts a stopped codespace, so no separate start command
 # is necessary. The common SSH transport verifies the connection with `ssh true`.

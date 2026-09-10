@@ -35,6 +35,8 @@ TOOL_ROOT = locate_tool_root()
 VERSION = (TOOL_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ENGINE = TOOL_ROOT / "Makefile"
 HOST_TEMPLATE_DIR = TOOL_ROOT / "host-templates"
+sys.path.insert(0, os.fspath(TOOL_ROOT / "tools"))
+from devcontainer_config import DevContainerError, normalize as normalize_devcontainer
 ALIASES = {
     "local": "local",
     "colab": "colab-notebook",
@@ -455,6 +457,7 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         "accelerator_set": False,
         "checkpoint": None,
         "image": None,
+        "devcontainer": None,
         "native_runner": False,
         "devices": [],
         "devices_set": False,
@@ -526,6 +529,12 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         elif argument.startswith("--image="):
             options["image"] = argument.split("=", 1)[1]
             index += 1
+        elif argument == "--devcontainer":
+            options["devcontainer"] = ""
+            index += 1
+        elif argument.startswith("--devcontainer="):
+            options["devcontainer"] = argument.split("=", 1)[1]
+            index += 1
         elif argument == "--native":
             options["native_runner"] = True
             index += 1
@@ -589,7 +598,7 @@ reserves no project target names.
 
 Project options: -b BACKEND, -C DIR, -j N, --host HOST, --gpu[=TYPE], --cpu,
                  --persist, --no-persist, --image REF@sha256:DIGEST,
-                 --device CDI_NAME, --no-devices, --native,
+                 --devcontainer[=PATH], --device CDI_NAME, --no-devices, --native,
                  --retry-for=DURATION, --verbose
 Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
                   --sync-dry-run, --status, --environment, --fetch, --open,
@@ -605,8 +614,9 @@ Persistence modes: Colab notebook=encrypted checkpoint; deprecated Kaggle=
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
 Environment: --environment records observed VM facts, not format compatibility.
-Runner: --image selects OCI/CDI Make; --native restores native Make. Selection
-        is local and per project unless -b is an explicit one-off override.
+Runner: --devcontainer selects the portable Dev Container OCI/CDI Make profile;
+        --image is its minimal image-only shorthand; --native restores native Make.
+        Selection is local and per project unless -b is a one-off override.
 Information: --help, --version, --history, --host-templates,
              --host-template NAME
 """
@@ -674,7 +684,7 @@ def show_backends() -> None:
         f"{'BACKEND':22} {'STATUS':10} {'SESSION REUSE':13} {'LIFECYCLE':18} "
         f"{'WORKSPACE':17} {'OCI NATIVE':10} {'PERSISTENCE':12} "
         f"{'TRANSPORT':36} {'OCI RUNTIMES':34} {'INTERNET IN':12} "
-        f"{'INTERNET OUT':12} HOST CLIENT"
+        f"{'INTERNET OUT':12} {'DEVCONTAINER':12} {'PORTS':10} HOST CLIENT"
     )
     for name, (session_reuse, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
@@ -690,11 +700,16 @@ def show_backends() -> None:
         workspace = backend_declaration(name, "BACKEND_WORKSPACE_DURABILITY")
         internet_in = backend_declaration(name, "BACKEND_INTERNET_INBOUND")
         internet_out = backend_declaration(name, "BACKEND_INTERNET_OUTBOUND")
+        capabilities = set(
+            backend_declaration(name, "BACKEND_CAPABILITIES").split()
+        )
+        devcontainer = "yes" if "devcontainer" in capabilities else "no"
+        ports = "loopback" if "port-forward" in capabilities else "no"
         print(
             f"{name:22} {status:10} {session_reuse:13} {lifecycle:18} "
             f"{workspace:17} {'yes' if oci_native else 'no':10} {PERSISTENCE_MODES[name]:12} "
             f"{transport:36} {runtime_text:34} {internet_in:12} "
-            f"{internet_out:12} {client} ({installed})"
+            f"{internet_out:12} {devcontainer:12} {ports:10} {client} ({installed})"
         )
 
 
@@ -967,6 +982,7 @@ def manage_workspace(
         or options["accelerator_set"]
         or options["checkpoint"] is not None
         or options["image"] is not None
+        or options["devcontainer"] is not None
         or options["native_runner"]
         or options["devices_set"]
         or options["host"] is not None
@@ -1202,18 +1218,82 @@ def validate_backend_oci_selection(
     return runtimes
 
 
+def validate_devcontainer_backend(
+    *, backend: str, profile: dict[str, Any] | None, accelerator: str | None
+) -> None:
+    if profile is None:
+        return
+    capabilities = set(
+        backend_declaration(backend, "BACKEND_CAPABILITIES").split()
+    )
+    if "devcontainer" not in capabilities:
+        raise UsageError(
+            f"backend {backend!r} has not qualified the portable Dev Container profile"
+        )
+    ports = profile.get("forward_ports", [])
+    transport = backend_declaration(backend, "BACKEND_TRANSPORT")
+    if ports and "port-forward" not in capabilities:
+        raise UsageError(
+            f"backend {backend!r} cannot honor Dev Container forwardPorts; "
+            "select an SSH or local backend"
+        )
+    gpu = profile.get("host_requirements", {}).get("gpu")
+    managed_accelerator_backends = {
+        "colab-notebook", "colab-ssh", "lightning-studio-ssh"
+    }
+    if (
+        backend in managed_accelerator_backends
+        and (gpu is True or profile.get("devices"))
+        and not accelerator
+    ):
+        raise UsageError(
+            f"backend {backend!r} requires --gpu (or a saved GPU selection) "
+            "for this Dev Container profile"
+        )
+    if backend == "codespaces-ssh" and (gpu is True or isinstance(gpu, dict)):
+        raise UsageError(
+            "backend 'codespaces-ssh' is a qualified CPU workstation and cannot "
+            "satisfy required Dev Container GPU host requirements"
+        )
+
+
 def resolve_runner_preferences(
     options: dict[str, Any], project: Path, config_home: Path, key: str
-) -> tuple[str, str | None, list[str]]:
+) -> tuple[str, str | None, list[str], dict[str, Any] | None]:
     if options["native_runner"] and options["image"] is not None:
         raise UsageError("--native cannot be combined with --image")
+    if options["native_runner"] and options["devcontainer"] is not None:
+        raise UsageError("--native cannot be combined with --devcontainer")
+    if options["image"] is not None and options["devcontainer"] is not None:
+        raise UsageError("--image cannot be combined with --devcontainer")
     if options["native_runner"] and options["devices_set"]:
         raise UsageError("--native cannot be combined with --device or --no-devices")
     project_config = load_json(config_home / "projects" / f"{key}.json")
     shared_config = load_json(project / ".cloudmake.json")
     global_config = load_json(config_home / "config.json")
     if options["native_runner"]:
-        return "native", None, []
+        return "native", None, [], None
+
+    selected_devcontainer: Any = options["devcontainer"]
+    if selected_devcontainer is None and options["image"] is None:
+        # A repository merely containing a Dev Container description or shared
+        # Cloudmake configuration must not silently change execution. Only an
+        # explicit option persisted in this host's per-project state is reused.
+        if "devcontainer" in project_config:
+            selected_devcontainer = project_config["devcontainer"]
+    if selected_devcontainer is not None:
+        if options["devices_set"]:
+            raise UsageError(
+                "--device/--no-devices cannot be combined with a Dev Container; "
+                "use customizations.cloudmake.devices"
+            )
+        if not isinstance(selected_devcontainer, str):
+            raise UsageError("configured Dev Container path must be a string")
+        try:
+            profile = normalize_devcontainer(project, selected_devcontainer)
+        except DevContainerError as error:
+            raise UsageError(str(error)) from error
+        return "oci", profile["image"], profile["devices"], profile
 
     configured_image: Any = None
     configured_devices: Any = []
@@ -1231,7 +1311,8 @@ def resolve_runner_preferences(
         devices = []
     else:
         devices = configured_devices
-    return validate_runner_selection(image, devices)
+    runner, image, devices = validate_runner_selection(image, devices)
+    return runner, image, devices, None
 
 
 def persist_invocation_runner(
@@ -1242,18 +1323,27 @@ def persist_invocation_runner(
     runner: str,
     image: str | None,
     devices: list[str],
+    devcontainer: dict[str, Any] | None,
 ) -> None:
     path = config_home / "projects" / f"{key}.json"
     saved = load_json(path)
     if runner == "native":
         saved.pop("image", None)
         saved.pop("devices", None)
+        saved.pop("devcontainer", None)
+    elif devcontainer is not None:
+        saved["devcontainer"] = devcontainer["path"]
+        saved.pop("image", None)
+        saved.pop("devices", None)
     else:
         saved["image"] = image
         saved["devices"] = devices
+        saved.pop("devcontainer", None)
     saved["project"] = os.fspath(project)
     atomic_json(path, saved)
     detail = "runner=native" if runner == "native" else f"runner=oci image={image}"
+    if devcontainer is not None:
+        detail += f" devcontainer={devcontainer['path']}"
     if devices:
         detail += f" devices={','.join(devices)}"
     print(
@@ -1283,6 +1373,11 @@ def validate_assignments(arguments: list[str]) -> None:
 
 def encoded_arguments(arguments: list[str]) -> str:
     payload = json.dumps(arguments, ensure_ascii=False, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode("ascii")
+
+
+def encoded_object(value: dict[str, Any]) -> str:
+    payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(payload).decode("ascii")
 
 
@@ -1345,6 +1440,7 @@ def engine_command(
     image: str | None = None,
     devices: list[str] | None = None,
     oci_runtimes: list[str] | None = None,
+    devcontainer: dict[str, Any] | None = None,
 ) -> int:
     make = shutil.which("make")
     if make is None:
@@ -1376,9 +1472,22 @@ def engine_command(
                 f"CLOUDMAKE_OCI_IMAGE_B64={encoded_value(image)}",
                 f"CLOUDMAKE_OCI_DEVICES_B64={encoded_arguments(devices or [])}",
                 f"CLOUDMAKE_OCI_RUNTIMES_B64={encoded_arguments(oci_runtimes or [])}",
+                f"CLOUDMAKE_OCI_ENVIRONMENT_B64={encoded_arguments((devcontainer or {}).get('environment', []))}",
+                f"CLOUDMAKE_HOST_REQUIREMENTS_B64={encoded_object((devcontainer or {}).get('host_requirements', {}))}",
+                f"CLOUDMAKE_FORWARD_PORTS_B64={encoded_arguments((devcontainer or {}).get('forward_ports', []))}",
+                f"CLOUDMAKE_DEVCONTAINER_ACTIVE={'1' if devcontainer is not None else ''}",
                 "CLOUDMAKE_OCI_RUNTIME=auto",
             ]
         )
+        ports = (devcontainer or {}).get("forward_ports", [])
+        if ports:
+            variables.append(
+                "CLOUDMAKE_SSH_FORWARD_OPTIONS="
+                + "-o ExitOnForwardFailure=yes "
+                + " ".join(
+                    f"-L {item['port']}:{item['host']}:{item['port']}" for item in ports
+                )
+            )
     if run_id is not None:
         variables.append(f"CLOUDMAKE_RUN_ID={run_id}")
     if allocation_result is not None:
@@ -1529,6 +1638,7 @@ def local_oci_command(
     cache_home: Path,
     run_id: str,
     verbose: bool,
+    devcontainer: dict[str, Any] | None,
 ) -> tuple[int, dict[str, Any]]:
     parallel = jobs or "4"
     if not parallel.isdigit() or int(parallel) < 1:
@@ -1552,8 +1662,17 @@ def local_oci_command(
         common.extend(["--runtime-candidate", runtime])
     for device in devices:
         common.extend(["--device", device])
+    for value in (devcontainer or {}).get("environment", []):
+        common.extend(["--env", value])
+    for item in (devcontainer or {}).get("forward_ports", []):
+        common.extend(["--forward-port", str(item["port"])])
+    requirements = (devcontainer or {}).get("host_requirements", {})
+    if requirements:
+        common.extend(["--host-requirements-b64", encoded_object(requirements)])
+    workstation = " workstation=devcontainer" if devcontainer is not None else ""
     print(
-        f"[cloudmake] backend=local runner=oci image={image} resource=local",
+        f"[cloudmake] backend=local runner=oci{workstation} "
+        f"image={image} resource=local",
         flush=True,
     )
     command = [
@@ -1692,10 +1811,11 @@ def run(arguments: list[str]) -> int:
             )
         if options["global"] and (
             options["image"] is not None
+            or options["devcontainer"] is not None
             or options["native_runner"]
             or options["devices_set"]
         ):
-            raise UsageError("OCI runner selection is per project, not global")
+            raise UsageError("workstation runner selection is per project, not global")
         backend = options["use_backend"]
         warn_deprecated_backend(backend)
         accelerator_set = options["accelerator_set"]
@@ -1788,7 +1908,7 @@ def run(arguments: list[str]) -> int:
             remember_workspace_id(saved, backend, selected_workspace_id)
         elif previous_backend != backend:
             saved.pop("workspace_id", None)
-        runner, image, devices = resolve_runner_preferences(
+        runner, image, devices, devcontainer = resolve_runner_preferences(
             options, project, config_home, key
         )
         effective_accelerator = (
@@ -1802,12 +1922,23 @@ def run(arguments: list[str]) -> int:
             devices=devices,
             accelerator=effective_accelerator,
         )
+        validate_devcontainer_backend(
+            backend=backend,
+            profile=devcontainer,
+            accelerator=effective_accelerator,
+        )
         if runner == "native":
+            saved.pop("image", None)
+            saved.pop("devices", None)
+            saved.pop("devcontainer", None)
+        elif devcontainer is not None:
+            saved["devcontainer"] = devcontainer["path"]
             saved.pop("image", None)
             saved.pop("devices", None)
         else:
             saved["image"] = image
             saved["devices"] = devices
+            saved.pop("devcontainer", None)
         if not options["global"]:
             saved["project"] = os.fspath(project)
         atomic_json(path, saved)
@@ -1836,6 +1967,8 @@ def run(arguments: list[str]) -> int:
             if runner == "native"
             else f", runner=oci, image={image}"
         )
+        if devcontainer is not None:
+            runner_note += f", devcontainer={devcontainer['path']}"
         device_note = f", devices={','.join(devices)}" if devices else ""
         print(
             f"Saved {scope} backend={backend}{host_note}{accelerator_note}"
@@ -1873,7 +2006,7 @@ def run(arguments: list[str]) -> int:
         checkpoint,
         workspace_id,
     ) = resolve_preferences(project, options, config_home, key)
-    runner, image, devices = resolve_runner_preferences(
+    runner, image, devices, devcontainer = resolve_runner_preferences(
         options, project, config_home, key
     )
     codespace = resolve_codespace(config_home, key) if backend == "codespaces-ssh" else None
@@ -1889,6 +2022,9 @@ def run(arguments: list[str]) -> int:
     oci_runtimes = validate_backend_oci_selection(
         backend=backend, runner=runner, devices=devices, accelerator=accelerator
     )
+    validate_devcontainer_backend(
+        backend=backend, profile=devcontainer, accelerator=accelerator
+    )
     managed_checkpoint = checkpoint and persistence_mode == "checkpoint"
     if action == "environment" and backend not in {"local", "colab-notebook"}:
         raise UsageError(
@@ -1901,11 +2037,12 @@ def run(arguments: list[str]) -> int:
         )
     if (
         options["image"] is not None
+        or options["devcontainer"] is not None
         or options["native_runner"]
         or options["devices_set"]
     ) and action not in {None, "collect", "start"}:
         raise UsageError(
-            "runner selection is valid only with --use, --start, a project target, "
+            "workstation runner selection is valid only with --use, --start, a project target, "
             "or --collect"
         )
     if retry_seconds is not None and backend not in CAPACITY_RETRY_BACKENDS:
@@ -1973,7 +2110,12 @@ def run(arguments: list[str]) -> int:
             mode=persistence_mode,
         )
     if (
-        (options["image"] is not None or options["native_runner"] or options["devices_set"])
+        (
+            options["image"] is not None
+            or options["devcontainer"] is not None
+            or options["native_runner"]
+            or options["devices_set"]
+        )
         and options["backend"] is None
         and engine_target in {"dispatch", "collect", "start"}
     ):
@@ -1984,6 +2126,7 @@ def run(arguments: list[str]) -> int:
             runner=runner,
             image=image,
             devices=devices,
+            devcontainer=devcontainer,
         )
     state_root = state_home / "projects" / key
     colab_session = (
@@ -2052,6 +2195,7 @@ def run(arguments: list[str]) -> int:
             image=image,
             devices=devices,
             oci_runtimes=oci_runtimes,
+            devcontainer=devcontainer,
         )
         if operation_allocation_path is not None:
             receipt = allocation_receipt(operation_allocation_path)
@@ -2127,6 +2271,19 @@ def run(arguments: list[str]) -> int:
             "image": image if runner == "oci" else None,
             "devices": devices if runner == "oci" else [],
             "runtime_candidates": oci_runtimes if runner == "oci" else [],
+            "devcontainer": (
+                {
+                    "path": devcontainer["path"],
+                    "host_requirements": devcontainer["host_requirements"],
+                    "forward_ports": devcontainer["forward_ports"],
+                    "environment_names": [
+                        value.split("=", 1)[0]
+                        for value in devcontainer["environment"]
+                    ],
+                }
+                if devcontainer is not None
+                else None
+            ),
         },
     }
     if ssh_host is not None:
@@ -2161,6 +2318,7 @@ def run(arguments: list[str]) -> int:
                     cache_home=cache_home,
                     run_id=run_id,
                     verbose=options["verbose"],
+                    devcontainer=devcontainer,
                 )
                 record["runner"].update(
                     {
@@ -2212,6 +2370,7 @@ def run(arguments: list[str]) -> int:
                 image=image,
                 devices=devices,
                 oci_runtimes=oci_runtimes,
+                devcontainer=devcontainer,
             )
     except BaseException:
         if allocation_path is not None:

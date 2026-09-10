@@ -194,7 +194,7 @@ is known.
 
 | Backend | OCI execution | Runtime selection | CDI |
 | --- | --- | --- | --- |
-| `local` | supported | Podman, Docker, nerdctl, then PRoot fallback | native CDI or validated PRoot bind/environment translation |
+| `local` | supported | Docker, Podman, nerdctl, then PRoot fallback | native CDI or validated PRoot bind/environment translation |
 | `host-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | native CDI or validated PRoot translation |
 | `codespaces-ssh` | supported | selected image becomes the provider dev container; no nested runtime | none; qualified CPU backend |
 | `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one provider-qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
@@ -203,7 +203,7 @@ is known.
 These choices are backend declarations rather than launcher special cases:
 
 ```make
-BACKEND_OCI_RUNTIMES := podman docker nerdctl proot  # local and SSH hosts
+BACKEND_OCI_RUNTIMES := docker podman nerdctl proot  # local and SSH hosts
 BACKEND_OCI_RUNTIMES := crun                         # Colab notebook
 BACKEND_OCI_RUNTIMES := proot                        # Kaggle notebook
 BACKEND_OCI_NATIVE := yes                            # Codespaces dev container
@@ -212,8 +212,8 @@ BACKEND_OCI_RUNTIMES := none                         # no nested runtime there
 
 The list is ordered and may contain multiple dynamically qualified options.
 Cloudmake first filters it against static requirements such as CDI, then probes
-the selected VM. For example, if Podman is installed but its machine or daemon
-is unavailable, Docker may qualify next. This readiness fallback occurs before
+the selected VM. For example, if Docker is installed but its daemon is
+unavailable, Podman may qualify next. This readiness fallback occurs before
 image preparation and target submission; Cloudmake never switches runtimes and
 replays a project target after submission.
 
@@ -263,6 +263,25 @@ Nix may build an OCI image upstream; Cloudmake does not need to know. Apptainer,
 SIF, Nix closures, and other mechanisms may still appear inside ordinary
 project recipes, but Cloudmake neither selects nor validates them as managed
 runners. OCI must be validated as OCI; conversion to SIF is not OCI evidence.
+
+## Cloudmake 2.3: portable Dev Container profile
+
+Cloudmake 2.3 keeps the managed runner above and standardizes how a project may
+describe it. `--devcontainer` consumes a fail-closed, cross-backend subset of
+the Dev Container specification: digest-pinned image, literal environment,
+basic host requirements, loopback forwarding, and CDI device names under the
+Cloudmake customization namespace.
+
+This adds no second container model. On Codespaces the provider builds the one
+active Dev Container workstation. Other backends translate the same normalized
+profile into their qualified OCI adapter. An actual host-requirement probe runs
+before Make, and unsupported privilege, lifecycle, build, mount, or secret
+fields fail locally before provider contact. Configuration presence alone does
+not activate the feature, so 2.2 and earlier projects retain native or
+image-only behavior.
+
+The normative field and backend mapping is in
+[Portable Dev Container workstations](devcontainers.md).
 
 ## Historical Kaggle no-reuse validation
 

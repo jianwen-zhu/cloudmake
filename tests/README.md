@@ -142,6 +142,13 @@ image, proves target and stop/start reuse, collects an artifact, restores the
 neutral anchor, and stops the resource. It consumes Codespaces quota and is
 never part of the offline suite.
 
+`tests/acceptance/devcontainer-ssh` is the v2.3 cross-backend workstation gate.
+It can run against any existing Linux OpenSSH alias and has an optional strict
+PRoot expectation for a privilege-restricted host. It verifies literal
+environment, non-root execution, incremental workspace state, foreground
+loopback forwarding, and artifact collection without provisioning or changing
+the selected host.
+
 The release-level CPU-consumer gate then uses one digest-pinned Python
 workstation and the same Codespace for ECE326 and a bounded ECE467 path:
 

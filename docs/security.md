@@ -124,9 +124,19 @@ Cloudmake treats least privilege as a two-sided security and portability
 contract. It gives an OCI workload only the authority required for automated
 computation: its immutable userspace, explicit writable workspace and temporary
 paths, and devices requested through CDI. It does not add privileged mode,
-arbitrary host mounts, host credential inheritance, service management, port
-publishing, or nested containers merely for compatibility with an unrestricted
+arbitrary host mounts, host credential inheritance, service management, public
+port publishing, or nested containers merely for compatibility with an unrestricted
 container-hosting interface.
+
+The portable Dev Container profile is parsed locally and fails closed on
+privileged mode, added capabilities, relaxed security options, arbitrary
+mounts/run arguments, lifecycle hooks, Features, and secret declarations. Its
+`forwardPorts` subset creates loopback reachability only for the foreground
+target; it does not expose a public listener. Literal environment entries are
+project configuration rather than credentials: Cloudmake transports their
+values to the target but records only their names in provenance. Host-variable
+interpolation is rejected so the adapter never imports a local secret
+implicitly.
 
 This reduces exposure of user data and credentials while avoiding requests for
 provider capabilities, writable kernel control surfaces, and unrelated devices.

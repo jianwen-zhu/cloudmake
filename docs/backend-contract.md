@@ -160,7 +160,7 @@ Every backend must also declare an ordered `BACKEND_OCI_RUNTIMES` list. Use
 
 ```make
 # A host whose installed execution surface must be discovered dynamically.
-BACKEND_OCI_RUNTIMES := podman docker nerdctl proot
+BACKEND_OCI_RUNTIMES := docker podman nerdctl proot
 
 # A managed notebook with one provider-qualified adapter.
 BACKEND_OCI_RUNTIMES := crun
@@ -194,6 +194,14 @@ exact OCI-spec adaptation, device integration, and security limitations; it is
 not a generic endorsement of that command on other managed VMs. The
 image-specific preflight remains the final authority and never causes target
 replay.
+
+Maintained backends that implement the Cloudmake 2.3 portable profile declare
+`devcontainer`. SSH transports that can keep a bounded loopback tunnel for a
+foreground target also declare `port-forward`. These capabilities do not add
+new transport verbs: the launcher normalizes the selected standard
+configuration into the existing image, environment, host-requirement, CDI, and
+execution fields. A backend must reject any normalized field it cannot honor
+before provider contact or target submission.
 
 `checkpoint-persistence` means Cloudmake transfers a managed workspace through
 an independent durable checkpoint store. `native-persistence` means the

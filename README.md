@@ -117,8 +117,10 @@ reduces an OCI workload to the least-privileged surface needed for automated
 computation. The normal contract is an immutable tool image, a writable project
 workspace, temporary storage, and only explicitly requested CDI devices. It is
 not general-purpose container hosting. Cloudmake does not add privileged mode,
-arbitrary host mounts, host credentials, service management, port publishing,
-or nested-container facilities merely to imitate an unrestricted Docker host.
+arbitrary host mounts, host credentials, service management, public port
+publishing, or nested-container facilities merely to imitate an unrestricted
+Docker host. A standard Dev Container profile may explicitly request a bounded
+loopback port tunnel; this grants reachability, not additional process authority.
 
 This narrow surface protects both sides of the execution boundary. Users avoid
 exposing credentials and unrelated host state to an image; managed-compute
@@ -242,10 +244,10 @@ tools separate from mutable work. Cloudmake 2.2 qualifies provider-managed,
 stop-persistent Codespaces as a CPU remote-workstation reference: ordinary
 targets wake or reuse the named resource while its `/workspaces` tree avoids
 checkpoint transfer, and a selected OCI image becomes the native Codespaces
-workstation environment instead of a nested container. Cloudmake 2.3 will make
-the standard Dev Container description the portable workstation contract
-across qualified backends, retaining `--image` as its minimal intrusion-free
-shorthand. Cloudmake 2.4 will add Google Cloud Storage as a managed-checkpoint
+workstation environment instead of a nested container. Cloudmake 2.3 makes a
+fail-closed subset of the standard Dev Container description the portable
+workstation contract across qualified backends, retaining `--image` as its
+minimal intrusion-free shorthand. Cloudmake 2.4 will add Google Cloud Storage as a managed-checkpoint
 service for Colab, targeting unattended host-coordinated restore and save with
 short-lived, bucket-restricted credentials instead of the interactive Drive
 mount. That target does not turn a stopped Colab assignment into a persistent
@@ -617,6 +619,7 @@ output. Fields that a backend cannot know reliably are omitted:
 [cloudmake] backend=colab-notebook accelerator=T4 session=tilelang-lab resource=reused
 [cloudmake] backend=local resource=local
 [cloudmake] backend=local runner=oci image=registry.example/tools@sha256:... resource=local
+[cloudmake] backend=host-ssh runner=oci workstation=devcontainer host=lab-gpu resource=reused
 ```
 
 `resource=started` means this invocation created or started the resource;
@@ -647,7 +650,8 @@ Common options:
 | `--gpu`, `--gpu=TYPE` | Select the default or a named GPU where supported; save it for the selected project unless `-b` is an explicit one-off override. |
 | `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
 | `--persist`, `--no-persist` | Enable or disable the selected backend's persistent-workspace mode and save the choice for later targets. The older `--checkpoint` and `--no-checkpoint` spellings remain compatible aliases. |
-| `--image REF@sha256:DIGEST` | Select a digest-pinned OCI image as the project's Make execution environment. |
+| `--devcontainer[=PATH]` | Select the portable Dev Container workstation profile; discover the standard project path when `PATH` is omitted. |
+| `--image REF@sha256:DIGEST` | Select a digest-pinned OCI image as the project's Make execution environment; this remains the image-only shorthand. |
 | `--device CDI_NAME` | Request a CDI qualified device such as `nvidia.com/gpu=all`; repeat for multiple devices. |
 | `--no-devices` | Clear saved CDI requests while retaining the selected image. |
 | `--native` | Clear the saved OCI image and return the project to native Make execution. |
@@ -699,6 +703,10 @@ cloudmake -b colab --stop
 # Select a digest-pinned tool image once; verify is project-provided.
 cloudmake --use local --image registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 cloudmake verify
+
+# Select the standard Dev Container workstation description once.
+cloudmake --use ssh --host lab-gpu --devcontainer
+cloudmake verify
 ```
 
 ## Backend prerequisites
@@ -724,7 +732,7 @@ shell, or fetch operation.
 Use `--collect DIR TARGET` when a uniform `artifacts/` materialization is useful
 locally as well as remotely.
 
-The local backend also supports the managed OCI runner when Podman, Docker,
+The local backend also supports the managed OCI runner when Docker, Podman,
 nerdctl, or the `skopeo` + `umoci` + PRoot fallback is installed. Cloudmake
 still invokes the project's unchanged Make target, but obtains its tool
 environment from the selected image.
@@ -834,8 +842,9 @@ provider guarantees and may change on a replacement VM. The OCI runner performs
 its own execution preflight on every target invocation. The local backend
 supports the same observation command for comparison.
 
-`cloudmake --backends` also shows the ordered OCI runtime options and separate
-public-inbound/workload-outbound Internet declarations for each backend.
+`cloudmake --backends` also shows Dev Container and loopback-port support, the
+ordered OCI runtime options, and separate public-inbound/workload-outbound
+Internet declarations for each backend.
 Host-oriented backends can declare several choices for dynamic
 probing; managed notebook backends can declare one constrained adapter or
 explicitly declare OCI unsupported.
@@ -867,7 +876,7 @@ or unavailable device is reported as infrastructure failure and the requested
 target is not run. After preflight, Make is submitted exactly once and ordinary
 target failures retain their exit status and output.
 
-Local and SSH backends prefer Podman, Docker, then nerdctl, with a PRoot
+Local and SSH backends prefer Docker, Podman, then nerdctl, with a PRoot
 fallback. Codespaces instead declares `oci-native=yes`: the digest-pinned image
 is adapted into the provider's dev container and Make runs directly in that
 environment. Colab declares exactly one provider-qualified OCI
@@ -905,6 +914,37 @@ tested runtime boundary is recorded in
 remote-workstation usability evaluation is preserved as a
 [historical backend report](docs/historical/kaggle-notebook.md), not as a
 positive qualification claim.
+
+#### Portable Dev Container workstation
+
+Cloudmake 2.3 aligns the maintained backends on a standard project description
+without replacing the target-first Make interface. Opt in once with
+`--devcontainer`; the bare option discovers `.devcontainer/devcontainer.json`
+or `.devcontainer.json`, while an explicit project-relative path is accepted.
+Configuration presence alone never changes execution, preserving existing
+projects and prior CLI behavior.
+
+The portable profile consumes a digest-pinned `image`, literal `containerEnv`
+and `remoteEnv`, basic CPU/memory/storage/GPU `hostRequirements`, loopback-only
+`forwardPorts`, and CDI names in `customizations.cloudmake.devices`. It rejects
+build/Compose definitions, Features, lifecycle hooks, secrets, arbitrary
+mounts and run arguments, user changes, elevated capabilities, and privileged
+mode before contacting a provider. This is an intentionally fail-closed subset
+of the standard, not a parallel project format.
+
+Codespaces realizes the profile as its provider-native Dev Container. Local and
+SSH hosts dynamically qualify Docker first, then Podman, nerdctl, and the
+rootless PRoot compatibility path. Colab uses its single qualified `crun`
+profile. Host requirements are checked on the actual execution machine before
+Make. SSH ports exist only as loopback tunnels for the foreground target; they
+are not public ingress. The Colab notebook backend rejects `forwardPorts`
+because it has no corresponding tunnel. On managed accelerator backends, a
+required GPU profile still needs `--gpu` or a saved GPU selection; Cloudmake
+does not silently choose a provider product or accelerator model.
+
+See the normative [portable Dev Container guide](docs/devcontainers.md) for the
+supported field table, restricted-host behavior, security boundary, and a
+complete example. Use `--native` to return to direct Make execution.
 
 #### Persistent workspace modes
 
@@ -1266,8 +1306,9 @@ course gate proves that path with ECE326's real package, Git, and model
 downloads. Incoming connections are blocked by the VM firewall unless exposed
 through GitHub's authenticated or public port-forwarding service; visibility
 can also be restricted by organization policy. Cloudmake's authenticated SSH
-tunnel is a provider control channel, not public inbound connectivity, and
-Cloudmake does not publish application ports.
+tunnel is a provider control channel, not public inbound connectivity. A
+selected Dev Container's standard `forwardPorts` entries create only bounded
+local-loopback tunnels for the foreground target.
 
 A project target may start a listener and the existing GitHub CLI can expose it
 through a private authenticated tunnel without changing the Makefile contract:
@@ -1280,8 +1321,8 @@ gh codespace ports forward 8080:8080 -c "$CODESPACE"
 
 The v2.2 live network gate verifies this path end to end without making the port
 public. GitHub also supports provider URLs with private, organization, or public
-visibility subject to policy. First-class standard Dev Container
-`forwardPorts` consumption is the v2.3 portability milestone.
+visibility subject to policy. Cloudmake 2.3 consumes standard `forwardPorts` as
+private loopback reachability; it does not request public visibility.
 
 ### Colab SSH backend
 
@@ -1390,6 +1431,14 @@ project or tool state. Authentication, host verification, jump-host policy, and
 key management remain entirely under OpenSSH and the host administrator or cloud
 provider.
 
+The same backend supports the portable Dev Container workstation profile. On a
+normal Linux host it tries Docker first, followed by Podman and nerdctl. On a
+privilege-restricted host it can fall back to `skopeo`, `umoci`, PRoot, and
+`setpriv`: no root login, container daemon, user namespace, or privileged mount
+is required. Runtime readiness, host requirements, and CDI edits are validated
+before the project target is submitted. A broken installed Docker client may
+fall through; a submitted target is never replayed through another runtime.
+
 ### Lightning Studio SSH backend
 
 Lightning Studios provide a persistent development filesystem with CPU and GPU
@@ -1464,15 +1513,15 @@ project target requests a machine.
 
 The three service-adapter roles are visible in each backend's contract:
 
-| Backend | Status | Lifecycle control | Workspace durability | OCI native | Persistence adapter | Bundle-runtime adapter | Source transfer |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `local` | Supported | Local | Host-persistent | No | Native tree; no transfer | Podman, Docker, nerdctl, or CPU PRoot | None |
-| `colab-notebook` | Supported | Provider-managed | Ephemeral | No | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
-| `kaggle-notebook` | Deprecated; not recommended | Per target | Ephemeral | No | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
-| `codespaces-ssh` | Supported | Provider-managed | Stop-persistent | Yes | Native provider workspace | Provider dev container; CPU | Incremental rsync |
-| `colab-ssh` | Supported | Provider-managed | Ephemeral | No | Unsupported | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
-| `host-ssh` | Supported | Externally managed | Host-persistent | No | Host filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
-| `lightning-studio-ssh` | Supported | Provider-managed | Stop-persistent | No | Studio filesystem | Podman, Docker, nerdctl, or CPU PRoot | Incremental rsync |
+| Backend | Status | Lifecycle control | Workspace durability | OCI native | Dev Container | Persistence adapter | Bundle-runtime adapter | Source transfer |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `local` | Supported | Local | Host-persistent | No | Adapter | Native tree; no transfer | Docker, Podman, nerdctl, or CPU PRoot | None |
+| `colab-notebook` | Supported | Provider-managed | Ephemeral | No | Adapter; no ports | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
+| `kaggle-notebook` | Deprecated; not recommended | Per target | Ephemeral | No | Not qualified | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
+| `codespaces-ssh` | Supported | Provider-managed | Stop-persistent | Yes | Provider-native | Native provider workspace | Provider dev container; CPU | Incremental rsync |
+| `colab-ssh` | Supported | Provider-managed | Ephemeral | No | Adapter | Unsupported | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
+| `host-ssh` | Supported | Externally managed | Host-persistent | No | Adapter | Host filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
+| `lightning-studio-ssh` | Supported | Provider-managed | Stop-persistent | No | Adapter | Studio filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
 
 Network direction is a separate backend property, not an implication of the
 transport:
@@ -1569,6 +1618,7 @@ documents before using private source or diagnosing a failure:
 - [Security model](docs/security.md)
 - [Cloudmake 2.0 stateful-workspace design](docs/stateful-workspaces.md)
 - [Execution environments and OCI runner](docs/execution-environments.md)
+- [Portable Dev Container workstations](docs/devcontainers.md)
 - [Project contract](docs/project-contract.md)
 - [Backend contract](docs/backend-contract.md)
 - [Security reporting](SECURITY.md)
@@ -1621,6 +1671,12 @@ marker through GitHub's authenticated private port forwarding, and stops both
 listener and compute. It neither publishes the port nor handles GitHub
 credentials. See
 [`tests/acceptance/codespaces-network`](tests/acceptance/codespaces-network/README.md).
+
+The v2.3 portable-profile gate runs the same Dev Container description through
+an existing Linux SSH host. It proves non-root execution, runtime qualification,
+incremental state, foreground loopback forwarding, and artifact collection; an
+optional strict mode requires the privilege-restricted PRoot path. See
+[`tests/acceptance/devcontainer-ssh`](tests/acceptance/devcontainer-ssh/README.md).
 
 GitHub Actions runs only credential-free automation: the offline suite on Linux
 and macOS, syntax and notebook checks, and weekly pinned-upstream CUDA project

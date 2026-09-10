@@ -3,6 +3,7 @@ REMOTE_OWNER_FILE := $(REMOTE_ROOT)/.cloudmake-owner.json
 REMOTE_LOCK := $(REMOTE_ROOT)/.cloudmake-lock
 REMOTE_ARTIFACT_ARCHIVE := $(REMOTE_ROOT)/.cloudmake-artifacts.tar.gz
 REMOTE_OCI_TOOL := $(REMOTE_ROOT)/.cloudmake-oci-runner.py
+REMOTE_DEVCONTAINER_TOOL := $(REMOTE_ROOT)/.cloudmake-devcontainer.py
 REMOTE_OCI_CACHE := $(REMOTE_ROOT)/.cloudmake-oci-cache
 REMOTE_OCI_RESULT := $(REMOTE_ROOT)/.cloudmake-oci-result.json
 REMOTE_LOCK_STALE ?= 7200
@@ -26,6 +27,7 @@ SSH_REFRESH_MESSAGE ?= SSH connection failed; refreshing generated configuration
 # SSH_HOST may be discovered from a configuration file generated as a target
 # prerequisite. Keep this recursive so it is resolved after that file exists.
 SSH = $(SSH_BIN) $(SSH_OPTIONS) $(SSH_HOST)
+SSH_EXECUTE = $(SSH_BIN) $(SSH_OPTIONS) $(CLOUDMAKE_SSH_FORWARD_OPTIONS) $(SSH_HOST)
 RSYNC_RSH := $(SSH_BIN) $(SSH_OPTIONS)
 SSH_REMOTE_OWNER_COPY := $(CLOUDMAKE_STATE_ROOT)/$(BACKEND)/$(BACKEND_RESOURCE_ID)/remote-owner.json
 CLOUDMAKE_RSYNC_IGNORE := $(if $(wildcard $(PROJECT_DIR)/.cloudmakeignore),--exclude-from='$(PROJECT_DIR)/.cloudmakeignore',)
@@ -162,6 +164,10 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 		$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
 			'$(CLOUDMAKE_TOOL_ROOT)/tools/oci_runner.py' $(SSH_HOST):$(REMOTE_OCI_TOOL); \
 	fi
+	@if test -n '$(CLOUDMAKE_DEVCONTAINER_ACTIVE)'; then \
+		$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
+			'$(CLOUDMAKE_TOOL_ROOT)/tools/devcontainer_config.py' $(SSH_HOST):$(REMOTE_DEVCONTAINER_TOOL); \
+	fi
 	@mv '$(CLOUDMAKE_CURRENT_MANIFEST)' '$(CLOUDMAKE_MANIFEST)'
 
 _ssh-execute: _ssh-start
@@ -186,11 +192,15 @@ _ssh-execute: _ssh-start
 		--oci-image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
 		--oci-devices-b64 '$(CLOUDMAKE_OCI_DEVICES_B64)' \
 		--oci-runtimes-b64 '$(CLOUDMAKE_OCI_RUNTIMES_B64)' \
+		--environment-b64 '$(CLOUDMAKE_OCI_ENVIRONMENT_B64)' \
+		--host-requirements-b64 '$(CLOUDMAKE_HOST_REQUIREMENTS_B64)' \
+		--forward-ports-b64 '$(CLOUDMAKE_FORWARD_PORTS_B64)' \
+		--devcontainer-tool '$(REMOTE_DEVCONTAINER_TOOL)' \
 		--oci-runtime '$(CLOUDMAKE_OCI_RUNTIME)' \
 		--oci-tool '$(REMOTE_OCI_TOOL)' --oci-cache '$(REMOTE_OCI_CACHE)' \
 		--oci-result '$(REMOTE_OCI_RESULT)' )"; \
 	rm -f '$(SSH_OCI_RESULT)' '$(SSH_OCI_RESULT).tmp'; \
-	set +e; $(SSH) "$$command"; execute_status=$$?; set -e; \
+	set +e; $(SSH_EXECUTE) "$$command"; execute_status=$$?; set -e; \
 	if test '$(CLOUDMAKE_RUNNER)' = oci; then \
 		if test '$(BACKEND_OCI_NATIVE)' = yes; then \
 			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/provider_oci_result.py' \
