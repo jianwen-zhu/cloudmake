@@ -410,8 +410,8 @@ Backend settings remain available through Cloudmake options or the host
 environment. They never share the trailing project-assignment namespace:
 
 ```sh
-KAGGLE_TIMEOUT=7200 cloudmake -b kaggle PROJECT_TARGET
-COLAB_IDENTITY=/path/to/key cloudmake -b colab-ssh --shell
+COLAB_SESSION=my-project cloudmake -b colab PROJECT_TARGET
+SSH_HOST=lab-gpu cloudmake -b ssh --shell
 ```
 
 Here and throughout this README, `PROJECT_TARGET` is a placeholder for a target
@@ -469,9 +469,9 @@ Short names are for people; canonical names describe the transport unambiguously
 | `colab` | `colab-notebook` | Supported | Native Colab contents and kernel APIs |
 | `kaggle` | `kaggle-notebook` | Deprecated | Private Kaggle notebook version |
 | `codespaces` | `codespaces-ssh` | Supported | SSH and rsync |
-| `colab-ssh` | `colab-ssh` | Supported | SSH and rsync |
+| `colab-ssh` | `colab-ssh` | Deprecated | SSH and rsync |
 | `ssh` | `host-ssh` | Supported | User-managed SSH and rsync |
-| `lightning` | `lightning-studio-ssh` | Supported | SSH and rsync |
+| `lightning` | `lightning-studio-ssh` | Unqualified | SSH and rsync |
 
 `colab` always means native notebook access. It never silently changes to SSH.
 
@@ -1324,39 +1324,14 @@ public. GitHub also supports provider URLs with private, organization, or public
 visibility subject to policy. Cloudmake 2.3 consumes standard `forwardPorts` as
 private loopback reachability; it does not request public visibility.
 
-### Colab SSH backend
+### Historical Colab SSH backend
 
-This is an explicit paid-tier backend, not a fallback for `colab`. It provides a
-conventional SSH and rsync surface through the Colab CLI's WebSocket proxy.
-
-Prerequisites:
-
-1. All prerequisites for the native Colab backend.
-2. A paid Colab plan and positive compute-unit balance. Google's
-   [Colab FAQ](https://research.google.com/colaboratory/faq.html) lists remote
-   control such as SSH among the activities restricted on free managed runtimes
-   without a positive balance.
-3. Local OpenSSH, rsync, and an Ed25519 or ECDSA key pair.
-4. A supported private key, discovered automatically or selected explicitly:
-
-   ```sh
-   COLAB_IDENTITY=/path/to/id_ed25519 cloudmake -b colab-ssh --shell
-   ```
-
-The runtime may continue consuming compute units while it remains active. Stop it
-explicitly after use:
-
-```sh
-cloudmake -b colab-ssh --stop
-```
-
-Google's current CLI documents `colab ssh`, but access policy and billing remain
-provider-controlled and can change independently of cloudmake.
-
-The Colab SSH doctor can verify the local client, key, and Colab authentication,
-but it cannot prove paid SSH entitlement or positive compute balance without
-attempting a runtime connection. That final check therefore occurs only when an
-operational SSH command is requested.
+The explicit paid-tier `colab-ssh` adapter is deprecated. It is not a fallback
+for `colab`, and it does not turn a managed Colab runtime into a full GCP VM.
+Native Colab remains the supported restricted-platform path; `ssh` covers an
+existing conventional VM, including GCP Compute Engine. The compatibility
+adapter and its prerequisites are retained in the
+[historical backend report](docs/historical/colab-ssh.md).
 
 ### User-managed SSH host backend
 
@@ -1442,7 +1417,9 @@ fall through; a submitted target is never replayed through another runtime.
 ### Lightning Studio SSH backend
 
 Lightning Studios provide a persistent development filesystem with CPU and GPU
-machine switching. Cloudmake uses the provider's normal SSH surface, so source
+machine switching. This adapter is currently **unqualified**: its offline
+provider simulations pass, but no successful live release gate has been
+retained. Cloudmake uses the provider's normal SSH surface, so source
 updates remain incremental and build outputs survive stop/start cycles. The
 actual project still comes from the local working tree; cloudmake does not clone
 it from GitHub. Remote project state lives under the provider-documented
@@ -1519,9 +1496,9 @@ The three service-adapter roles are visible in each backend's contract:
 | `colab-notebook` | Supported | Provider-managed | Ephemeral | No | Adapter; no ports | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
 | `kaggle-notebook` | Deprecated; not recommended | Per target | Ephemeral | No | Not qualified | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
 | `codespaces-ssh` | Supported | Provider-managed | Stop-persistent | Yes | Provider-native | Native provider workspace | Provider dev container; CPU | Incremental rsync |
-| `colab-ssh` | Supported | Provider-managed | Ephemeral | No | Adapter | Unsupported | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
+| `colab-ssh` | Deprecated | Provider-managed | Ephemeral | No | Adapter | Unsupported | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
 | `host-ssh` | Supported | Externally managed | Host-persistent | No | Adapter | Host filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
-| `lightning-studio-ssh` | Supported | Provider-managed | Stop-persistent | No | Adapter | Studio filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
+| `lightning-studio-ssh` | Unqualified | Provider-managed | Stop-persistent | No | Adapter | Studio filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
 
 Network direction is a separate backend property, not an implication of the
 transport:
@@ -1692,13 +1669,18 @@ commands.
 
 ## Project status
 
-The supported local, Colab notebook, Codespaces SSH, paid Colab SSH,
-user-managed host SSH, and Lightning Studio SSH backends implement the documented
-launcher, external-project, arbitrary-target,
+The supported local, Colab notebook, Codespaces SSH, and user-managed host SSH
+backends implement the documented launcher, external-project, arbitrary-target,
 incremental synchronization, artifact retrieval, prerequisite, ownership,
 locking, and recovery contracts. `--collect DIR TARGET` performs target-agnostic
 remote export and safe artifact retrieval as one operation; `--fetch` can
 retrieve the latest prepared output again.
+
+Lightning Studio SSH remains implemented but unqualified: its offline provider
+and shared-transport gates pass, while a successful live release gate has not
+been retained. It may be promoted after that gate passes. Paid Colab SSH is
+deprecated: native Colab and conventional host SSH cover the useful execution
+models without maintaining a second unqualified Colab transport.
 
 The Kaggle notebook implementation remains available but is deprecated after
 live evaluation showed that its fresh-VM-per-target lifecycle makes the

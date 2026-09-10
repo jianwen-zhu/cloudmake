@@ -195,7 +195,9 @@ is known.
 | Backend | OCI execution | Runtime selection | CDI |
 | --- | --- | --- | --- |
 | `local` | supported | Docker, Podman, nerdctl, then PRoot fallback | native CDI or validated PRoot bind/environment translation |
-| `host-ssh`, `lightning-studio-ssh`, `colab-ssh` | supported | same ordered remote selection | native CDI or validated PRoot translation |
+| `host-ssh` | supported | Docker, Podman, nerdctl, then PRoot | native CDI or validated PRoot translation |
+| `lightning-studio-ssh` | unqualified | same ordered remote selection | native CDI or validated PRoot translation |
+| `colab-ssh` | deprecated compatibility adapter | same ordered remote selection | native CDI or validated PRoot translation |
 | `codespaces-ssh` | supported | selected image becomes the provider dev container; no nested runtime | none; qualified CPU backend |
 | `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one provider-qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
 | `kaggle-notebook` | deprecated experimental profile for trusted Linux images | `skopeo` + `umoci` materialization and PRoot | qualified NVIDIA `all` device translated from generated CDI; fail closed when absent |

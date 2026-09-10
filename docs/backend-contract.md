@@ -39,9 +39,9 @@ User aliases are short; canonical names identify transport explicitly:
 | `colab` | `colab-notebook` | supported | Native Colab contents and kernel APIs | `checkpoint` |
 | `kaggle` | `kaggle-notebook` | deprecated | Private Kaggle notebook version | experimental `checkpoint` |
 | `codespaces` | `codespaces-ssh` | supported | SSH and rsync | `native` |
-| `colab-ssh` | `colab-ssh` | supported | SSH and rsync | `unsupported` |
+| `colab-ssh` | `colab-ssh` | deprecated | SSH and rsync | `unsupported` |
 | `ssh` | `host-ssh` | supported | User-managed SSH and rsync | `native` |
-| `lightning` | `lightning-studio-ssh` | supported | SSH and rsync | `native` |
+| `lightning` | `lightning-studio-ssh` | unqualified | SSH and rsync | `native` |
 
 An alias must not silently change transport. In particular, `colab` always
 means native notebook access and never falls back to SSH.
@@ -52,8 +52,8 @@ Each backend declares:
 
 - the supported backend API version;
 - a canonical backend name;
-- its `BACKEND_PRODUCT_STATUS`, `supported` or `deprecated`, plus
-  `BACKEND_PRODUCT_STATUS_REASON` when deprecated;
+- its `BACKEND_PRODUCT_STATUS`: `supported`, `unqualified`, or `deprecated`,
+  plus `BACKEND_PRODUCT_STATUS_REASON` for the latter two;
 - whether its execution environment is reusable across target invocations;
 - who controls compute lifecycle;
 - how long the working filesystem survives;
@@ -70,10 +70,12 @@ Inspect the resolved descriptor with:
 make BACKEND=colab-notebook backend-info
 ```
 
-`BACKEND_PRODUCT_STATUS=deprecated` preserves a compatibility implementation without
-presenting it as a recommended execution surface. The launcher displays the
+`BACKEND_PRODUCT_STATUS=unqualified` identifies an implemented adapter that has
+not passed and retained its required live release gate. It is neither a release
+claim nor a removal notice. `deprecated` preserves a compatibility
+implementation that is no longer recommended. The launcher displays either
 status in `cloudmake --backends` and prints the descriptor's reason whenever a
-deprecated backend is selected. Deprecation does not silently alter existing
+non-supported backend is selected. Neither status silently alters existing
 syntax or target dispatch.
 
 Capabilities describe real behavior rather than provider branding. Examples

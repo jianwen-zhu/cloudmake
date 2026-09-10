@@ -660,28 +660,28 @@ def backend_oci_native(backend: str) -> bool:
 
 def backend_status(backend: str) -> tuple[str, str]:
     status = backend_declaration(backend, "BACKEND_PRODUCT_STATUS")
-    if status not in {"supported", "deprecated"}:
+    if status not in {"supported", "unqualified", "deprecated"}:
         raise UsageError(f"backend {backend!r} has invalid status {status!r}")
     reason = ""
-    if status == "deprecated":
+    if status != "supported":
         reason = backend_declaration(backend, "BACKEND_PRODUCT_STATUS_REASON")
         if not reason:
-            raise UsageError(f"deprecated backend {backend!r} has no status reason")
+            raise UsageError(f"{status} backend {backend!r} has no status reason")
     return status, reason
 
 
-def warn_deprecated_backend(backend: str) -> None:
+def warn_backend_status(backend: str) -> None:
     status, reason = backend_status(backend)
-    if status == "deprecated":
+    if status != "supported":
         print(
-            f"[cloudmake] warning: backend={backend} status=deprecated; {reason}.",
+            f"[cloudmake] warning: backend={backend} status={status}; {reason}.",
             file=sys.stderr,
         )
 
 
 def show_backends() -> None:
     print(
-        f"{'BACKEND':22} {'STATUS':10} {'SESSION REUSE':13} {'LIFECYCLE':18} "
+        f"{'BACKEND':22} {'STATUS':11} {'SESSION REUSE':13} {'LIFECYCLE':18} "
         f"{'WORKSPACE':17} {'OCI NATIVE':10} {'PERSISTENCE':12} "
         f"{'TRANSPORT':36} {'OCI RUNTIMES':34} {'INTERNET IN':12} "
         f"{'INTERNET OUT':12} {'DEVCONTAINER':12} {'PORTS':10} HOST CLIENT"
@@ -706,7 +706,7 @@ def show_backends() -> None:
         devcontainer = "yes" if "devcontainer" in capabilities else "no"
         ports = "loopback" if "port-forward" in capabilities else "no"
         print(
-            f"{name:22} {status:10} {session_reuse:13} {lifecycle:18} "
+            f"{name:22} {status:11} {session_reuse:13} {lifecycle:18} "
             f"{workspace:17} {'yes' if oci_native else 'no':10} {PERSISTENCE_MODES[name]:12} "
             f"{transport:36} {runtime_text:34} {internet_in:12} "
             f"{internet_out:12} {devcontainer:12} {ports:10} {client} ({installed})"
@@ -1817,7 +1817,7 @@ def run(arguments: list[str]) -> int:
         ):
             raise UsageError("workstation runner selection is per project, not global")
         backend = options["use_backend"]
-        warn_deprecated_backend(backend)
+        warn_backend_status(backend)
         accelerator_set = options["accelerator_set"]
         accelerator = options["accelerator"]
         if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
@@ -2058,7 +2058,7 @@ def run(arguments: list[str]) -> int:
         return 0
     if backend == "host-ssh" and ssh_host is None:
         raise UsageError("the ssh backend requires --host HOST")
-    warn_deprecated_backend(backend)
+    warn_backend_status(backend)
 
     if action is None:
         remote_target, assignments = positional[0], positional[1:]

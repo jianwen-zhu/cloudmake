@@ -4,7 +4,8 @@
 BACKEND_TRANSPORT := ssh
 BACKEND_ACCESS_CLASS := quota-tier
 BACKEND_API_VERSION := 1
-BACKEND_PRODUCT_STATUS := supported
+BACKEND_PRODUCT_STATUS := unqualified
+BACKEND_PRODUCT_STATUS_REASON := Lightning Studio has no retained successful live release gate
 BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := provider-managed
 BACKEND_WORKSPACE_DURABILITY := stop-persistent

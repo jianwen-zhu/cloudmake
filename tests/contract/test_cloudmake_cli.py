@@ -499,6 +499,8 @@ def test_backends_reports_persistence_mode_for_every_backend(
     assert rows["kaggle-notebook"][6] == "checkpoint"
     assert "proot" in rows["kaggle-notebook"]
     assert "conditional" in rows["kaggle-notebook"]
+    assert rows["colab-ssh"][1] == "deprecated"
+    assert rows["lightning-studio-ssh"][1] == "unqualified"
     assert rows["codespaces-ssh"][5] == "yes"
     assert "provider-native" in rows["codespaces-ssh"]
     assert "docker,podman,nerdctl,proot" in rows["host-ssh"]
@@ -539,6 +541,36 @@ def test_deprecated_backend_warns_without_changing_dispatch(
     assert "backend=kaggle-notebook status=deprecated" in result.stdout
     assert "fresh VM and full checkpoint materialization" in result.stdout
     assert_assignment(engine_calls(log)[0], "BACKEND", "kaggle-notebook")
+
+
+@pytest.mark.parametrize(
+    ("backend", "canonical", "status", "reason"),
+    [
+        ("colab-ssh", "colab-ssh", "deprecated", "duplicates host SSH"),
+        (
+            "lightning",
+            "lightning-studio-ssh",
+            "unqualified",
+            "Lightning Studio has no retained",
+        ),
+    ],
+)
+def test_non_supported_backend_warns_without_changing_dispatch(
+    tmp_path: Path,
+    fake_bin: Path,
+    backend: str,
+    canonical: str,
+    status: str,
+    reason: str,
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, "-b", backend, "build")
+
+    assert f"backend={canonical} status={status}" in result.stdout
+    assert reason in result.stdout
+    assert_assignment(engine_calls(log)[0], "BACKEND", canonical)
 
 
 @pytest.mark.parametrize(

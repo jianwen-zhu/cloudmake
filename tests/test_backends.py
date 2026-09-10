@@ -3335,10 +3335,20 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
 ) -> None:
     result = run_command(["make", f"BACKEND={backend}", "backend-info"], cwd=prototype)
     assert "api=1" in result.stdout
-    expected_status = "deprecated" if backend == "kaggle-notebook" else "supported"
+    expected_status = (
+        "deprecated"
+        if backend in {"kaggle-notebook", "colab-ssh"}
+        else "unqualified"
+        if backend == "lightning-studio-ssh"
+        else "supported"
+    )
     assert f"product-status={expected_status}" in result.stdout
     if backend == "kaggle-notebook":
         assert "product-status-reason=fresh VM and full checkpoint materialization" in result.stdout
+    elif backend == "colab-ssh":
+        assert "product-status-reason=paid Colab SSH duplicates host SSH" in result.stdout
+    elif backend == "lightning-studio-ssh":
+        assert "product-status-reason=Lightning Studio has no retained" in result.stdout
     assert f"session-reuse={session_reuse}" in result.stdout
     assert f"lifecycle-control={lifecycle_control}" in result.stdout
     assert f"workspace-durability={workspace_durability}" in result.stdout
@@ -3361,7 +3371,7 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
     assert f"oci-native={'yes' if backend == 'codespaces-ssh' else 'no'}" in result.stdout
     assert f"internet-inbound={internet_inbound}" in result.stdout
     assert f"internet-outbound={internet_outbound}" in result.stdout
-    if expected_status == "supported":
+    if backend != "kaggle-notebook":
         assert "devcontainer" in result.stdout
     if backend.endswith("-ssh"):
         assert "port-forward" in result.stdout
@@ -3464,6 +3474,31 @@ def test_backend_contract_rejects_unknown_backend_status(tmp_path: Path) -> None
 
     assert result.returncode != 0
     assert "invalid BACKEND_PRODUCT_STATUS" in result.stdout
+
+
+@pytest.mark.parametrize("status", ["unqualified", "deprecated"])
+def test_backend_contract_requires_reason_for_non_supported_status(
+    tmp_path: Path, status: str
+) -> None:
+    descriptor = tmp_path / "missing-status-reason.mk"
+    descriptor.write_text(
+        "BACKEND := missing-status-reason\n"
+        "BACKEND_API_VERSION := 1\n"
+        f"BACKEND_PRODUCT_STATUS := {status}\n"
+        "BACKEND_SESSION_REUSE := no\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_OCI_RUNTIMES := none\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert "must declare BACKEND_PRODUCT_STATUS_REASON" in result.stdout
 
 
 @pytest.mark.integration

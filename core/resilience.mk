@@ -101,8 +101,13 @@ endif
 ifneq ($(BACKEND_API_VERSION),$(CLOUDMAKE_BACKEND_API_VERSION))
 $(error Backend "$(BACKEND)" uses API $(BACKEND_API_VERSION); cloudmake supports $(CLOUDMAKE_BACKEND_API_VERSION))
 endif
-ifeq ($(filter $(BACKEND_PRODUCT_STATUS),supported deprecated),)
-$(error Backend "$(BACKEND)" has invalid BACKEND_PRODUCT_STATUS "$(BACKEND_PRODUCT_STATUS)"; expected supported or deprecated)
+ifeq ($(filter $(BACKEND_PRODUCT_STATUS),supported unqualified deprecated),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_PRODUCT_STATUS "$(BACKEND_PRODUCT_STATUS)"; expected supported, unqualified, or deprecated)
+endif
+ifneq ($(BACKEND_PRODUCT_STATUS),supported)
+ifeq ($(strip $(BACKEND_PRODUCT_STATUS_REASON)),)
+$(error Backend "$(BACKEND)" with status "$(BACKEND_PRODUCT_STATUS)" must declare BACKEND_PRODUCT_STATUS_REASON)
+endif
 endif
 ifeq ($(filter $(BACKEND_SESSION_REUSE),yes no),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_SESSION_REUSE "$(BACKEND_SESSION_REUSE)"; expected yes or no)

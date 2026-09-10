@@ -115,6 +115,13 @@ use a Cloudmake adapter (`oci-native=no`). This property describes who creates
 the workstation, not whether the OCI image or Dev Container configuration is
 standard.
 
+Product qualification remains separate from implementation capability.
+Lightning Studio SSH implements this profile through the common SSH adapter but
+remains `unqualified` until its live release gate succeeds and the evidence is
+retained. Paid Colab SSH also shares the implementation, but is deprecated
+because it adds no distinct qualified workstation capability. Selecting either
+prints that status and reason.
+
 The deprecated Kaggle adapter predates this portable profile and remains
 outside release qualification.
 

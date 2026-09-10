@@ -69,7 +69,8 @@ CLOUDMAKE_TEST_LIVE_LIGHTNING=1 python3 -m pytest \
 ```
 
 Do not copy Lightning configuration, login tokens, or SSH keys into GitHub
-Actions. The repository
+Actions. Until this gate succeeds and its evidence is retained for the current
+service and client, `lightning-studio-ssh` remains `unqualified`. The repository
 provides two credential-free hosted automation layers:
 
 - `CI` runs the offline suite on supported macOS/Linux and Python combinations;

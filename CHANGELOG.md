@@ -32,6 +32,10 @@ once a version is published as a GitHub release.
 - Add focused parser, fail-closed privilege, runtime fallback, SSH tunnel,
   Codespaces translation, Colab control, local execution, and cross-backend
   capability regression coverage.
+- Introduce an explicit `unqualified` backend status and apply it to Lightning
+  Studio SSH until a successful live release gate is retained. Deprecate paid
+  Colab SSH while preserving its compatibility adapter; native Colab and
+  conventional host SSH cover the useful execution models without it.
 
 ## 2.2.0 - 2026-09-10
 
