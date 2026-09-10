@@ -349,7 +349,7 @@ repository verification can dominate a small payload. Persistence is therefore
 most useful when it avoids substantially more expensive provisioning or build
 work. Small workloads should retain the default non-persistent path.
 
-### Colab persistence boundary and the Cloudmake 2.4 target
+### Colab persistence boundary and the retired GCS 2.4 proposal
 
 A named [Colab CLI session](https://github.com/googlecolab/google-colab-cli/blob/main/docs/01_session_management.md)
 can reuse one live VM and kernel across commands, but the name is local control
@@ -368,32 +368,28 @@ pooled runtime service deliberately couples the writable VM disk to the
 temporary assignment; Cloudmake cannot make it stop-persistent without an
 external store.
 
-Cloudmake 2.4 therefore targets a second Colab checkpoint adapter backed by
-Google Cloud Storage. Its design requirements are:
+An initial Cloudmake 2.4 proposal paired native Colab with Google Cloud Storage.
+The feasibility review found the mechanism technically sound: GCS Credential
+Access Boundaries can restrict a short-lived token to a bucket and object
+prefix, and restic can consume that non-refreshable bearer token directly.
+However, GCS requires an active Cloud Billing account, its free allowance is
+bounded, and a large checkpoint can create storage, operation, or transfer
+charges. The IAM and billing setup is disproportionate when compared with a
+proper Compute Engine VM whose Persistent Disk already survives stop/start.
 
-- retain the current storage-neutral workspace lifecycle and incremental
-  checkpoint semantics;
-- use the Google Cloud free allowance when the user's bucket and billing
-  configuration qualify, without claiming that storage, operations, or
-  transfer are unlimited;
-- replace per-VM interactive Drive authorization with host-coordinated,
-  short-lived credentials restricted to the selected bucket and operation;
-- keep long-lived Google credentials, service-account keys, OAuth refresh
-  tokens, and HMAC secrets out of the Colab VM;
-- never serialize temporary credentials into notebooks, command output,
-  provenance, project source, checkpoints, or generated metadata;
-- prove that the selected incremental checkpoint engine can consume and discard
-  those credentials without weakening repository integrity; and
-- retain the Drive adapter for compatibility until the GCS path passes the same
-  cross-VM recovery and adversarial credential-custody gates.
+The GCS proposal is therefore not the Cloudmake 2.4 objective. Drive remains the
+explicitly interactive Colab checkpoint adapter. GCS may be revisited later as
+an optional storage adapter, but it must never be described as risk-free free
+storage or become the default merely to avoid Drive authorization. No GCP
+account, billing relationship, project, bucket, or credential was created by
+the feasibility review.
 
-The intended unattended guarantee is deliberately bounded. A foreground
-Cloudmake invocation can obtain a fresh short-lived credential immediately
-before restore and again before publication, without another browser consent
-flow. A Colab VM that must checkpoint independently after the controlling host
-has disappeared would need a renewable identity or credential broker. That is
-not promised by 2.4 and must not be approximated by copying a long-lived secret
-into the VM.
+Cloudmake 2.4 instead targets a single-node GCP remote workstation. An already
+provisioned Compute Engine VM owns its Persistent Disk, so the backend's
+persistence operation is native and checkpoint transfer is a no-op. This keeps
+the Make invariant intact: durable state accelerates work, while source and the
+project's targets must still be sufficient to rebuild from scratch. See the
+[GCP backend design](gcp-backend.md).
 
 The feature branch now implements the local credential-store and
 encrypted-envelope path as well as the proven storage lifecycle. Focused
