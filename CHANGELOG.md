@@ -3,6 +3,12 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
+## 2.3.1 - 2026-09-10
+
+- Make the local OCI runtime-selection regression hermetic when the test host
+  has a working Docker daemon, preserving the intended Docker-to-Podman
+  readiness fallback without contacting a registry.
+
 ## 2.3.0 - 2026-09-10
 
 - Add explicit `--devcontainer[=PATH]` selection while preserving native Make

@@ -1251,6 +1251,10 @@ def test_local_oci_runner_preflights_then_submits_target_once(
     environment, engine_log = contract_environment(tmp_path, fake_bin)
     runtime_log = tmp_path / "oci-runtime.jsonl"
     write_executable(
+        fake_bin / "docker",
+        "#!/bin/sh\nexit 1\n",
+    )
+    write_executable(
         fake_bin / "podman",
         r'''#!/usr/bin/env python3
 import json
