@@ -349,6 +349,52 @@ repository verification can dominate a small payload. Persistence is therefore
 most useful when it avoids substantially more expensive provisioning or build
 work. Small workloads should retain the default non-persistent path.
 
+### Colab persistence boundary and the Cloudmake 2.4 target
+
+A named [Colab CLI session](https://github.com/googlecolab/google-colab-cli/blob/main/docs/01_session_management.md)
+can reuse one live VM and kernel across commands, but the name is local control
+state for an active provider assignment. It is not a durable VM identity or an
+attached persistent disk. `colab stop` releases the assignment, and
+[Colab may delete](https://research.google.com/colaboratory/faq.html) an
+assigned VM after an idle timeout or its maximum lifetime. The provider exposes
+no stopped-but-retained VM state that Cloudmake can later wake.
+
+This differs materially from Codespaces. A Codespace is a provider resource
+whose compute may stop while
+[its workspace remains retained](https://docs.github.com/en/codespaces/about-codespaces/understanding-the-codespace-lifecycle)
+until deletion or retention expiry. Cloudmake can wake that same resource, so
+its persistence adapter is native and requires no checkpoint transfer. Colab's
+pooled runtime service deliberately couples the writable VM disk to the
+temporary assignment; Cloudmake cannot make it stop-persistent without an
+external store.
+
+Cloudmake 2.4 therefore targets a second Colab checkpoint adapter backed by
+Google Cloud Storage. Its design requirements are:
+
+- retain the current storage-neutral workspace lifecycle and incremental
+  checkpoint semantics;
+- use the Google Cloud free allowance when the user's bucket and billing
+  configuration qualify, without claiming that storage, operations, or
+  transfer are unlimited;
+- replace per-VM interactive Drive authorization with host-coordinated,
+  short-lived credentials restricted to the selected bucket and operation;
+- keep long-lived Google credentials, service-account keys, OAuth refresh
+  tokens, and HMAC secrets out of the Colab VM;
+- never serialize temporary credentials into notebooks, command output,
+  provenance, project source, checkpoints, or generated metadata;
+- prove that the selected incremental checkpoint engine can consume and discard
+  those credentials without weakening repository integrity; and
+- retain the Drive adapter for compatibility until the GCS path passes the same
+  cross-VM recovery and adversarial credential-custody gates.
+
+The intended unattended guarantee is deliberately bounded. A foreground
+Cloudmake invocation can obtain a fresh short-lived credential immediately
+before restore and again before publication, without another browser consent
+flow. A Colab VM that must checkpoint independently after the controlling host
+has disappeared would need a renewable identity or credential broker. That is
+not promised by 2.4 and must not be approximated by copying a long-lived secret
+into the VM.
+
 The feature branch now implements the local credential-store and
 encrypted-envelope path as well as the proven storage lifecycle. Focused
 automated tests cover ciphertext-only transport, key reuse, missing or locked

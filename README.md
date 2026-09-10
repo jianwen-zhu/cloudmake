@@ -245,8 +245,13 @@ checkpoint transfer, and a selected OCI image becomes the native Codespaces
 workstation environment instead of a nested container. Cloudmake 2.3 will make
 the standard Dev Container description the portable workstation contract
 across qualified backends, retaining `--image` as its minimal intrusion-free
-shorthand. The storage-neutral lifecycle and runtime contracts are documented
-in [Stateful workspaces](docs/stateful-workspaces.md) and
+shorthand. Cloudmake 2.4 will add Google Cloud Storage as a managed-checkpoint
+service for Colab, targeting unattended host-coordinated restore and save with
+short-lived, bucket-restricted credentials instead of the interactive Drive
+mount. That target does not turn a stopped Colab assignment into a persistent
+VM: replaceable compute and durable workspace storage remain separate services.
+The storage-neutral lifecycle and runtime contracts are documented in
+[Stateful workspaces](docs/stateful-workspaces.md) and
 [Execution environments and OCI runner](docs/execution-environments.md).
 
 ### Tool repository and project repository are separate
