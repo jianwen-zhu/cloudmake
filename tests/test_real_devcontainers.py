@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -13,13 +14,13 @@ CONFIG_TOOL = PROJECT_ROOT / "tools" / "devcontainer_config.py"
 LAUNCHER = PROJECT_ROOT / "bin" / "cloudmake"
 
 EXPECTED = {
-    "cpp": "do not support: build",
-    "go": "do not support: portsAttributes",
-    "java": "do not support: features",
-    "node": "do not support: portsAttributes, postCreateCommand",
-    "python": "do not support: portsAttributes, postCreateCommand",
-    "rust": None,
-    "ubuntu": None,
+    "cpp": {"image-build"},
+    "go": {"image-digest", "port-attributes"},
+    "java": {"features", "image-digest"},
+    "node": {"image-digest", "lifecycle-create", "port-attributes"},
+    "python": {"image-digest", "lifecycle-create", "port-attributes"},
+    "rust": {"image-digest"},
+    "ubuntu": {"image-digest"},
 }
 
 
@@ -65,27 +66,50 @@ def test_pinned_public_devcontainer_compatibility_corpus(tmp_path: Path) -> None
             cwd=PROJECT_ROOT,
             check=False,
         )
-        if expected is None:
-            assert parsed.returncode == 0, parsed.stdout
-        else:
-            assert parsed.returncode == 2
-            assert expected in parsed.stdout
+        assert parsed.returncode == 0, parsed.stdout
+        profile = json.loads(parsed.stdout)
+        assert expected <= set(profile["required_capabilities"])
 
     expected_output = {
+        "cpp": "cpp-devcontainer=ok",
         "rust": "Hello, VS Code Remote - Containers!",
         "ubuntu": "workspace=ok",
     }
     for name, marker in expected_output.items():
         state = tmp_path / f"state-{name}"
-        executed = run_command(
-            [LAUNCHER, "-b", "local", "--devcontainer", "verify"],
-            cwd=projects[name],
-            env={
-                "CLOUDMAKE_CONFIG_HOME": str(state / "config"),
-                "CLOUDMAKE_STATE_HOME": str(state / "state"),
-                "CLOUDMAKE_CACHE_HOME": str(state / "cache"),
-            },
-            timeout=900,
-        )
-        assert "runtime=docker" in executed.stdout
-        assert marker in executed.stdout
+        container_id = ""
+        try:
+            executed = run_command(
+                [LAUNCHER, "-b", "local", "--devcontainer", "verify"],
+                cwd=projects[name],
+                env={
+                    "CLOUDMAKE_CONFIG_HOME": str(state / "config"),
+                    "CLOUDMAKE_STATE_HOME": str(state / "state"),
+                    "CLOUDMAKE_CACHE_HOME": str(state / "cache"),
+                },
+                timeout=900,
+            )
+            expected_runner = (
+                "runner=devcontainer-native" if name == "cpp" else "runtime=docker"
+            )
+            assert expected_runner in executed.stdout
+            assert marker in executed.stdout
+            if name == "cpp":
+                latest = next((state / "state" / "projects").glob("*/runs/latest.json"))
+                provenance = json.loads(latest.read_text(encoding="utf-8"))
+                assert provenance["runner"]["image_id"].startswith("sha256:")
+                assert provenance["runner"]["platform"].startswith("linux/")
+                assert provenance["runner"]["target_submission"] == "confirmed"
+                container_id = provenance["runner"]["container_id"]
+        finally:
+            if name == "cpp" and not container_id:
+                records = list((state / "state" / "projects").glob("*/runs/latest.json"))
+                if records:
+                    provenance = json.loads(records[0].read_text(encoding="utf-8"))
+                    container_id = provenance.get("runner", {}).get("container_id", "")
+            if container_id:
+                run_command(
+                    ["docker", "rm", "-f", container_id],
+                    cwd=PROJECT_ROOT,
+                    check=False,
+                )

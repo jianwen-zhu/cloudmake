@@ -72,6 +72,7 @@ pin_image "$destination/templates/src/ubuntu/.devcontainer/devcontainer.json" \
 	mcr.microsoft.com/devcontainers/base@sha256:00e84e24112159d45c0262f07cb013cb58cb6a415f3e1c743d4a3115ac5d76c6
 
 install -m 0644 "$script_dir/overlays/rust/Makefile" "$destination/rust/Makefile"
+install -m 0644 "$script_dir/overlays/cpp/Makefile" "$destination/cpp/Makefile"
 install -m 0644 "$script_dir/overlays/ubuntu/Makefile" \
 	"$destination/templates/src/ubuntu/Makefile"
 

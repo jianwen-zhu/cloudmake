@@ -59,6 +59,12 @@ BACKEND_OCI_RUNTIMES ?=
 # from the selected image. API-1 descriptors pre-dating this distinction retain
 # the existing adapter behavior.
 BACKEND_OCI_NATIVE ?= no
+# Dev Container semantics are declared independently for Cloudmake's portable
+# adapter and for a provider/reference-native engine. Older API-1 descriptors
+# remain valid but advertise neither until explicitly qualified.
+BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES ?= none
+BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES ?= none
+CLOUDMAKE_DEVCONTAINER_CAPABILITIES := cdi compose environment features forward-ports host-lifecycle host-requirements image-build image-digest image-tag lifecycle-attach lifecycle-control lifecycle-create lifecycle-start mounts port-attributes privilege process-control published-ports runtime-arguments secrets security-policy user-selection workspace-layout
 # Public Internet reachability is independent of the provider control
 # transport.  A notebook backend can accept authenticated command submission
 # while exposing no inbound socket at all.  API-1 descriptors that predate
@@ -137,6 +143,22 @@ ifneq ($(BACKEND_OCI_RUNTIMES),none)
 $(error Backend "$(BACKEND)" with BACKEND_OCI_NATIVE=yes must declare OCI runtime "none")
 endif
 endif
+ifneq ($(filter none,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),)
+ifneq ($(words $(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),1)
+$(error Backend "$(BACKEND)" must declare Dev Container adapter capability "none" alone)
+endif
+endif
+ifneq ($(filter none,$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
+ifneq ($(words $(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),1)
+$(error Backend "$(BACKEND)" must declare Dev Container native capability "none" alone)
+endif
+endif
+ifneq ($(filter-out none $(CLOUDMAKE_DEVCONTAINER_CAPABILITIES),$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),)
+$(error Backend "$(BACKEND)" has invalid Dev Container adapter capabilities "$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)")
+endif
+ifneq ($(filter-out none $(CLOUDMAKE_DEVCONTAINER_CAPABILITIES),$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
+$(error Backend "$(BACKEND)" has invalid Dev Container native capabilities "$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)")
+endif
 ifneq ($(filter-out yes no conditional inherited unknown,$(BACKEND_INTERNET_INBOUND)),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_INTERNET_INBOUND "$(BACKEND_INTERNET_INBOUND)")
 endif
@@ -175,6 +197,8 @@ backend-info: backend-contract
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'
 	@echo 'oci-runtimes=$(BACKEND_OCI_RUNTIMES)'
+	@echo 'devcontainer-adapter-capabilities=$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)'
+	@echo 'devcontainer-native-capabilities=$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)'
 	@echo 'internet-inbound=$(BACKEND_INTERNET_INBOUND)'
 	@echo 'internet-outbound=$(BACKEND_INTERNET_OUTBOUND)'
 

@@ -225,6 +225,135 @@ def test_devcontainer_privilege_failure_precedes_provider_contact(
     assert engine_calls(log) == []
 
 
+def test_richer_devcontainer_selects_qualified_local_native_engine(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps(
+            {
+                "image": "ubuntu:24.04",
+                "features": {"ghcr.io/devcontainers/features/git:1": {}},
+                "postCreateCommand": "true",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = invoke(project, environment, "--use", "local", "--devcontainer")
+
+    assert "runner=devcontainer-native" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_richer_devcontainer_rejects_restricted_backend_before_dispatch(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "ubuntu:24.04", "postCreateCommand": "true"}),
+        encoding="utf-8",
+    )
+
+    result = invoke(
+        project, environment, "-b", "colab", "--devcontainer", "build", check=False
+    )
+
+    assert result.returncode == 2
+    assert "cannot honor Dev Container requirement(s)" in result.stdout
+    assert "image-tag" in result.stdout
+    assert "lifecycle-create" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_devcontainer_requirements_are_not_satisfied_by_mixing_engines(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "ubuntu:24.04", "forwardPorts": [8080]}),
+        encoding="utf-8",
+    )
+
+    result = invoke(
+        project, environment, "-b", "local", "--devcontainer", "build", check=False
+    )
+
+    assert result.returncode == 2
+    assert "cannot honor the complete Dev Container requirement set" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_richer_local_devcontainer_executes_through_native_engine_and_records_provenance(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "ubuntu:24.04", "postCreateCommand": "true"}),
+        encoding="utf-8",
+    )
+    write_executable(
+        fake_bin / "devcontainer",
+        """#!/usr/bin/env python3
+import json, os, sys
+if sys.argv[1] == 'up':
+    print(json.dumps({'outcome': 'success', 'containerId': 'native-container'}))
+else:
+    if 'command -v make >/dev/null' in sys.argv:
+        raise SystemExit(0)
+    for value in sys.argv:
+        if value.startswith('cloudmake-target-submitted-'):
+            print(value)
+    print('native target output')
+    raise SystemExit(int(os.environ.get('FAKE_NATIVE_TARGET_EXIT', '0')))
+""",
+    )
+    write_executable(
+        fake_bin / "docker",
+        """#!/usr/bin/env python3
+import json, sys
+if sys.argv[1] == 'inspect':
+    print('sha256:native-image')
+elif sys.argv[1:3] == ['image', 'inspect']:
+    print(json.dumps(['ubuntu@sha256:' + 'a' * 64]))
+""",
+    )
+
+    result = invoke(project, environment, "-b", "local", "--devcontainer", "build")
+
+    assert "runner=devcontainer-native" in result.stdout
+    assert "native target output" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["runner"]["runtime"] == "devcontainer-cli"
+    assert provenance["runner"]["resolved_digest"] == "ubuntu@sha256:" + "a" * 64
+    assert provenance["runner"]["target_submission"] == "confirmed"
+    assert provenance["runner"]["devcontainer"]["required_capabilities"] == [
+        "image-tag", "lifecycle-create"
+    ]
+    assert engine_calls(log) == []
+
+    environment["FAKE_NATIVE_TARGET_EXIT"] = "7"
+    failed = invoke(
+        project, environment, "-b", "local", "--devcontainer", "build", check=False
+    )
+    assert failed.returncode == 7
+    assert "native target output" in failed.stdout
+    assert "target 'build' failed with exit status 7" in failed.stdout
+
+
 def test_devcontainer_is_explicit_and_does_not_auto_activate(
     tmp_path: Path, fake_bin: Path
 ) -> None:
@@ -522,7 +651,9 @@ def test_backends_reports_persistence_mode_for_every_backend(
         "host-ssh",
         "lightning-studio-ssh",
     ):
-        assert "yes" in rows[backend][-4:-2]
+        assert rows[backend][-5] == "yes"
+    assert rows["local"][-4] == "adapter+native"
+    assert rows["colab-notebook"][-4] == "adapter"
     assert "loopback" in rows["host-ssh"]
     assert "loopback" in rows["codespaces-ssh"]
     assert "loopback" in rows["local"]

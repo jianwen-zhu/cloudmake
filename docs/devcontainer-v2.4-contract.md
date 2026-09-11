@@ -2,6 +2,12 @@
 
 Status: accepted design for the Cloudmake 2.4 development line.
 
+Implementation status: capability analysis and backend declarations are active.
+The existing restricted OCI adapter remains the portable baseline. The local
+backend additionally qualifies the reference Dev Container CLI over Docker for
+the bounded richer field set documented in `devcontainers.md`; other backends
+fail early when that richer set is requested.
+
 Cloudmake accepts the standard `devcontainer.json` format as a workstation
 description. It does not claim that every backend implements every part of the
 Dev Container specification. Instead, Cloudmake analyzes the behavior required
@@ -64,7 +70,8 @@ persistence, and OCI runtime support. The descriptor distinguishes the portable
 core from optional standard behaviors such as:
 
 ```text
-image-reference
+image-digest
+image-tag
 image-build
 compose
 features

@@ -61,6 +61,8 @@ Each backend declares:
 - an ordered set of capabilities, including any persistence and bundle-runtime
   roles;
 - an ordered OCI runtime list, or `none`; and
+- separate Dev Container capability sets for the Cloudmake adapter and any
+  provider/reference-native engine;
 - separate public-Internet inbound and outbound declarations; and
 - a resource identifier suitable for local serialization.
 
@@ -70,6 +72,17 @@ Inspect the resolved descriptor with:
 ```sh
 make BACKEND=colab-notebook backend-info
 ```
+
+Dev Container declarations use
+`BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES` and
+`BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES`. Each is either `none` or a closed
+list of semantic names such as `image-digest`, `image-tag`, `image-build`,
+`features`, `lifecycle-create`, `user-selection`, `forward-ports`, and `cdi`.
+They are independent of `BACKEND_OCI_NATIVE`: the former describes standard
+behavior Cloudmake can preserve, while the latter identifies who constructs the
+OCI workstation. The launcher compares a configuration's complete requirement
+set with one engine; it never combines partial engines or silently removes a
+requirement.
 
 `BACKEND_PRODUCT_STATUS=unqualified` identifies an implemented adapter that has
 not passed and retained its required live release gate. It is neither a release

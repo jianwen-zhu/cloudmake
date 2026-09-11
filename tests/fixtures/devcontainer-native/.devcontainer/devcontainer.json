@@ -1,0 +1,6 @@
+{
+  "name": "Cloudmake native Dev Container fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "postCreateCommand": "touch /tmp/cloudmake-devcontainer-prepared",
+  "remoteUser": "vscode"
+}

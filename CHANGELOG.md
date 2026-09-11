@@ -5,6 +5,22 @@ once a version is published as a GitHub release.
 
 ## Unreleased (2.4.0 candidate)
 
+- Replace global Dev Container field rejection with capability negotiation:
+  the parser emits a closed semantic requirement set and each backend declares
+  separate adapter and native-engine capabilities. One qualified engine must
+  satisfy the complete set; Cloudmake never combines partial semantics.
+- Qualify the local reference Dev Container CLI over Docker for tagged images,
+  image builds, Features, create-phase lifecycle preparation, user/workspace
+  selection, literal environment, host requirements, process control, and
+  restrictive security policy. Existing digest-only configurations retain the
+  portable OCI adapter path.
+- Bind native preparation to the configuration path/content, referenced local
+  Dockerfile, engine contract, and Cloudmake project identity. Reuse an
+  unchanged container, reconstruct stale or unreceipted state before Make, and
+  preserve the one-target-at-most-once rule.
+- Record source image, resolved registry digest or derived image ID, container
+  ID, platform, preparation outcome, requirements, and confirmed target
+  submission in provenance without taking custody of registry credentials.
 - Add an unqualified single-node Google Compute Engine backend for an existing
   VM. It starts or reuses the named instance, adapts `gcloud compute ssh` to the
   common SSH/rsync transport, preserves generated work on attached Persistent

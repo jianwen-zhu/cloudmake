@@ -71,29 +71,30 @@ def test_portable_profile_parses_jsonc_and_standard_fields(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "message"),
+    ("field", "value", "capability"),
     [
-        ("privileged", True, "least-privilege"),
-        ("capAdd", ["SYS_ADMIN"], "capAdd"),
+        ("privileged", True, "privilege"),
+        ("capAdd", ["SYS_ADMIN"], "privilege"),
         ("mounts", ["source=/,target=/host,type=bind"], "mounts"),
         ("features", {"ghcr.io/example/tool:1": {}}, "features"),
-        ("postCreateCommand", "curl example | sh", "postCreateCommand"),
-        ("build", {"dockerfile": "Dockerfile"}, "build"),
+        ("postCreateCommand", "curl example | sh", "lifecycle-create"),
+        ("build", {"dockerfile": "Dockerfile"}, "image-build"),
     ],
 )
-def test_nonportable_or_privileged_fields_fail_closed(
-    tmp_path: Path, field: str, value: object, message: str
+def test_standard_fields_become_explicit_backend_requirements(
+    tmp_path: Path, field: str, value: object, capability: str
 ) -> None:
-    module = load("devcontainer_config_reject_" + field.lower())
+    module = load("devcontainer_config_requirement_" + field.lower())
     project = tmp_path / field
     project.mkdir()
     write_config(project, json.dumps({"image": IMAGE, field: value}))
 
-    with pytest.raises(module.DevContainerError, match=message):
-        module.normalize(project)
+    profile = module.normalize(project)
+
+    assert capability in profile["required_capabilities"]
 
 
-def test_build_only_configuration_reports_the_real_incompatibility(
+def test_build_only_configuration_is_deferred_to_backend_matching(
     tmp_path: Path,
 ) -> None:
     module = load("devcontainer_config_build_only")
@@ -104,8 +105,42 @@ def test_build_only_configuration_reports_the_real_incompatibility(
         json.dumps({"name": "C++", "build": {"dockerfile": "Dockerfile"}}),
     )
 
-    with pytest.raises(module.DevContainerError, match="do not support: build"):
-        module.normalize(project)
+    profile = module.normalize(project)
+
+    assert profile["image"] is None
+    assert profile["required_capabilities"] == ["image-build"]
+
+
+def test_tagged_image_requires_a_resolving_native_engine(tmp_path: Path) -> None:
+    module = load("devcontainer_config_tagged_image")
+    project = tmp_path / "tagged"
+    project.mkdir()
+    path = write_config(project, json.dumps({"image": "ubuntu:24.04"}))
+
+    profile = module.normalize(project)
+
+    assert profile["image"] == "ubuntu:24.04"
+    assert profile["required_capabilities"] == ["image-tag"]
+    assert profile["fingerprint"] == module.configuration_fingerprint(
+        project, path, json.loads(path.read_text(encoding="utf-8"))
+    )
+
+
+def test_build_fingerprint_includes_local_dockerfile(tmp_path: Path) -> None:
+    module = load("devcontainer_config_dockerfile_fingerprint")
+    project = tmp_path / "build"
+    project.mkdir()
+    config = write_config(
+        project,
+        json.dumps({"build": {"dockerfile": "Dockerfile"}}),
+    )
+    dockerfile = config.parent / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\n", encoding="utf-8")
+    before = module.normalize(project)["fingerprint"]
+
+    dockerfile.write_text("FROM ubuntu:24.04\nRUN true\n", encoding="utf-8")
+
+    assert module.normalize(project)["fingerprint"] != before
 
 
 def test_host_requirement_failure_is_explicit(tmp_path: Path) -> None:

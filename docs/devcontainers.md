@@ -6,10 +6,12 @@ design, immutable tag-resolution rules, credential boundary, lifecycle
 semantics, and rollout gates are specified in the
 [Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
 
-Cloudmake 2.3 accepts a deliberately small, fail-closed subset of the
-[Dev Container specification](https://containers.dev/implementors/spec/).
-It uses that standard description as the portable workstation contract while
-retaining Make as the non-interactive command surface.
+Cloudmake 2.4 accepts the standard
+[Dev Container specification](https://containers.dev/implementors/spec/) as a
+workstation description, analyzes the behavior it requires, and chooses a
+qualified backend engine. The project still exposes only its ordinary Make
+targets. Cloudmake does not silently discard standard behavior to fit a weaker
+backend.
 
 The normal project remains unchanged unless its developer chooses to add a Dev
 Container file. The feature is explicit: merely having a configuration does not
@@ -33,14 +35,13 @@ The choice is stored only in Cloudmake's local per-project preferences. Use
 `--native` to clear it. The older `--image REF@sha256:DIGEST` interface remains
 the image-only shorthand and is fully compatible.
 
-## Portable profile
+## Capability-qualified profile
 
-Cloudmake consumes standard fields only where every qualified backend can
-preserve their meaning:
+The portable adapter remains the cross-backend baseline:
 
-| Dev Container field | Cloudmake 2.3 behavior |
+| Dev Container field | Portable adapter behavior |
 | --- | --- |
-| `image` | Required immutable Linux OCI reference in `REF@sha256:DIGEST` form. |
+| `image` | Required immutable Linux OCI reference in `REF@sha256:DIGEST` form. Tagged references require a qualified native engine. |
 | `containerEnv`, `remoteEnv` | Literal string values are merged; `remoteEnv` wins. Host-variable interpolation and null/unset values are rejected. |
 | `hostRequirements.cpus` | Positive integer, checked on the actual execution host before Make. |
 | `hostRequirements.memory`, `.storage` | Byte or `kb`/`mb`/`gb`/`tb` size, checked on the actual host. |
@@ -76,18 +77,25 @@ This example is portable across a qualified GPU host and Colab:
 }
 ```
 
+Richer standard fields become explicit semantic requirements rather than parser
+errors. The qualified local native engine currently adds tagged images,
+Dockerfile/image builds, Features, create-phase lifecycle commands, standard
+remote/container user selection, workspace layout, process control, and
+restrictive security policy. It invokes the reference Dev
+Container CLI over the existing local Docker service, records the actual image
+digest or derived image ID, and reuses the same prepared container while its
+configuration fingerprint is unchanged.
+
 ## Fail-closed boundary
 
-Cloudmake rejects fields it cannot preserve safely and consistently before
-contacting the provider. The 2.3 portable profile does not accept:
+Cloudmake rejects requirements the selected backend cannot preserve before
+contacting that provider. No maintained backend currently accepts:
 
-- `build`, Dockerfile, or Compose configurations;
-- Dev Container Features or feature ordering;
-- lifecycle hooks such as `postCreateCommand` or `postStartCommand`;
-- secrets, arbitrary mounts, or arbitrary `runArgs`;
+- Compose configurations;
+- secrets, arbitrary mounts, arbitrary `runArgs`, or host lifecycle commands;
 - privileged mode, added Linux capabilities, or relaxed security options;
-- container/remote user changes; or
-- service, shutdown, workspace-mount, and lifecycle controls.
+- port attributes, published ports, attach hooks, or general start/shutdown lifecycle controls; or
+- interpolated host environment values and detailed GPU requirement objects.
 
 Unknown top-level fields are also rejected. This deliberately prevents a future
 Dev Container process-control field from being accepted but ignored by an older
@@ -106,8 +114,9 @@ target:
 
 | Backend class | Workstation realization |
 | --- | --- |
-| Codespaces | Provider-native Dev Container. Selecting a changed profile rebuilds the one active workstation environment; later targets and stop/start reuse it. |
-| Ordinary local or SSH Linux host | Docker first, then Podman or nerdctl when ready. The host runtime constructs the least-privileged OCI process. |
+| Local, richer standard profile | Reference Dev Container CLI over Docker; the prepared container and create-phase receipt are reused by configuration fingerprint. |
+| Codespaces | Provider-native image-backed Dev Container for the portable adapter profile. Selecting a changed profile rebuilds the one active workstation environment; later targets and stop/start reuse it. |
+| Ordinary local or SSH Linux host, portable profile | Docker first, then Podman or nerdctl when ready. The host runtime constructs the least-privileged OCI process. |
 | Privilege-restricted SSH host | `skopeo` and `umoci` materialize the image; PRoot and `setpriv` execute it without a daemon, root, a user namespace, or a privileged mount. |
 | Colab notebook | The single qualified `crun` adapter materializes the image and applies the managed-VM profile. |
 
@@ -119,7 +128,9 @@ submission. Cloudmake never changes runners and replays a submitted target.
 Codespaces is provider-native (`oci-native=yes`); the other maintained backends
 use a Cloudmake adapter (`oci-native=no`). This property describes who creates
 the workstation, not whether the OCI image or Dev Container configuration is
-standard.
+standard. Dev Container semantic capabilities are declared separately as
+adapter and native capability sets; these describe what can be honored, not
+merely which executable happens to be installed.
 
 Product qualification remains separate from implementation capability.
 Lightning Studio SSH implements this profile through the common SSH adapter but
@@ -159,10 +170,13 @@ remains the explicit device request.
 
 ## Security and compatibility
 
-Cloudmake-controlled runtimes drop capabilities, request
-`no-new-privileges`, use a read-only image root, expose a fresh writable `/tmp`,
-and grant only the writable `/workspace` project mount plus explicitly
-requested CDI device edits. Provider-native Codespaces remains subject to
+The portable Cloudmake adapter drops capabilities, requests
+`no-new-privileges`, uses a read-only image root, exposes a fresh writable
+`/tmp`, and grants only the writable `/workspace` project mount plus explicitly
+requested CDI device edits. A qualified native engine follows its standard
+runtime model instead; Cloudmake still rejects requests for added privilege,
+but does not claim that Docker's default Dev Container boundary is the same as
+the restricted adapter sandbox. Provider-native Codespaces remains subject to
 metadata embedded in the selected image and is therefore a trusted-image
 boundary.
 
@@ -177,10 +191,10 @@ Cloudmake keeps an opt-in, revision-pinned corpus of official Dev Container
 samples for C++, Go, Java, Node.js, Python, and Rust, plus the official Ubuntu
 template. The gate records two distinct outcomes:
 
-- compatible configurations execute a real project Make target through the
-  local Docker adapter; and
-- standard fields outside Cloudmake's portable batch profile are rejected with
-  the expected field-specific explanation.
+- portable configurations execute a real project Make target through the local
+  Docker adapter; and
+- richer configurations produce explicit requirement sets which are matched to
+  the local native engine or rejected by restricted backends.
 
 The harness resolves the upstream image tags to recorded OCI digests but does
 not remove lifecycle, build, Feature, port, or privilege requirements merely to

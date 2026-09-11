@@ -11,6 +11,8 @@ BACKEND_WORKSPACE_DURABILITY := host-persistent
 BACKEND_OCI_NATIVE := no
 BACKEND_CAPABILITIES := sync execute status artifacts environment-profile native-persistence oci-runner devcontainer port-forward
 BACKEND_OCI_RUNTIMES := docker podman nerdctl proot
+BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := image-digest environment host-requirements forward-ports cdi
+BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := image-digest image-tag image-build features lifecycle-create user-selection environment host-requirements workspace-layout process-control security-policy
 BACKEND_INTERNET_INBOUND := inherited
 BACKEND_INTERNET_OUTBOUND := inherited
 

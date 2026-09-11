@@ -300,6 +300,15 @@ of a logical workstation instance, and existing provider/runtime identities
 remain responsible for registry access. The normative design is the
 [Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
 
+The first qualified richer engine is local Docker through the reference Dev
+Container CLI. It supports tagged images, image builds, Features, create-phase
+lifecycle preparation, user/workspace selection, and the other bounded fields
+listed in the Dev Container guide. Preparation is receipt-bound to the selected
+configuration and local Dockerfile; an unchanged workstation is reused, while a
+changed fingerprint is reconstructed before Make. Restricted and remote
+adapters retain the 2.3 portable profile and reject richer requirements before
+provider contact.
+
 ## Historical Kaggle no-reuse validation
 
 Kaggle provided the deliberate counterpoint to Colab in Cloudmake's backend

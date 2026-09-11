@@ -658,7 +658,7 @@ Common options:
 | `--gpu`, `--gpu=TYPE` | Select the default or a named GPU where supported; save it for the selected project unless `-b` is an explicit one-off override. |
 | `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
 | `--persist`, `--no-persist` | Enable or disable the selected backend's persistent-workspace mode and save the choice for later targets. The older `--checkpoint` and `--no-checkpoint` spellings remain compatible aliases. |
-| `--devcontainer[=PATH]` | Select the portable Dev Container workstation profile; discover the standard project path when `PATH` is omitted. |
+| `--devcontainer[=PATH]` | Select a capability-qualified standard Dev Container workstation; discover the standard project path when `PATH` is omitted. |
 | `--image REF@sha256:DIGEST` | Select a digest-pinned OCI image as the project's Make execution environment; this remains the image-only shorthand. |
 | `--device CDI_NAME` | Request a CDI qualified device such as `nvidia.com/gpu=all`; repeat for multiple devices. |
 | `--no-devices` | Clear saved CDI requests while retaining the selected image. |
@@ -744,6 +744,13 @@ The local backend also supports the managed OCI runner when Docker, Podman,
 nerdctl, or the `skopeo` + `umoci` + PRoot fallback is installed. Cloudmake
 still invokes the project's unchanged Make target, but obtains its tool
 environment from the selected image.
+
+A configuration requiring richer 2.4 Dev Container semantics uses the
+reference Dev Container CLI and a working local Docker service. Install the CLI
+with `npm install -g @devcontainers/cli` (or an equivalent package), ensure
+`docker info` succeeds, and run `cloudmake --doctor` after persisting the
+Dev Container selection. Digest-only configurations that fit the portable
+adapter do not acquire this additional prerequisite.
 
 ### Colab native notebook backend
 
@@ -850,7 +857,7 @@ provider guarantees and may change on a replacement VM. The OCI runner performs
 its own execution preflight on every target invocation. The local backend
 supports the same observation command for comparison.
 
-`cloudmake --backends` also shows Dev Container and loopback-port support, the
+`cloudmake --backends` also shows Dev Container engine type and loopback-port support, the
 ordered OCI runtime options, and separate public-inbound/workload-outbound
 Internet declarations for each backend.
 Host-oriented backends can declare several choices for dynamic
@@ -923,22 +930,25 @@ remote-workstation usability evaluation is preserved as a
 [historical backend report](docs/historical/kaggle-notebook.md), not as a
 positive qualification claim.
 
-#### Portable Dev Container workstation
+#### Capability-qualified Dev Container workstation
 
-Cloudmake 2.3 aligns the maintained backends on a standard project description
+Cloudmake 2.4 aligns the maintained backends on a standard project description
 without replacing the target-first Make interface. Opt in once with
 `--devcontainer`; the bare option discovers `.devcontainer/devcontainer.json`
 or `.devcontainer.json`, while an explicit project-relative path is accepted.
 Configuration presence alone never changes execution, preserving existing
 projects and prior CLI behavior.
 
-The portable profile consumes a digest-pinned `image`, literal `containerEnv`
+The cross-backend portable profile consumes a digest-pinned `image`, literal `containerEnv`
 and `remoteEnv`, basic CPU/memory/storage/GPU `hostRequirements`, loopback-only
-`forwardPorts`, and CDI names in `customizations.cloudmake.devices`. It rejects
-build/Compose definitions, Features, lifecycle hooks, secrets, arbitrary
-mounts and run arguments, user changes, elevated capabilities, and privileged
-mode before contacting a provider. This is an intentionally fail-closed subset
-of the standard, not a parallel project format.
+`forwardPorts`, and CDI names in `customizations.cloudmake.devices`. Richer
+standard fields become semantic requirements. The local backend can select the
+reference Dev Container CLI over Docker for tagged images, builds, Features,
+create-phase lifecycle commands, and user/workspace behavior. Restricted
+backends reject requirements they cannot honor before provider contact.
+Compose, secrets, arbitrary mounts/run arguments, added capabilities, and
+privileged mode remain fail-closed. This is capability negotiation, not a
+parallel project format.
 
 Codespaces realizes the profile as its provider-native Dev Container. Local and
 SSH hosts dynamically qualify Docker first, then Podman, nerdctl, and the
@@ -950,9 +960,10 @@ because it has no corresponding tunnel. On managed accelerator backends, a
 required GPU profile still needs `--gpu` or a saved GPU selection; Cloudmake
 does not silently choose a provider product or accelerator model.
 
-See the normative [portable Dev Container guide](docs/devcontainers.md) for the
-supported field table, restricted-host behavior, security boundary, and a
-complete example. Use `--native` to return to direct Make execution.
+See the normative [Dev Container guide](docs/devcontainers.md) and
+[2.4 contract](docs/devcontainer-v2.4-contract.md) for field requirements,
+backend matching, restricted-host behavior, and the security boundary. Use
+`--native` to return to direct Make execution.
 
 #### Persistent workspace modes
 
@@ -1568,7 +1579,7 @@ The three service-adapter roles are visible in each backend's contract:
 
 | Backend | Status | Lifecycle control | Workspace durability | OCI native | Dev Container | Persistence adapter | Bundle-runtime adapter | Source transfer |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `local` | Supported | Local | Host-persistent | No | Adapter | Native tree; no transfer | Docker, Podman, nerdctl, or CPU PRoot | None |
+| `local` | Supported | Local | Host-persistent | No | Adapter + qualified native CLI | Native tree; no transfer | Docker, Podman, nerdctl, or CPU PRoot; reference Dev Container CLI over Docker | None |
 | `colab-notebook` | Supported | Provider-managed | Ephemeral | No | Adapter; no ports | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
 | `kaggle-notebook` | Deprecated; not recommended | Per target | Ephemeral | No | Not qualified | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
 | `codespaces-ssh` | Supported | Provider-managed | Stop-persistent | Yes | Provider-native | Native provider workspace | Provider dev container; CPU | Incremental rsync |

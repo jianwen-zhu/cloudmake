@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 
 
 IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+TAG_IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
 ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 CDI_DEVICE = re.compile(
     r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+$"
@@ -109,6 +111,36 @@ def resolve_path(project: Path, selected: str) -> Path:
     except ValueError as error:
         raise DevContainerError("Dev Container configuration must remain inside the project") from error
     return resolved
+
+
+def configuration_fingerprint(project: Path, path: Path, payload: dict[str, Any]) -> str:
+    """Bind workstation preparation to the config and its local Dockerfile."""
+    digest = hashlib.sha256()
+    relative = path.relative_to(project.resolve()).as_posix()
+    digest.update(relative.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    build = payload.get("build")
+    dockerfile: Any = payload.get("dockerFile")
+    if isinstance(build, dict):
+        dockerfile = build.get("dockerfile", build.get("dockerFile", dockerfile))
+    elif isinstance(build, str):
+        dockerfile = build
+    if isinstance(dockerfile, str) and "${" not in dockerfile:
+        candidate = (path.parent / dockerfile).resolve()
+        try:
+            candidate.relative_to(project.resolve())
+        except ValueError:
+            digest.update(b"\0outside-project-dockerfile")
+        else:
+            digest.update(b"\0dockerfile\0")
+            digest.update(candidate.relative_to(project.resolve()).as_posix().encode("utf-8"))
+            try:
+                digest.update(b"\0")
+                digest.update(candidate.read_bytes())
+            except OSError:
+                digest.update(b"\0missing")
+    return digest.hexdigest()
 
 
 def literal_environment(value: Any, field: str) -> dict[str, str]:
@@ -215,16 +247,38 @@ def forward_ports(value: Any) -> list[dict[str, Any]]:
 def normalize(project: Path, selected: str = "") -> dict[str, Any]:
     path = resolve_path(project, selected)
     payload = load_jsonc(path)
-    forbidden_nonempty = {
-        "build", "dockerFile", "dockerComposeFile", "service", "runServices",
-        "features", "overrideFeatureInstallOrder", "secrets", "mounts", "runArgs",
-        "appPort", "workspaceMount", "initializeCommand", "onCreateCommand",
-        "updateContentCommand", "postCreateCommand", "postStartCommand",
-        "postAttachCommand", "containerUser", "remoteUser", "shutdownAction",
-        "userEnvProbe", "waitFor", "portsAttributes", "otherPortsAttributes",
-        "init", "capDrop", "updateRemoteUserUID",
+    capability_fields = {
+        "build": "image-build",
+        "dockerFile": "image-build",
+        "dockerComposeFile": "compose",
+        "service": "compose",
+        "runServices": "compose",
+        "features": "features",
+        "overrideFeatureInstallOrder": "features",
+        "secrets": "secrets",
+        "mounts": "mounts",
+        "workspaceMount": "mounts",
+        "runArgs": "runtime-arguments",
+        "init": "runtime-arguments",
+        "overrideCommand": "process-control",
+        "appPort": "published-ports",
+        "initializeCommand": "host-lifecycle",
+        "onCreateCommand": "lifecycle-create",
+        "updateContentCommand": "lifecycle-create",
+        "postCreateCommand": "lifecycle-create",
+        "postStartCommand": "lifecycle-start",
+        "postAttachCommand": "lifecycle-attach",
+        "containerUser": "user-selection",
+        "remoteUser": "user-selection",
+        "updateRemoteUserUID": "user-selection",
+        "userEnvProbe": "user-selection",
+        "shutdownAction": "lifecycle-control",
+        "waitFor": "lifecycle-control",
+        "portsAttributes": "port-attributes",
+        "otherPortsAttributes": "port-attributes",
+        "capDrop": "security-policy",
     }
-    known = forbidden_nonempty | {
+    known = set(capability_fields) | {
         "$schema", "name", "image", "containerEnv", "remoteEnv",
         "hostRequirements", "forwardPorts", "workspaceFolder", "securityOpt",
         "privileged", "capAdd", "customizations",
@@ -234,30 +288,42 @@ def normalize(project: Path, selected: str = "") -> dict[str, Any]:
         raise DevContainerError(
             "unsupported Dev Container field(s): " + ", ".join(sorted(unknown))
         )
-    unsupported = [name for name in forbidden_nonempty if payload.get(name) not in (None, [], {}, "")]
-    if unsupported:
-        raise DevContainerError(
-            "portable Cloudmake Dev Containers do not support: "
-            + ", ".join(sorted(unsupported))
-        )
-    if payload.get("privileged") not in (None, False):
-        raise DevContainerError("privileged Dev Containers violate the least-privilege profile")
-    if payload.get("capAdd") not in (None, []):
-        raise DevContainerError("capAdd is not supported by the least-privilege profile")
+    required_capabilities = {
+        capability
+        for name, capability in capability_fields.items()
+        if payload.get(name) not in (None, [], {}, "")
+        or name in {"updateRemoteUserUID", "overrideCommand"} and name in payload
+    }
+    if payload.get("privileged") not in (None, False) or payload.get("capAdd") not in (None, []):
+        required_capabilities.add("privilege")
     security = payload.get("securityOpt")
     if security not in (None, [], ["no-new-privileges"], ["no-new-privileges=true"]):
-        raise DevContainerError("securityOpt may only request no-new-privileges")
+        required_capabilities.add("privilege")
     if payload.get("workspaceFolder") not in (None, "/workspace"):
-        raise DevContainerError("portable Cloudmake Dev Containers use /workspace")
+        required_capabilities.add("workspace-layout")
 
     image = payload.get("image")
-    if not isinstance(image, str) or IMAGE.fullmatch(image) is None:
+    if image is not None and not isinstance(image, str):
+        raise DevContainerError("image must be a string")
+    if isinstance(image, str) and IMAGE.fullmatch(image) is not None:
+        required_capabilities.add("image-digest")
+    elif isinstance(image, str) and TAG_IMAGE.fullmatch(image) is not None and "@" not in image:
+        required_capabilities.add("image-tag")
+    elif image is not None:
         raise DevContainerError(
-            "the portable Cloudmake profile requires image=REF@sha256:<64 lowercase hex digits>"
+            "image must be a valid OCI tag reference or REF@sha256:<64 lowercase hex digits>"
         )
+    if image is None and not required_capabilities.intersection({"image-build", "compose"}):
+        raise DevContainerError("Dev Container configuration requires image, build, or Compose")
 
     environment = literal_environment(payload.get("containerEnv"), "containerEnv")
     environment.update(literal_environment(payload.get("remoteEnv"), "remoteEnv"))
+    if environment:
+        required_capabilities.add("environment")
+    if payload.get("hostRequirements") is not None:
+        required_capabilities.add("host-requirements")
+    if payload.get("forwardPorts") not in (None, []):
+        required_capabilities.add("forward-ports")
     customizations = payload.get("customizations", {})
     if not isinstance(customizations, dict):
         raise DevContainerError("customizations must be an object")
@@ -278,6 +344,8 @@ def normalize(project: Path, selected: str = "") -> dict[str, Any]:
         raise DevContainerError("invalid CDI device(s): " + ", ".join(invalid_devices))
     if len(devices) != len(set(devices)):
         raise DevContainerError("customizations.cloudmake.devices contains duplicates")
+    if devices:
+        required_capabilities.add("cdi")
     requirements = host_requirements(payload.get("hostRequirements"))
     if requirements.get("gpu") is True and not devices:
         raise DevContainerError(
@@ -288,11 +356,13 @@ def normalize(project: Path, selected: str = "") -> dict[str, Any]:
     return {
         "schema": 1,
         "path": path.relative_to(project.resolve()).as_posix(),
+        "fingerprint": configuration_fingerprint(project, path, payload),
         "image": image,
         "environment": [f"{name}={value}" for name, value in sorted(environment.items())],
         "host_requirements": requirements,
         "forward_ports": forward_ports(payload.get("forwardPorts")),
         "devices": devices,
+        "required_capabilities": sorted(required_capabilities),
     }
 
 

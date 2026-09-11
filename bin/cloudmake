@@ -37,7 +37,11 @@ VERSION = (TOOL_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ENGINE = TOOL_ROOT / "Makefile"
 HOST_TEMPLATE_DIR = TOOL_ROOT / "host-templates"
 sys.path.insert(0, os.fspath(TOOL_ROOT / "tools"))
-from devcontainer_config import DevContainerError, normalize as normalize_devcontainer
+from devcontainer_config import (
+    DevContainerError,
+    check_host as check_devcontainer_host,
+    normalize as normalize_devcontainer,
+)
 ALIASES = {
     "local": "local",
     "colab": "colab-notebook",
@@ -147,6 +151,14 @@ CDI_DEVICE = re.compile(
     r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+$"
 )
 OCI_RUNTIME_CANDIDATES = {"podman", "docker", "nerdctl", "proot", "crun"}
+DEVCONTAINER_CAPABILITIES = {
+    "cdi", "compose", "environment", "features", "forward-ports",
+    "host-lifecycle", "host-requirements", "image-build", "image-digest",
+    "image-tag", "lifecycle-attach", "lifecycle-control", "lifecycle-create",
+    "lifecycle-start", "mounts", "port-attributes", "privilege",
+    "process-control", "published-ports", "runtime-arguments", "secrets",
+    "security-policy", "user-selection", "workspace-layout",
+}
 
 
 class UsageError(RuntimeError):
@@ -621,7 +633,8 @@ Persistence modes: Colab notebook=encrypted checkpoint; deprecated Kaggle=
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
 Environment: --environment records observed VM facts, not format compatibility.
-Runner: --devcontainer selects the portable Dev Container OCI/CDI Make profile;
+Runner: --devcontainer selects a capability-qualified Dev Container workstation
+        (portable OCI/CDI Make or a qualified native engine);
         --image is its minimal image-only shorthand; --native restores native Make.
         Selection is local and per project unless -b is a one-off override.
 Information: --help, --version, --history, --host-templates,
@@ -665,6 +678,22 @@ def backend_oci_native(backend: str) -> bool:
     return value == "yes"
 
 
+def backend_devcontainer_capabilities(backend: str, kind: str) -> set[str]:
+    name = f"BACKEND_DEVCONTAINER_{kind.upper()}_CAPABILITIES"
+    values = backend_declaration(backend, name).split()
+    if values == ["none"]:
+        return set()
+    if not values or len(values) != len(set(values)):
+        raise UsageError(f"backend {backend!r} has invalid {kind} Dev Container capabilities")
+    unknown = set(values) - DEVCONTAINER_CAPABILITIES
+    if unknown:
+        raise UsageError(
+            f"backend {backend!r} has unknown {kind} Dev Container capability(s): "
+            + ", ".join(sorted(unknown))
+        )
+    return set(values)
+
+
 def backend_status(backend: str) -> tuple[str, str]:
     status = backend_declaration(backend, "BACKEND_PRODUCT_STATUS")
     if status not in {"supported", "unqualified", "deprecated"}:
@@ -691,7 +720,7 @@ def show_backends() -> None:
         f"{'BACKEND':22} {'STATUS':11} {'SESSION REUSE':13} {'LIFECYCLE':18} "
         f"{'WORKSPACE':17} {'OCI NATIVE':10} {'PERSISTENCE':12} "
         f"{'TRANSPORT':36} {'OCI RUNTIMES':34} {'INTERNET IN':12} "
-        f"{'INTERNET OUT':12} {'DEVCONTAINER':12} {'PORTS':10} HOST CLIENT"
+        f"{'INTERNET OUT':12} {'DEVCONTAINER':12} {'DC ENGINE':14} {'PORTS':10} HOST CLIENT"
     )
     for name, (session_reuse, transport, client) in BACKENDS.items():
         installed = "found" if shutil.which(client) else "missing"
@@ -711,12 +740,22 @@ def show_backends() -> None:
             backend_declaration(name, "BACKEND_CAPABILITIES").split()
         )
         devcontainer = "yes" if "devcontainer" in capabilities else "no"
+        adapter_capabilities = backend_devcontainer_capabilities(name, "adapter")
+        native_capabilities = backend_devcontainer_capabilities(name, "native")
+        devcontainer_engine = (
+            "adapter+native"
+            if adapter_capabilities and native_capabilities
+            else "native" if native_capabilities
+            else "adapter" if adapter_capabilities
+            else "no"
+        )
         ports = "loopback" if "port-forward" in capabilities else "no"
         print(
             f"{name:22} {status:11} {session_reuse:13} {lifecycle:18} "
             f"{workspace:17} {'yes' if oci_native else 'no':10} {PERSISTENCE_MODES[name]:12} "
             f"{transport:36} {runtime_text:34} {internet_in:12} "
-            f"{internet_out:12} {devcontainer:12} {ports:10} {client} ({installed})"
+            f"{internet_out:12} {devcontainer:12} {devcontainer_engine:14} "
+            f"{ports:10} {client} ({installed})"
         )
 
 
@@ -1248,7 +1287,7 @@ def validate_backend_oci_selection(
     *, backend: str, runner: str, devices: list[str], accelerator: Any
 ) -> list[str]:
     runtimes = backend_oci_runtimes(backend)
-    if runner == "native":
+    if runner in {"native", "devcontainer-native"}:
         return runtimes
     native = backend_oci_native(backend)
     if not runtimes and not native:
@@ -1270,18 +1309,42 @@ def validate_backend_oci_selection(
     return runtimes
 
 
+def select_devcontainer_runner(backend: str, profile: dict[str, Any]) -> str:
+    capabilities = set(backend_declaration(backend, "BACKEND_CAPABILITIES").split())
+    if "devcontainer" not in capabilities:
+        raise UsageError(
+            f"backend {backend!r} has not qualified the Dev Container contract"
+        )
+    required = set(profile.get("required_capabilities", []))
+    adapter = backend_devcontainer_capabilities(backend, "adapter")
+    native = backend_devcontainer_capabilities(backend, "native")
+    if required <= adapter:
+        return "oci"
+    if required <= native:
+        return "devcontainer-native"
+    missing = sorted(required - (adapter | native))
+    if "privilege" in missing:
+        raise UsageError(
+            f"backend {backend!r} cannot honor privileged Dev Container semantics; "
+            "Cloudmake's least-privilege profile fails closed"
+        )
+    if not missing:
+        raise UsageError(
+            f"backend {backend!r} cannot honor the complete Dev Container requirement set "
+            "with one qualified engine; Cloudmake does not combine partial semantics"
+        )
+    raise UsageError(
+        f"backend {backend!r} cannot honor Dev Container requirement(s): "
+        + ", ".join(missing)
+    )
+
+
 def validate_devcontainer_backend(
     *, backend: str, profile: dict[str, Any] | None, accelerator: str | None
 ) -> None:
     if profile is None:
         return
-    capabilities = set(
-        backend_declaration(backend, "BACKEND_CAPABILITIES").split()
-    )
-    if "devcontainer" not in capabilities:
-        raise UsageError(
-            f"backend {backend!r} has not qualified the portable Dev Container profile"
-        )
+    capabilities = set(backend_declaration(backend, "BACKEND_CAPABILITIES").split())
     ports = profile.get("forward_ports", [])
     transport = backend_declaration(backend, "BACKEND_TRANSPORT")
     if ports and "port-forward" not in capabilities:
@@ -1309,8 +1372,49 @@ def validate_devcontainer_backend(
         )
 
 
+def validate_native_devcontainer_prerequisites(
+    *, backend: str, runner: str, doctor: bool = False
+) -> None:
+    if runner != "devcontainer-native":
+        return
+    if backend != "local":
+        raise UsageError(
+            f"backend {backend!r} has no implemented native Dev Container engine"
+        )
+    devcontainer = shutil.which("devcontainer")
+    docker = shutil.which("docker")
+    missing = [name for name, path in (("devcontainer", devcontainer), ("docker", docker)) if path is None]
+    if missing:
+        raise UsageError(
+            "native Dev Container execution requires: " + ", ".join(missing)
+        )
+    if doctor:
+        assert devcontainer is not None and docker is not None
+        probe = subprocess.run(
+            [docker, "info"],
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if probe.returncode:
+            detail = probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else "unavailable"
+            raise UsageError(f"local Docker service is not ready: {detail}")
+        version = subprocess.run(
+            [devcontainer, "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        if version.returncode:
+            raise UsageError("reference Dev Container CLI failed its version probe")
+        print(f"[doctor] Native Dev Container CLI: {version.stdout.strip()}")
+        print("[doctor] Local Docker service: ready")
+
+
 def resolve_runner_preferences(
-    options: dict[str, Any], project: Path, config_home: Path, key: str
+    options: dict[str, Any], project: Path, config_home: Path, key: str, backend: str
 ) -> tuple[str, str | None, list[str], dict[str, Any] | None]:
     if options["native_runner"] and options["image"] is not None:
         raise UsageError("--native cannot be combined with --image")
@@ -1345,7 +1449,12 @@ def resolve_runner_preferences(
             profile = normalize_devcontainer(project, selected_devcontainer)
         except DevContainerError as error:
             raise UsageError(str(error)) from error
-        return "oci", profile["image"], profile["devices"], profile
+        return (
+            select_devcontainer_runner(backend, profile),
+            profile["image"],
+            profile["devices"],
+            profile,
+        )
 
     configured_image: Any = None
     configured_devices: Any = []
@@ -1393,7 +1502,12 @@ def persist_invocation_runner(
         saved.pop("devcontainer", None)
     saved["project"] = os.fspath(project)
     atomic_json(path, saved)
-    detail = "runner=native" if runner == "native" else f"runner=oci image={image}"
+    if runner == "native":
+        detail = "runner=native"
+    elif runner == "devcontainer-native":
+        detail = "runner=devcontainer-native"
+    else:
+        detail = f"runner=oci image={image}"
     if devcontainer is not None:
         detail += f" devcontainer={devcontainer['path']}"
     if devices:
@@ -1801,6 +1915,43 @@ def local_oci_command(
     return exit_code, load_json(result)
 
 
+def local_native_devcontainer_command(
+    *, project: Path, profile: dict[str, Any], target: str,
+    assignments: list[str], jobs: str | None, state_root: Path,
+    run_id: str, verbose: bool,
+) -> tuple[int, dict[str, Any]]:
+    parallel = jobs or "4"
+    if not parallel.isdigit() or int(parallel) < 1:
+        raise UsageError("-j requires a positive integer")
+    try:
+        check_devcontainer_host(profile.get("host_requirements", {}), project)
+    except DevContainerError as error:
+        raise UsageError(str(error)) from error
+    result = state_root / "devcontainer" / run_id / "result.json"
+    state = state_root / "devcontainer" / "workstation.json"
+    command = [
+        sys.executable, os.fspath(TOOL_ROOT / "tools" / "devcontainer_native.py"),
+        "--project", os.fspath(project), "--config", profile["path"],
+        "--project-key", project_key(project),
+        "--fingerprint", profile["fingerprint"], "--target", target,
+        "--jobs", parallel, "--state", os.fspath(state),
+        "--result", os.fspath(result),
+    ]
+    if profile.get("image"):
+        command.extend(["--source-image", profile["image"]])
+    for assignment in assignments:
+        command.extend(["--assignment", assignment])
+    print(
+        "[cloudmake] backend=local runner=devcontainer-native "
+        "workstation=devcontainer resource=local",
+        flush=True,
+    )
+    if verbose:
+        print("+", " ".join(command), file=sys.stderr)
+    exit_code = run_foreground_command(command, cwd=project)
+    return exit_code, load_json(result)
+
+
 def collect_local_artifacts(
     *,
     project: Path,
@@ -2026,7 +2177,7 @@ def run(arguments: list[str]) -> int:
         elif previous_backend != backend:
             saved.pop("workspace_id", None)
         runner, image, devices, devcontainer = resolve_runner_preferences(
-            options, project, config_home, key
+            options, project, config_home, key, backend
         )
         effective_accelerator = (
             accelerator
@@ -2085,11 +2236,12 @@ def run(arguments: list[str]) -> int:
             if options["checkpoint"] is not None or selected_persistence
             else ""
         )
-        runner_note = (
-            ", runner=native"
-            if runner == "native"
-            else f", runner=oci, image={image}"
-        )
+        if runner == "native":
+            runner_note = ", runner=native"
+        elif runner == "devcontainer-native":
+            runner_note = ", runner=devcontainer-native"
+        else:
+            runner_note = f", runner=oci, image={image}"
         if devcontainer is not None:
             runner_note += f", devcontainer={devcontainer['path']}"
         device_note = f", devices={','.join(devices)}" if devices else ""
@@ -2130,7 +2282,7 @@ def run(arguments: list[str]) -> int:
         workspace_id,
     ) = resolve_preferences(project, options, config_home, key)
     runner, image, devices, devcontainer = resolve_runner_preferences(
-        options, project, config_home, key
+        options, project, config_home, key, backend
     )
     codespace = resolve_codespace(config_home, key) if backend == "codespaces-ssh" else None
     gcp_resource = (
@@ -2219,6 +2371,12 @@ def run(arguments: list[str]) -> int:
     if engine_target in {"dispatch", "collect"}:
         if not (project / "Makefile").is_file():
             raise UsageError(f"project Makefile was not found: {project / 'Makefile'}")
+    if engine_target in {"dispatch", "collect", "doctor"}:
+        validate_native_devcontainer_prerequisites(
+            backend=backend,
+            runner=runner,
+            doctor=engine_target == "doctor",
+        )
 
     if (
         options["accelerator_set"]
@@ -2404,12 +2562,14 @@ def run(arguments: list[str]) -> int:
         },
         "runner": {
             "kind": runner,
-            "image": image if runner == "oci" else None,
-            "devices": devices if runner == "oci" else [],
+            "image": image if runner in {"oci", "devcontainer-native"} else None,
+            "devices": devices if runner in {"oci", "devcontainer-native"} else [],
             "runtime_candidates": oci_runtimes if runner == "oci" else [],
             "devcontainer": (
                 {
                     "path": devcontainer["path"],
+                    "fingerprint": devcontainer["fingerprint"],
+                    "required_capabilities": devcontainer["required_capabilities"],
                     "host_requirements": devcontainer["host_requirements"],
                     "forward_ports": devcontainer["forward_ports"],
                     "environment_names": [
@@ -2448,7 +2608,7 @@ def run(arguments: list[str]) -> int:
                     verbose=options["verbose"],
                 )
                 runner_receipt: dict[str, Any] = {}
-            else:
+            elif runner == "oci":
                 assert image is not None
                 exit_code, runner_receipt = local_oci_command(
                     project=project,
@@ -2468,6 +2628,28 @@ def run(arguments: list[str]) -> int:
                     {
                         name: runner_receipt[name]
                         for name in ("runtime", "digest", "image_inspection")
+                        if name in runner_receipt
+                    }
+                )
+            else:
+                assert devcontainer is not None
+                exit_code, runner_receipt = local_native_devcontainer_command(
+                    project=project,
+                    profile=devcontainer,
+                    target=remote_target,
+                    assignments=assignments,
+                    jobs=options["jobs"],
+                    state_root=state_root,
+                    run_id=run_id,
+                    verbose=options["verbose"],
+                )
+                record["runner"].update(
+                    {
+                        name: runner_receipt[name]
+                        for name in (
+                            "runtime", "resolved_digest", "image_id", "platform", "container_id",
+                            "preparation", "target_submission", "retry_safe", "status", "error",
+                        )
                         if name in runner_receipt
                     }
                 )

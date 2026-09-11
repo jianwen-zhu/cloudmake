@@ -3373,6 +3373,16 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
     assert f"internet-outbound={internet_outbound}" in result.stdout
     if backend != "kaggle-notebook":
         assert "devcontainer" in result.stdout
+        assert "devcontainer-adapter-capabilities=" in result.stdout
+        assert "image-digest" in result.stdout
+    else:
+        assert "devcontainer-adapter-capabilities=none" in result.stdout
+    if backend == "local":
+        assert "devcontainer-native-capabilities=" in result.stdout
+        assert "image-build" in result.stdout
+        assert "lifecycle-create" in result.stdout
+    else:
+        assert "devcontainer-native-capabilities=none" in result.stdout
     if backend.endswith("-ssh"):
         assert "port-forward" in result.stdout
 
@@ -3428,6 +3438,28 @@ def test_backend_contract_rejects_invalid_native_oci_value(tmp_path: Path) -> No
 
     assert result.returncode != 0
     assert "invalid BACKEND_OCI_NATIVE" in result.stdout
+
+
+def test_backend_contract_rejects_unknown_devcontainer_capability(tmp_path: Path) -> None:
+    descriptor = tmp_path / "invalid-devcontainer-capability.mk"
+    descriptor.write_text(
+        "BACKEND := invalid-devcontainer-capability\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_SESSION_REUSE := no\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_OCI_RUNTIMES := none\n"
+        "BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := image-digest magic-root\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert "invalid Dev Container adapter capabilities" in result.stdout
 
 
 def test_backend_contract_rejects_nested_runtime_for_native_oci(

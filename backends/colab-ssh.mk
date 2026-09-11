@@ -11,6 +11,8 @@ BACKEND_WORKSPACE_DURABILITY := ephemeral
 BACKEND_OCI_NATIVE := no
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel oci-runner devcontainer port-forward
 BACKEND_OCI_RUNTIMES := docker podman nerdctl proot
+BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := image-digest environment host-requirements forward-ports cdi
+BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := none
 BACKEND_INTERNET_INBOUND := no
 BACKEND_INTERNET_OUTBOUND := yes
 

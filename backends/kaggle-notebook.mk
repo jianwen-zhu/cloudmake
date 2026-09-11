@@ -10,6 +10,8 @@ BACKEND_WORKSPACE_DURABILITY := ephemeral
 BACKEND_OCI_NATIVE := no
 BACKEND_CAPABILITIES := sync execute status open artifacts gpu persistent-workspace checkpoint-persistence oci-runner
 BACKEND_OCI_RUNTIMES := proot
+BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := none
+BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := none
 BACKEND_INTERNET_INBOUND := no
 BACKEND_INTERNET_OUTBOUND := conditional
 
