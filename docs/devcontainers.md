@@ -1,5 +1,11 @@
 # Portable Dev Container workstations
 
+Cloudmake 2.4 retains this portable profile as the cross-backend baseline and
+adds capability negotiation for richer standard configurations. The accepted
+design, immutable tag-resolution rules, credential boundary, lifecycle
+semantics, and rollout gates are specified in the
+[Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
+
 Cloudmake 2.3 accepts a deliberately small, fail-closed subset of the
 [Dev Container specification](https://containers.dev/implementors/spec/).
 It uses that standard description as the portable workstation contract while
@@ -164,3 +170,27 @@ This feature does not make checkpoints authoritative. Native provider storage,
 managed checkpoints, OCI caches, and materialized layers are disposable ways
 to reduce repeated work. Source plus the project Makefile must remain sufficient
 to reconstruct the result.
+
+## Public compatibility corpus
+
+Cloudmake keeps an opt-in, revision-pinned corpus of official Dev Container
+samples for C++, Go, Java, Node.js, Python, and Rust, plus the official Ubuntu
+template. The gate records two distinct outcomes:
+
+- compatible configurations execute a real project Make target through the
+  local Docker adapter; and
+- standard fields outside Cloudmake's portable batch profile are rejected with
+  the expected field-specific explanation.
+
+The harness resolves the upstream image tags to recorded OCI digests but does
+not remove lifecycle, build, Feature, port, or privilege requirements merely to
+obtain a pass. This makes the corpus a compatibility boundary test rather than
+a collection of curated trivial images. Run it explicitly with:
+
+```sh
+CLOUDMAKE_TEST_REAL_DEVCONTAINERS=1 python3 -m pytest \
+  tests/test_real_devcontainers.py -m real_github
+```
+
+The default suite validates the harness and pins offline; it never downloads
+repositories or images.

@@ -47,6 +47,25 @@ This invokes `tests/real_projects/prepare.sh`, which prints the two prepared
 project directories. The clones are revision-pinned so an upstream change cannot
 silently alter a regression run.
 
+## Public Dev Container corpus
+
+The Dev Container compatibility gate clones pinned official samples for C++,
+Go, Java, Node.js, Python, and Rust plus the official Ubuntu template. It
+resolves tag-based images to recorded digests, checks Cloudmake's exact
+compatibility decision for every configuration, and executes the compatible
+Rust and Ubuntu workstations through the local Docker adapter:
+
+```sh
+CLOUDMAKE_TEST_REAL_DEVCONTAINERS=1 python3 -m pytest \
+  tests/test_real_devcontainers.py -m real_github
+```
+
+This is an opt-in network and OCI-pull test. Rejection is part of the gate:
+Dockerfile builds, Features, lifecycle hooks, and port behavior Cloudmake cannot
+preserve must fail before execution instead of being silently ignored. Image
+tag resolution in the harness is explicit because Cloudmake's portable profile
+currently requires an immutable image digest.
+
 The live Colab gate is intentionally local-only because it allocates GPU compute
 through the workstation's existing Colab CLI authentication. It clones both
 projects, runs the overlaid `run` targets on separate T4 sessions, and stops each

@@ -93,6 +93,21 @@ def test_nonportable_or_privileged_fields_fail_closed(
         module.normalize(project)
 
 
+def test_build_only_configuration_reports_the_real_incompatibility(
+    tmp_path: Path,
+) -> None:
+    module = load("devcontainer_config_build_only")
+    project = tmp_path / "build-only"
+    project.mkdir()
+    write_config(
+        project,
+        json.dumps({"name": "C++", "build": {"dockerfile": "Dockerfile"}}),
+    )
+
+    with pytest.raises(module.DevContainerError, match="do not support: build"):
+        module.normalize(project)
+
+
 def test_host_requirement_failure_is_explicit(tmp_path: Path) -> None:
     encoded = base64.urlsafe_b64encode(
         json.dumps({"cpus": 1_000_000}).encode("utf-8")

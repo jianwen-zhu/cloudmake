@@ -286,6 +286,20 @@ image-only behavior.
 The normative field and backend mapping is in
 [Portable Dev Container workstations](devcontainers.md).
 
+## Cloudmake 2.4: capability-qualified Dev Containers
+
+Cloudmake 2.4 keeps the 2.3 portable core but no longer treats the least capable
+backend as the ceiling for every standard configuration. It analyzes required
+Dev Container behavior and matches it against explicit backend capabilities.
+A capable native implementation may therefore accept standard build, Feature,
+or lifecycle behavior that a restricted managed-VM adapter rejects.
+
+The selection and target surface remains unchanged. Behavior-bearing fields are
+never silently discarded, tag references resolve to a digest for the lifetime
+of a logical workstation instance, and existing provider/runtime identities
+remain responsible for registry access. The normative design is the
+[Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
+
 ## Historical Kaggle no-reuse validation
 
 Kaggle provided the deliberate counterpoint to Colab in Cloudmake's backend

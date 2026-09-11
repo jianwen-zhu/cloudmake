@@ -215,12 +215,6 @@ def forward_ports(value: Any) -> list[dict[str, Any]]:
 def normalize(project: Path, selected: str = "") -> dict[str, Any]:
     path = resolve_path(project, selected)
     payload = load_jsonc(path)
-    image = payload.get("image")
-    if not isinstance(image, str) or IMAGE.fullmatch(image) is None:
-        raise DevContainerError(
-            "the portable Cloudmake profile requires image=REF@sha256:<64 lowercase hex digits>"
-        )
-
     forbidden_nonempty = {
         "build", "dockerFile", "dockerComposeFile", "service", "runServices",
         "features", "overrideFeatureInstallOrder", "secrets", "mounts", "runArgs",
@@ -255,6 +249,12 @@ def normalize(project: Path, selected: str = "") -> dict[str, Any]:
         raise DevContainerError("securityOpt may only request no-new-privileges")
     if payload.get("workspaceFolder") not in (None, "/workspace"):
         raise DevContainerError("portable Cloudmake Dev Containers use /workspace")
+
+    image = payload.get("image")
+    if not isinstance(image, str) or IMAGE.fullmatch(image) is None:
+        raise DevContainerError(
+            "the portable Cloudmake profile requires image=REF@sha256:<64 lowercase hex digits>"
+        )
 
     environment = literal_environment(payload.get("containerEnv"), "containerEnv")
     environment.update(literal_environment(payload.get("remoteEnv"), "remoteEnv"))

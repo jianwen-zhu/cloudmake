@@ -206,6 +206,15 @@ configuration into the existing image, environment, host-requirement, CDI, and
 execution fields. A backend must reject any normalized field it cannot honor
 before provider contact or target submission.
 
+Cloudmake 2.4 extends this boolean baseline with capability-qualified standard
+behavior. The configuration analyzer produces explicit semantic requirements;
+backend descriptors declare the Dev Container behaviors they can implement,
+and dynamic preflight verifies the actual instance. These declarations are
+orthogonal to transport, persistence, `oci-native`, and the runtime candidate
+list. The normative vocabulary, immutable image-resolution rules, credential
+boundary, and lifecycle receipt requirements are defined in the
+[Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
+
 `checkpoint-persistence` means Cloudmake transfers a managed workspace through
 an independent durable checkpoint store. `native-persistence` means the
 backend's ordinary project workspace already survives its supported stop/start
