@@ -19,6 +19,7 @@ BACKEND_REQUIRED_VARIABLES := COLAB_IDENTITY
 BACKEND_REQUIRES_PYTHON := yes
 BACKEND_INSTALL_HINT := Install google-colab-cli, OpenSSH, and rsync; Colab SSH also requires a paid plan and positive compute-unit balance.
 BACKEND_VALIDATE := case '$(COLAB_SESSION)' in ''|*[!A-Za-z0-9._-]*) echo 'COLAB_SESSION contains unsupported characters' >&2; exit 2;; esac; case '$(COLAB_GPU)' in *[!A-Za-z0-9._-]*) echo 'COLAB_GPU contains unsupported characters' >&2; exit 2;; esac; test -r '$(COLAB_IDENTITY)' || { echo 'COLAB_IDENTITY is not a readable private key: $(COLAB_IDENTITY)' >&2; exit 2; }
+BACKEND_DOCTOR_COMPATIBILITY := '$(PYTHON_BIN)' '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/cli_compatibility.py' --colab-bin '$(COLAB_BIN)'
 BACKEND_DOCTOR_PROBE := $(COLAB_BIN) version >/dev/null && $(COLAB_BIN) sessions >/dev/null
 BACKEND_VERSION_COMMAND := $(COLAB_BIN) version
 BACKEND_TESTED_CLIENT := google-colab-cli 0.6.x

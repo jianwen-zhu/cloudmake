@@ -2060,6 +2060,42 @@ def test_doctor_performs_read_only_provider_probe(
 
 
 @pytest.mark.integration
+def test_colab_doctor_rejects_incompatible_kernel_client_before_access_probe(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    package_root = tmp_path / "broken-colab-package"
+    (package_root / "colab_cli").mkdir(parents=True)
+    (package_root / "colab_cli" / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "colab_cli" / "runtime.py").write_text(
+        "import jupyter_kernel_client\n"
+        "class ColabRuntime:\n"
+        "    def __init__(self, *_args):\n"
+        "        pass\n"
+        "    @property\n"
+        "    def kernel_client(self):\n"
+        "        return jupyter_kernel_client.KernelClient()\n",
+        encoding="utf-8",
+    )
+    (package_root / "jupyter_kernel_client.py").write_text("", encoding="utf-8")
+    env = fake_environment(fake_bin, tmp_path)
+    env["PYTHONPATH"] = str(package_root)
+
+    result = run_command(
+        ["make", "BACKEND=colab-notebook", "doctor"],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "Incompatible Colab CLI execution environment" in result.stdout
+    assert "does not provide the API required by colab" in result.stdout
+    provider_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert provider_calls == [["colab", "version"]]
+
+
+@pytest.mark.integration
 def test_colab_ssh_doctor_checks_client_and_key_without_opening_ssh(
     prototype: Path, fake_bin: Path, tmp_path: Path
 ) -> None:
