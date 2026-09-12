@@ -1,5 +1,9 @@
 # Portable Dev Container workstations
 
+For a conceptual introduction to application bundles, OCI image/runtime
+layers, CDI devices, native engines, and restricted adapters, read the
+[Dev Container execution landscape](devcontainer-execution-landscape.md).
+
 Cloudmake 2.4 retains this portable profile as the cross-backend baseline and
 adds capability negotiation for richer standard configurations. The accepted
 design, immutable tag-resolution rules, credential boundary, lifecycle

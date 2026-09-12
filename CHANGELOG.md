@@ -50,6 +50,10 @@ once a version is published as a GitHub release.
 - Keep resource recovery independent from workstation compatibility. A stale
   or newly unsupported saved configuration still cannot start or run work, but
   it can no longer block status, stop, sync, or fetch operations.
+- Add a Dev Container execution-landscape tutorial explaining why OCI exists as
+  an application-bundle family, how Dev Containers add workstation behavior,
+  and how registries, images, engines, low-level runtimes, CDI, host capability,
+  lifecycle, and persistence divide responsibility.
 
 ## 2.3.1 - 2026-09-10
 

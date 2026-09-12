@@ -1690,6 +1690,7 @@ documents before using private source or diagnosing a failure:
 - [Cloudmake 2.0 stateful-workspace design](docs/stateful-workspaces.md)
 - [Execution environments and OCI runner](docs/execution-environments.md)
 - [Portable Dev Container workstations](docs/devcontainers.md)
+- [Dev Container execution landscape](docs/devcontainer-execution-landscape.md)
 - [Cloudmake 2.4 Dev Container contract](docs/devcontainer-v2.4-contract.md)
 - [Project contract](docs/project-contract.md)
 - [Backend contract](docs/backend-contract.md)
