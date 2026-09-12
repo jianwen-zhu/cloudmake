@@ -3,7 +3,14 @@
 All notable changes are recorded here. Cloudmake follows semantic versioning
 once a version is published as a GitHub release.
 
-## Unreleased (2.4.0 candidate)
+## 2.4.0 - 2026-09-12
+
+Compatibility note: this release deliberately takes one minor-version contract
+exception before external adoption. Collection moves from root `artifacts/` to
+`.cloudmake/artifacts/`, and `.cloudmake/` becomes a reserved Cloudmake
+namespace. The migration is explicit and fail-closed; follow
+[`docs/artifact-collection-migration.md`](docs/artifact-collection-migration.md)
+before upgrading. No published tag is rewritten by this decision.
 
 - Move explicit collection output from the generic root `artifacts/` name to
   `.cloudmake/artifacts/`. Root `artifacts/` and `.artifacts/` are ordinary
