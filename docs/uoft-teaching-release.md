@@ -25,6 +25,12 @@ but a replacement runtime must be reproducible from the authoritative local
 project tree. The teaching line does not provide checkpoints, Drive-backed
 workspaces, managed restoration, or automatic student-state migration.
 
+Requested targets use at-most-once delivery by default. The invocation-only
+`--idempotent` declaration does not itself authorize another submission, and
+every backend in this release declares `target-replay=none`. UofT workflows do
+not use `--idempotent` or `--replay-for`. If submission is ambiguous, retain the
+provenance record, do not resubmit, and escalate to course staff.
+
 ## Authentication boundary
 
 1. Google owns account enrollment and Colab entitlement.
@@ -39,6 +45,40 @@ to be copied into the project, generated notebook, hosted CI, or release
 evidence. Login, permissions, quota, entitlement, and accelerator capacity are
 separate conditions and must be diagnosed separately.
 
+## Course migration contract
+
+Do not move the published `uoft` branch or repin either course until the
+candidate is immutable and the applicable course gate below passes. Both course
+repositories must explicitly ignore `.cloudmake/artifacts/` in `.gitignore` and
+`.cloudmakeignore`, while retaining their legacy `/artifacts/` exclusion during
+the rollback window. This is a privacy requirement because v1.0.1 does not
+automatically exclude `.cloudmake/`.
+
+Do not teach `--accept-legacy-artifacts-as-source` as a migration shortcut.
+Inspect old root `artifacts/` contents and then archive, remove, change, or
+explicitly exclude them according to project ownership. Regenerate course
+releases from their authoritative sources; never hand-edit generated release
+trees.
+
+ECE326 migration must also:
+
+- exclude `.cloudmake/` from leaderboard candidate digests and paired payloads;
+- reject `.cloudmake/` content in student release archives while retaining the
+  `.cloudmakeignore` control file;
+- update quickstart, tutorial-plan, grading, leaderboard, onboarding, and
+  release-validation text together with the version, commit, and archive digest;
+- keep the official private paired benchmark at-most-once, with no manual retry
+  after an ambiguous submission.
+
+ECE467 migration must also:
+
+- exclude generated `release-student/` and `release-grader/` trees from remote
+  synchronization;
+- update the Makefile host check, help, README, and release metadata together;
+- persist `COLAB_SESSION` before selecting the Colab/T4 environment;
+- describe repeated `bootstrap` as separate operator requests, not target
+  replay.
+
 ## Candidate release gates
 
 Record the exact candidate commit and selected Colab CLI dependency versions.
@@ -50,13 +90,21 @@ All evidence must be sanitized before retention.
 - [ ] Colab CPU and Colab GPU/T4 smoke tests pass from an already authenticated
       maintainer host.
 - [ ] ECE326 Lab 1 setup, public tests, Bottle/benchmark workload, and artifact
-      collection pass through the real course workflow.
+      collection pass through one fresh Colab CPU session. Collection lands only
+      in `.cloudmake/artifacts/`, and provenance records one submitted attempt.
 - [ ] Private paired ECE326 Lab 4 tests and bounded calibration pass without
-      copying private course material into Cloudmake or hosted CI.
+      copying private course material into Cloudmake or hosted CI. The official
+      paired target is submitted exactly once in a separate fresh CPU session;
+      ambiguity fails the release gate without resubmission.
 - [ ] ECE467 onboarding/bootstrap and its applicable CPU, CUDA/device, TileLang,
-      GEMM/AXPY, `llm.c`, verification, and artifact paths pass.
+      GEMM/AXPY, `llm.c`, verification, and artifact paths pass in one bounded
+      T4 session. Two explicit `bootstrap` requests reuse one runtime identity,
+      the selected 19-check regression passes, and the old root artifact remains
+      byte-for-byte unchanged.
 - [ ] The same project succeeds after stopping the session and starting with a
-      clean replacement Colab runtime, without restored Cloudmake state.
+      clean replacement Colab runtime, without restored Cloudmake state. ECE467
+      observes a new runtime identity and passes bootstrap, verify, and the
+      bounded TileLang AXPY smoke test.
 - [ ] A normal local edit, expected nonzero project target, interruption,
       cleanup, and safe retry decision are exercised. An ambiguously submitted
       target is never replayed automatically.
