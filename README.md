@@ -657,6 +657,14 @@ Cloudmake uses `colab new`, `sessions`, `upload`, `download`, `exec`, `url`, and
 `stop`. The source is fingerprinted before upload. An unchanged tree reuses the
 remote source and session-local build directory in the named live runtime.
 
+The official CLI keeps a live runtime assigned through a daemon on the client
+computer. That computer must remain awake and online between `--start` and the
+last command that expects reuse; host sleep suspends the daemon and Colab may
+reclaim the runtime. Cloudmake reports the resulting fresh runtime honestly but
+does not replace the provider's keep-alive mechanism. For a bounded unattended
+run on macOS, use an explicit `caffeinate` interval and stop the session when the
+run completes.
+
 Unless `COLAB_SESSION` is set explicitly, the launcher derives a readable,
 collision-resistant session name from the local project identity. Projects
 with existing v0.9 local state under the former `cuda-build` default continue
