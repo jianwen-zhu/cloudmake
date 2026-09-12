@@ -144,7 +144,8 @@ the provider.
 
 Projects upgrading from v1.0.1 should complete the
 [artifact collection migration preflight](artifact-collection-migration.md)
-before their first collection with this candidate.
+before their first collection with v1.1.0. The collection destination and
+reserved namespace change are not transparently compatible with v1.0.1.
 
 ## Portability boundary
 

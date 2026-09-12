@@ -171,6 +171,7 @@ def test_help_documents_bounded_capacity_retry(
     assert "--accept-legacy-artifacts-as-source" in result.stdout
     assert "at-most-once by default" in result.stdout
     assert "Current backends declare target_replay=none" in result.stdout
+    assert "materializes DIR at .cloudmake/artifacts/" in result.stdout
     assert engine_calls(log) == []
 
 

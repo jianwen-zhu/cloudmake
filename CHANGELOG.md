@@ -5,16 +5,20 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+## 1.1.0 - 2026-09-12
+
+Compatibility notice: v1.1.0 intentionally changes Cloudmake's collection and
+source-selection contract. It is not a transparent drop-in replacement for
+v1.0.1. The minor-version compatibility exception was approved before this
+contract had external adoption; every v1.0.1 project must still complete the
+documented migration preflight before upgrading.
+
 - Make Colab doctor reject the reproduced local `google-colab-cli` kernel-client
   API mismatch before probing account access or allocating compute.
 - Clarify that Colab reuse is limited to the current live runtime and document
   the provider CLI's independent Python requirement for clean installations.
 - Record that UofT course projects own environment dependencies and that the
   teaching release does not rely on Dev Container functionality.
-
-Candidate planning note: this work remains unversioned on top of immutable
-`v1.0.1`; `VERSION` stays `1.0.1` until maintainers coordinate a release name
-and tag.
 
 - Move Cloudmake-owned collection output to `.cloudmake/artifacts/`, reserve
   root `.cloudmake/` from synchronization and fingerprinting, and return root
@@ -25,6 +29,10 @@ and tag.
   Positively identified v1 collection output blocks remote synchronization until
   excluded, deliberately changed/removed, or explicitly accepted by exact
   fingerprint as project source.
+- Keep UofT course repositories and other consumers with immutable v1.0.1 pins
+  on that version until their maintainers explicitly review the new reserved
+  namespace, add the required ignores, complete the preflight, and advance the
+  pin in those repositories.
 - Add invocation-only `--idempotent` target semantics and
   `--replay-for=DURATION` bounded delivery policy. No current backend can prove
   fenced non-overlap at every ambiguous boundary, so all reject the replay

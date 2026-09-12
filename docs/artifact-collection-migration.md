@@ -1,16 +1,17 @@
 # Artifact collection migration preflight
 
-This candidate changes Cloudmake's one owned project-root output from
+Cloudmake v1.1.0 changes its one owned project-root output from
 `artifacts/` to `.cloudmake/artifacts/` and reserves the complete root
 `.cloudmake/` namespace. Root `artifacts/` and `.artifacts/` are ordinary project
-source again.
+source again. This is an intentional compatibility break from v1.0.1, not a
+transparent destination migration.
 
 Cloudmake never migrates, deletes, overwrites, symlinks, or dual-writes an
 existing `artifacts/` directory. A successful collection creates or
 transactionally replaces only `.cloudmake/artifacts/`. Failed validation or
 extraction preserves the previous valid collection there.
 
-Before adopting this candidate:
+Before upgrading from v1.0.1 to v1.1.0:
 
 1. Confirm that the project does not already use root `.cloudmake/` for project
    source or a symlink. Rename any project-owned use explicitly; Cloudmake will
@@ -33,7 +34,7 @@ Before adopting this candidate:
 6. Add `.cloudmake/artifacts/` to both `.gitignore` and `.cloudmakeignore`.
 
 The sixth step is required for projects that may roll back to v1.0.1. This is a
-privacy boundary, not housekeeping: this candidate excludes the reserved
+privacy boundary, not housekeeping: v1.1.0 excludes the reserved
 `.cloudmake/` namespace automatically, but v1.0.1 does not. Without an explicit
 `.cloudmakeignore` entry, a rollback can select previously collected output for
 remote upload. Without the `.gitignore` entry, it can also be committed by
