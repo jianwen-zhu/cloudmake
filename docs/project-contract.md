@@ -81,11 +81,36 @@ inject variables. This direct invocation is the reference semantics remote
 backends are required to preserve.
 
 For `--collect DIR TARGET`, `DIR` is a nonempty project-relative directory with
-no `..` components. The project chooses its location and contents through its
-normal Make rules; cloudmake neither creates nor clears it. After the target
-succeeds, cloudmake archives that directory and transactionally replaces the
-local `project-root/artifacts/` directory. The project must not create or manage
-that local destination.
+no `..` components and must not be inside the reserved root `.cloudmake/`
+namespace. The project chooses its location and contents through its normal Make
+rules; cloudmake neither creates nor clears it. After the target succeeds,
+cloudmake archives that directory and transactionally replaces only the local
+`project-root/.cloudmake/artifacts/` directory. The project must not create or
+manage that local destination.
+
+## Per-invocation target semantics and delivery
+
+Project targets are submitted at most once by default. An operator may assert
+that one invocation is idempotent and request a bounded replay policy:
+
+```sh
+cloudmake --idempotent --replay-for=30s benchmark SIZE=large
+```
+
+`--idempotent` is an assertion about that invocation only. A project file,
+shared configuration, Make target, or previous invocation cannot declare it.
+`--replay-for` requires the assertion and combines a deadline with a fixed
+three-attempt ceiling. It is accepted only when the selected transport can fence
+or observe attempts and prove that an earlier attempt cannot still overlap.
+No current transport has sufficient proof at every ambiguous boundary, so all
+current backends reject bounded replay before provider contact. In particular,
+a returned local Make process does not fence background side effects, and a
+remote status or connection result does not prove non-overlap.
+
+A normal nonzero Make result is a confirmed project result and is never
+replayed. `--retry-for` remains a separate allocation-capacity control and does
+not grant permission to replay a target. Trailing `NAME=value` arguments retain
+the exact same parsing and pass-through under every delivery policy.
 
 ## Source selection
 
@@ -95,10 +120,11 @@ Cloudmake automatically omits only these root paths:
 | --- | --- |
 | `.git/` | Repository metadata is not part of remote execution. |
 | `.cloud-state/` | Legacy in-project cloudmake state must not upload itself. |
-| `artifacts/` | Cloudmake-owned local collection output must not be sent back as source. |
+| `.cloudmake/` | Reserved Cloudmake output, including collected artifacts, must not upload itself. |
 
-All other names, including `src/`, `build/`, `.venv/`, cache directories, and
-notebook output files, have no built-in meaning and are synchronized normally.
+All other names, including root `artifacts/`, root `.artifacts/`, `src/`,
+`build/`, `.venv/`, cache directories, and notebook output files, have no
+built-in meaning and are synchronized normally.
 Projects should list unwanted or sensitive paths in `.cloudmakeignore`, one
 exclusion pattern per line:
 
@@ -110,6 +136,10 @@ local-secrets.json
 
 Run `cloudmake --sync-dry-run` to inspect the selected files without contacting
 the provider.
+
+Projects upgrading from v1.0.1 should complete the
+[artifact collection migration preflight](artifact-collection-migration.md)
+before their first collection with this candidate.
 
 ## Portability boundary
 

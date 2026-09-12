@@ -132,7 +132,7 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 	$(RSYNC_BIN) -az --delete \
 		--exclude='/.git/' \
 		--exclude='/.cloud-state/' \
-		--exclude='/artifacts/' \
+		--exclude='/.cloudmake/' \
 		$(CLOUDMAKE_RSYNC_IGNORE) \
 		-e '$(RSYNC_RSH)' \
 		'$(PROJECT_DIR)/' $(SSH_HOST):$(REMOTE_SRC)/

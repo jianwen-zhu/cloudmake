@@ -30,9 +30,18 @@ permissions. Corrupt identity state is refused rather than silently replaced.
 
 Cloudmake creates a common source manifest for notebook archives and SSH
 transfers. Automatic exclusions are intentionally limited to root `.git/`,
-`.cloud-state/`, and `artifacts/`: repository metadata, legacy in-tree tool
-state, and downloaded output. Other names carry no built-in meaning, so a
-project may freely use directories such as `src/`, `build/`, or `.venv/`.
+`.cloud-state/`, and `.cloudmake/`: repository metadata, legacy in-tree tool
+state, and the reserved Cloudmake namespace. Other names carry no built-in
+meaning, so a project may freely use directories such as root `artifacts/`,
+root `.artifacts/`, `src/`, `build/`, or `.venv/`.
+
+Because root `artifacts/` was Cloudmake-owned in v1.0.1, the launcher checks it
+against external run receipts before remote synchronization. An exact path,
+fingerprint, file-count, and size match is positively known legacy collection
+output and is blocked before backend or provider contact. The operator must
+exclude it, change or remove it after review, or use
+`--accept-legacy-artifacts-as-source` to store private local acceptance of that
+exact fingerprint. Mismatched evidence is not described as a positive match.
 
 Projects can add exclusions in `.cloudmakeignore`, one glob per line. Blank
 lines and `#` comments are allowed:
@@ -87,7 +96,10 @@ Kaggle notebooks apply the same archive validation before execution.
 Downloaded artifact archives are treated as untrusted. Absolute paths,
 directory traversal, links, devices, and other special files are rejected. New
 artifacts are extracted into a staging directory, so an invalid or interrupted
-download leaves the previous `artifacts/` directory intact.
+download leaves the previous `.cloudmake/artifacts/` directory intact. The
+collection path is preflighted to reject symlinked or non-directory reserved
+namespaces before provider contact. Cloudmake never migrates, deletes,
+overwrites, symlinks, or dual-writes a root `artifacts/` directory.
 
 Extraction is rejected before writing when configured file-count, total-size,
 per-file-size, compressed-size, or expansion-ratio budgets are exceeded. A
@@ -150,6 +162,23 @@ Cloudmake does not blindly retry target execution or a mutating notebook
 submission. An ambiguous failure may already have started work, so automatic
 repetition could produce duplicate jobs or side effects.
 
+Target semantics and delivery policy are explicit and per invocation:
+
+```sh
+cloudmake --idempotent --replay-for=30s TARGET NAME=value
+```
+
+The default remains at-most-once. `--idempotent` is only the operator's
+assertion for this command; project files cannot set it. `--replay-for` requires
+that assertion and selects a deadline-bounded policy with a fixed three-attempt
+ceiling. It does not permit replay after a normal nonzero Make result. Before a
+second submission, a transport must fence or observe the earlier attempt and
+prove that it cannot still overlap. No current transport can establish that at
+every ambiguous boundary. All backends therefore reject the option before
+provider contact rather than weakening the guarantee. A returned local Make
+process does not fence background side effects, and remote connection or status
+evidence does not prove non-overlap.
+
 The optional launcher form `cloudmake --retry-for=DURATION ...` is narrower than
 a general operation retry. A backend may use it only around a provider allocation
 call and only after positively classifying a documented temporary-capacity
@@ -201,8 +230,14 @@ nor a failed terminal state; it is not silently treated as success.
 Launcher executions retain private local JSON provenance under the project's
 external Cloudmake state directory. Records include the source and collected
 artifact fingerprints, target, backend, resource, timestamps, and result. Make
-assignment values are hashed rather than copied. Use `cloudmake --history` to
-locate and summarize recent records.
+assignment values are hashed rather than copied. The v1 fields `phase`,
+`provider_state`, `runtime_state`, `session_created`, `preparation_state`,
+`failure_code`, `target_submission`, and `retry_safe` remain present.
+`target_submission` is one of `not_submitted`, `submitted`, or `ambiguous`.
+Additive fields record `replay_safe`, invocation-scoped target semantics,
+delivery policy, and ordered attempt evidence without claiming evidence a
+transport does not provide. Use `cloudmake --history` to locate and summarize
+recent records.
 
 ## Recovery checklist
 

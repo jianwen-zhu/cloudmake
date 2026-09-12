@@ -569,7 +569,8 @@ def test_launcher_runs_external_project_through_codespaces_ssh(
     rsync_arguments = {
         argument for call in all_calls if call[0] == "rsync" for argument in call[1:]
     }
-    assert {"--exclude=/.git/", "--exclude=/.cloud-state/", "--exclude=/artifacts/"} <= rsync_arguments
+    assert {"--exclude=/.git/", "--exclude=/.cloud-state/", "--exclude=/.cloudmake/"} <= rsync_arguments
+    assert "--exclude=/artifacts/" not in rsync_arguments
     assert not any(
         argument in rsync_arguments
         for argument in ("--exclude=/build/", "--exclude=/.venv/", "--exclude=/__pycache__/")
@@ -665,6 +666,9 @@ def test_ssh_collect_fetches_artifacts_transactionally(
 ) -> None:
     install_fake_ssh_tools(fake_bin)
     project = external_project(tmp_path / "external-package")
+    legacy_artifacts = project / "artifacts"
+    legacy_artifacts.mkdir()
+    (legacy_artifacts / "project-source").write_text("untouched", encoding="utf-8")
     env = launcher_environment(fake_bin, tmp_path)
     env["CODESPACE"] = "test-space"
 
@@ -674,9 +678,10 @@ def test_ssh_collect_fetches_artifacts_transactionally(
         env=env,
     )
 
-    assert (project / "artifacts" / "hello").read_text(encoding="utf-8") == (
+    assert (project / ".cloudmake" / "artifacts" / "hello").read_text(encoding="utf-8") == (
         "fake ssh artifact\n"
     )
+    assert (legacy_artifacts / "project-source").read_text(encoding="utf-8") == "untouched"
     assert any(
         call[0] == "ssh"
         and any("tar -C" in argument and "/src/dist" in argument for argument in call[1:])
@@ -695,6 +700,9 @@ def test_ssh_collect_fetches_artifacts_transactionally(
     assert provenance["artifacts"]["files"] == 1
     assert provenance["artifacts"]["total_bytes"] > 0
     assert len(provenance["artifacts"]["fingerprint"]) == 64
+    assert provenance["artifacts"]["path"] == str(
+        project / ".cloudmake" / "artifacts"
+    )
 
 
 @pytest.mark.integration
@@ -703,8 +711,8 @@ def test_ssh_collect_rejects_unsafe_artifact_and_preserves_previous_output(
 ) -> None:
     install_fake_ssh_tools(fake_bin)
     project = external_project(tmp_path / "external-malicious-package")
-    artifacts = project / "artifacts"
-    artifacts.mkdir()
+    artifacts = project / ".cloudmake" / "artifacts"
+    artifacts.mkdir(parents=True)
     (artifacts / "keep").write_text("keep", encoding="utf-8")
     env = launcher_environment(fake_bin, tmp_path)
     env["CODESPACE"] = "test-space"
@@ -1079,10 +1087,14 @@ def test_colab_native_archive_excludes_only_cloudmake_owned_root_paths(
 ) -> None:
     install_fake_colab(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
-    for name in (".git", ".cloud-state", "artifacts"):
+    for name in (".git", ".cloud-state", ".cloudmake"):
         directory = prototype / name
         directory.mkdir(exist_ok=True)
         (directory / "excluded.txt").write_text("excluded", encoding="utf-8")
+    for name in ("artifacts", ".artifacts"):
+        directory = prototype / name
+        directory.mkdir(exist_ok=True)
+        (directory / "included.txt").write_text("included", encoding="utf-8")
     for name in ("build", ".venv", "__pycache__", ".pytest_cache"):
         directory = prototype / "any-layout" / name
         directory.mkdir(parents=True, exist_ok=True)
@@ -1099,8 +1111,10 @@ def test_colab_native_archive_excludes_only_cloudmake_owned_root_paths(
     assert "generated_output.ipynb" in names
     for name in ("build", ".venv", "__pycache__", ".pytest_cache"):
         assert f"any-layout/{name}/included.txt" in names
+    assert "artifacts/included.txt" in names
+    assert ".artifacts/included.txt" in names
     assert not any(
-        name.split("/", 1)[0] in {".git", ".cloud-state", "artifacts"}
+        name.split("/", 1)[0] in {".git", ".cloud-state", ".cloudmake"}
         for name in names
     )
 
@@ -1126,7 +1140,9 @@ def test_colab_native_collect_fetch_open_and_stop(
     run_command(["make", "open"], cwd=prototype, env=env)
     run_command(["make", "stop"], cwd=prototype, env=env)
 
-    assert (prototype / "artifacts" / "hello").read_text(encoding="utf-8") == "fake artifact\n"
+    assert (prototype / ".cloudmake" / "artifacts" / "hello").read_text(
+        encoding="utf-8"
+    ) == "fake artifact\n"
     colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
     assert sum(
         call[1] == "exec" and call[-1].endswith("remote_prerequisites.py")
@@ -1644,7 +1660,9 @@ def test_kaggle_collect_and_fetch_return_artifact(
         env=env,
     )
     run_command([*common, "fetch"], cwd=prototype, env=env)
-    assert (prototype / "artifacts" / "hello").read_text(encoding="utf-8") == "fake artifact\n"
+    assert (prototype / ".cloudmake" / "artifacts" / "hello").read_text(
+        encoding="utf-8"
+    ) == "fake artifact\n"
 
 
 @pytest.mark.integration

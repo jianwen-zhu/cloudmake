@@ -24,7 +24,16 @@ Backend lifecycle operations are selected through launcher options such as
 project target. The target-agnostic `--collect DIR TARGET` operation must validate
 `DIR` as project-relative, invoke the exact requested target, archive that
 existing directory after success, and transactionally replace the local
-`artifacts/` directory.
+`.cloudmake/artifacts/` directory. Root `artifacts/` and `.artifacts/` remain
+ordinary project source.
+
+Before any remote synchronization, the launcher compares root `artifacts/`
+against external v1 run provenance. An exact path, fingerprint, file-count, and
+size match to a prior Cloudmake collection is positively known legacy output and
+must block before the backend engine or provider client runs. Proceeding requires
+an explicit source exclusion, a reviewed content change/removal, or a private
+local acceptance bound to that exact fingerprint. Backends must not bypass this
+migration gate.
 
 ## Names and transports
 
@@ -97,6 +106,15 @@ before readiness, transfer, or project execution begins. Backends without such a
 classifier reject the option. A transport must never infer retryability from an
 arbitrary nonzero command or HTTP status alone.
 
+Target replay is separate from allocation retry. The default delivery policy is
+at-most-once. `--idempotent` is an operator assertion scoped to one target
+invocation, and `--replay-for` requires it. A replay-capable transport must use
+both a deadline and the fixed attempt ceiling, fence or observe each attempt,
+and prove that an earlier attempt cannot still overlap before another is
+submitted. A normal nonzero Make result is never replayable. Unsupported
+backends must reject the request before provider contact; an SSH connection,
+batch status poll, or provider timeout alone is not fencing evidence.
+
 The engine's common lifecycle operations are `start`, `sync`, `status`, `fetch`,
 `open`, `shell`, and `stop`; the launcher exposes them as long options. A
 positional name with the same spelling remains a project target. Unsupported
@@ -143,15 +161,20 @@ reports absence. If the probe says an owner or fingerprint exists but its
 contents cannot be downloaded, synchronization must stop as ambiguous.
 
 Once a target request has crossed the execution boundary, a connection failure
-is ambiguous. The transport must not replay the target. Failure state records
-the phase, normalized provider state, whether the invocation created the
-resource, submission certainty (`not_submitted`, `submitted`, or `ambiguous`),
-and whether retry is safe.
+is ambiguous. Unless the invocation requested bounded replay and the transport
+has the fencing evidence above, the transport must not replay the target.
+Failure state records the phase, normalized provider and runtime state, whether
+the invocation created the resource, preparation state, failure code,
+submission certainty (`not_submitted`, `submitted`, or `ambiguous`), and whether
+retry is safe. Provenance adds replay safety, invocation-scoped target semantics,
+delivery policy, and ordered attempt evidence. The v1 vocabulary does not
+contain a `confirmed` submission state.
 
 The local transport is the deliberate exception to remote synchronization,
 ownership, locking, and retrieval responsibilities: it operates on the source of
 truth itself. It must still preserve exact Make dispatch and apply the same safe,
-transactional `artifacts/` materialization when `--collect` is requested.
+transactional `.cloudmake/artifacts/` materialization when `--collect` is
+requested.
 
 Notebook transports package the selected source and execute provider control
 cells. The generated notebook and control code belong to cloudmake rather than
@@ -174,7 +197,9 @@ project identity. They do not belong in either the cloudmake repository or the
 actual project repository.
 
 Downloaded project output is different: cloudmake creates and owns the local
-project `artifacts/` directory as the materialized result of `--collect`.
+project `.cloudmake/artifacts/` directory as the materialized result of
+`--collect`. The complete root `.cloudmake/` namespace is excluded from source
+synchronization and fingerprinting.
 
 Configuration precedence is:
 

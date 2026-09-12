@@ -18,7 +18,7 @@ SCHEMA_VERSION = 1
 EXCLUDED_ROOTS = {
     ".git",
     ".cloud-state",
-    "artifacts",
+    ".cloudmake",
 }
 SECRET_SCAN_BYTES = 2 * 1024 * 1024
 SECRET_PATTERNS = (

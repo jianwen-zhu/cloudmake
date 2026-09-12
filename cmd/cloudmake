@@ -349,6 +349,9 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         "project": Path.cwd(),
         "jobs": None,
         "retry_for": None,
+        "replay_for": None,
+        "idempotent": False,
+        "accept_legacy_artifacts": False,
         "accelerator": None,
         "accelerator_set": False,
         "host": None,
@@ -405,6 +408,17 @@ def parse_invocation(arguments: list[str]) -> tuple[dict[str, Any], list[str]]:
         elif argument.startswith("--retry-for="):
             options["retry_for"] = argument.split("=", 1)[1]
             index += 1
+        elif argument == "--replay-for":
+            options["replay_for"], index = take_value(arguments, index, argument)
+        elif argument.startswith("--replay-for="):
+            options["replay_for"] = argument.split("=", 1)[1]
+            index += 1
+        elif argument == "--idempotent":
+            options["idempotent"] = True
+            index += 1
+        elif argument == "--accept-legacy-artifacts-as-source":
+            options["accept_legacy_artifacts"] = True
+            index += 1
         elif argument == "--verbose":
             options["verbose"] = True
             index += 1
@@ -441,11 +455,16 @@ Every positional name is passed unchanged to the project Makefile. Cloudmake
 reserves no project target names.
 
 Project options: -b BACKEND, -C DIR, -j N, --host HOST, --gpu[=TYPE], --cpu,
-                 --retry-for=DURATION, --verbose
+                 --retry-for=DURATION, --idempotent,
+                 --replay-for=DURATION,
+                 --accept-legacy-artifacts-as-source, --verbose
 Cloud operations: --use BACKEND, --doctor, --backends, --start, --sync,
                   --sync-dry-run, --status, --fetch, --open, --shell, --stop
 Artifacts: --collect DIR TARGET runs that target and fetches project-relative DIR.
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
+Delivery: targets are at-most-once by default. --replay-for requires the
+          invocation-only --idempotent assertion and a replay-capable backend.
+          No current backend meets the fencing requirement.
 Information: --help, --version, --history, --host-templates,
              --host-template NAME
 """
@@ -610,6 +629,22 @@ def retry_duration(value: str | None) -> int | None:
     return seconds
 
 
+def replay_duration(value: str | None) -> int | None:
+    if value is None:
+        return None
+    match = DURATION.fullmatch(value)
+    if match is None:
+        raise UsageError(
+            "--replay-for requires a positive duration such as 30s, 15m, or 2h"
+        )
+    amount = int(match.group(1))
+    multiplier = {"s": 1, "m": 60, "h": 3600}[match.group(2)]
+    seconds = amount * multiplier
+    if seconds > 24 * 3600:
+        raise UsageError("--replay-for must not exceed 24h")
+    return seconds
+
+
 def collect_directory(value: str) -> str:
     path = PurePosixPath(value)
     if (
@@ -618,9 +653,130 @@ def collect_directory(value: str) -> str:
         or path.is_absolute()
         or ".." in path.parts
         or (not path.parts and value != ".")
+        or (path.parts and path.parts[0] == ".cloudmake")
     ):
         raise UsageError("collection directory must be a safe project-relative path")
     return path.as_posix()
+
+
+def collection_destination(project: Path) -> Path:
+    namespace = project / ".cloudmake"
+    destination = namespace / "artifacts"
+    if namespace.is_symlink():
+        raise UsageError(f"reserved Cloudmake namespace must not be a symlink: {namespace}")
+    if namespace.exists() and not namespace.is_dir():
+        raise UsageError(f"reserved Cloudmake namespace is not a directory: {namespace}")
+    if destination.is_symlink():
+        raise UsageError(f"artifact destination must not be a symlink: {destination}")
+    if destination.exists() and not destination.is_dir():
+        raise UsageError(f"artifact destination is not a directory: {destination}")
+    return destination
+
+
+def legacy_artifacts_are_explicitly_ignored(project: Path) -> bool:
+    path = project / ".cloudmakeignore"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return False
+    for raw_line in lines:
+        pattern = raw_line.strip().replace("\\", "/")
+        if not pattern or pattern.startswith("#") or pattern.startswith("!"):
+            continue
+        if pattern.lstrip("/").rstrip("/") == "artifacts":
+            return True
+    return False
+
+
+def matching_legacy_artifact_receipt(
+    project: Path, state_root: Path
+) -> tuple[dict[str, Any], Path] | None:
+    legacy = project / "artifacts"
+    current = artifact_receipt(legacy)
+    if current is None:
+        return None
+    runs = state_root / "runs"
+    for path in sorted(runs.glob("*.json"), reverse=True):
+        try:
+            record = load_json(path, optional=False)
+        except (OSError, UsageError):
+            continue
+        receipt = record.get("artifacts")
+        if not isinstance(receipt, dict):
+            continue
+        receipt_path = receipt.get("path")
+        if not isinstance(receipt_path, str):
+            continue
+        try:
+            recorded_destination = Path(receipt_path).expanduser().resolve()
+        except OSError:
+            continue
+        if recorded_destination != legacy.resolve():
+            continue
+        if (
+            receipt.get("fingerprint") == current["fingerprint"]
+            and receipt.get("files") == current["files"]
+            and receipt.get("total_bytes") == current["total_bytes"]
+        ):
+            return current, path
+    return None
+
+
+def preflight_legacy_artifacts(
+    *,
+    project: Path,
+    state_root: Path,
+    accept_as_source: bool,
+) -> None:
+    match = matching_legacy_artifact_receipt(project, state_root)
+    if match is None:
+        if accept_as_source:
+            raise UsageError(
+                "--accept-legacy-artifacts-as-source requires an exact known "
+                "legacy Cloudmake collection receipt"
+            )
+        return
+    if legacy_artifacts_are_explicitly_ignored(project):
+        if accept_as_source:
+            raise UsageError(
+                "root artifacts/ is already excluded by .cloudmakeignore; "
+                "legacy source acceptance is unnecessary"
+            )
+        return
+    receipt, provenance_path = match
+    acceptance_path = state_root / "migrations" / "legacy-artifacts-source.json"
+    accepted = load_json(acceptance_path)
+    accepted_exactly = (
+        accepted.get("schema") == 1
+        and accepted.get("path") == os.fspath(project / "artifacts")
+        and accepted.get("fingerprint") == receipt["fingerprint"]
+    )
+    if accepted_exactly:
+        return
+    if accept_as_source:
+        atomic_json(
+            acceptance_path,
+            {
+                "schema": 1,
+                "path": os.fspath(project / "artifacts"),
+                "fingerprint": receipt["fingerprint"],
+                "accepted_at": utc_timestamp(),
+                "source_receipt": os.fspath(provenance_path),
+            },
+        )
+        print(
+            "[cloudmake] accepted the exact known legacy artifacts/ collection "
+            "fingerprint as project source",
+            flush=True,
+        )
+        return
+    raise UsageError(
+        "a root artifacts/ directory exactly matches prior Cloudmake collection "
+        f"provenance ({provenance_path}) and may contain private downloaded output; "
+        "remote source synchronization is blocked. Review it, then add /artifacts/ "
+        "to .cloudmakeignore, change or remove it intentionally, or rerun with "
+        "--accept-legacy-artifacts-as-source to accept this exact fingerprint"
+    )
 
 
 def engine_command(
@@ -655,7 +811,7 @@ def engine_command(
         f"PROJECT={project.name}",
         f"PROJECT_SLUG={project_slug(project, key)}",
         "PROJECT_MAKEFILE=Makefile",
-        f"ARTIFACT_DIR={project / 'artifacts'}",
+        f"ARTIFACT_DIR={project / '.cloudmake' / 'artifacts'}",
         f"CLOUDMAKE_STATE_ROOT={state_home / 'projects' / key}",
         f"CLOUDMAKE_CACHE_ROOT={cache_home / 'projects' / key}",
         f"CLOUDMAKE_PROJECT_ARGS_B64={encoded_arguments(assignments)}",
@@ -787,7 +943,7 @@ def collect_local_artifacts(
         "--archive",
         os.fspath(archive),
         "--destination",
-        os.fspath(project / "artifacts"),
+        os.fspath(collection_destination(project)),
     ]
     limits = {
         "ARTIFACT_MAX_FILES": "--max-files",
@@ -807,10 +963,27 @@ def collect_local_artifacts(
 def run(arguments: list[str]) -> int:
     options, positional = parse_invocation(arguments)
     retry_seconds = retry_duration(options["retry_for"])
+    replay_seconds = replay_duration(options["replay_for"])
     project = validate_project(options["project"])
     config_home, state_home, cache_home = homes()
     key = project_key(project)
+    state_root = state_home / "projects" / key
     action = options["action"]
+
+    target_invocation = (action is None and bool(positional)) or action == "collect"
+    source_sync_invocation = (action is None and bool(positional)) or action in {
+        "collect",
+        "sync",
+    }
+    if replay_seconds is not None and not options["idempotent"]:
+        raise UsageError("--replay-for requires --idempotent")
+    if (options["idempotent"] or replay_seconds is not None) and not target_invocation:
+        raise UsageError("--idempotent and --replay-for are valid only for a project target")
+    if options["accept_legacy_artifacts"] and not source_sync_invocation:
+        raise UsageError(
+            "--accept-legacy-artifacts-as-source is valid only for remote source "
+            "synchronization"
+        )
 
     if retry_seconds is not None and action not in {None, "collect", "start"}:
         raise UsageError("--retry-for is valid only with --start, a project target, or --collect")
@@ -923,6 +1096,11 @@ def run(arguments: list[str]) -> int:
         raise UsageError(
             f"backend {backend!r} does not classify retryable allocation capacity"
         )
+    if replay_seconds is not None:
+        raise UsageError(
+            f"backend {backend!r} cannot prove fenced, non-overlapping target attempts; "
+            "bounded replay is unsupported"
+        )
     if retry_seconds is not None and action is None and not positional:
         raise UsageError("--retry-for requires --start, a project target, or --collect")
     if action == "help" or (action is None and not positional):
@@ -957,6 +1135,19 @@ def run(arguments: list[str]) -> int:
     if engine_target in {"dispatch", "collect"}:
         if not (project / "Makefile").is_file():
             raise UsageError(f"project Makefile was not found: {project / 'Makefile'}")
+    if engine_target == "collect":
+        collection_destination(project)
+    if backend != "local" and engine_target in {"dispatch", "collect", "sync"}:
+        preflight_legacy_artifacts(
+            project=project,
+            state_root=state_root,
+            accept_as_source=options["accept_legacy_artifacts"],
+        )
+    elif options["accept_legacy_artifacts"]:
+        raise UsageError(
+            "--accept-legacy-artifacts-as-source is valid only for remote source "
+            "synchronization"
+        )
 
     if (
         options["accelerator_set"]
@@ -970,7 +1161,6 @@ def run(arguments: list[str]) -> int:
             accelerator=accelerator,
         )
 
-    state_root = state_home / "projects" / key
     colab_session = (
         colab_session_name(project, key, state_root, config_home)
         if backend == "colab-notebook"
@@ -1047,6 +1237,14 @@ def run(arguments: list[str]) -> int:
     if allocation_path is not None:
         allocation_path.unlink(missing_ok=True)
     record_path = runs / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{run_id}.json"
+    started_at = utc_timestamp()
+    delivery_policy: dict[str, Any] = {"mode": "at-most-once", "max_attempts": 1}
+    attempt: dict[str, Any] = {
+        "ordinal": 1,
+        "started_at": started_at,
+        "target_submission": "not_submitted",
+        "outcome": "running",
+    }
     record: dict[str, Any] = {
         "schema": 1,
         "run_id": run_id,
@@ -1058,8 +1256,23 @@ def run(arguments: list[str]) -> int:
         "target": remote_target,
         "assignments": assignment_receipts(assignments),
         "collect_directory": remote_collect_dir,
-        "started_at": utc_timestamp(),
+        "started_at": started_at,
         "status": "running",
+        "phase": "target_submission",
+        "provider_state": "unknown",
+        "runtime_state": "local" if backend == "local" else "unknown",
+        "session_created": False if backend == "local" else None,
+        "preparation_state": "not_requested",
+        "failure_code": None,
+        "target_submission": "not_submitted",
+        "retry_safe": True,
+        "replay_safe": False,
+        "target_semantic": {
+            "idempotency": "asserted" if options["idempotent"] else "unknown",
+            "scope": "invocation",
+        },
+        "delivery_policy": delivery_policy,
+        "attempts": [attempt],
     }
     if ssh_host is not None:
         record["host"] = ssh_host
@@ -1067,23 +1280,25 @@ def run(arguments: list[str]) -> int:
         record["allocation"] = {"attempts": 0, "outcome": "not-attempted"}
     atomic_json(record_path, record)
     operation_state = state_root / "operations" / f"{run_id}.json"
+    local_target_exit_code: int | None = None
     try:
         if backend == "local":
             print_local_execution_context(accelerator, accelerator_set)
-            exit_code = local_make_command(
+            local_target_exit_code = local_make_command(
                 project=project,
                 target=remote_target,
                 assignments=assignments,
                 jobs=options["jobs"],
                 verbose=options["verbose"],
             )
-            if exit_code:
+            exit_code = local_target_exit_code
+            if local_target_exit_code:
                 print(
                     f"[cloudmake] target {remote_target!r} failed with exit status "
-                    f"{exit_code}",
+                    f"{local_target_exit_code}",
                     file=sys.stderr,
                 )
-            if exit_code == 0 and engine_target == "collect":
+            if local_target_exit_code == 0 and engine_target == "collect":
                 exit_code = collect_local_artifacts(
                     project=project,
                     directory=remote_collect_dir,
@@ -1119,7 +1334,31 @@ def run(arguments: list[str]) -> int:
             if receipt is not None:
                 record["allocation"] = receipt
             allocation_path.unlink(missing_ok=True)
-        record.update(status="interrupted", finished_at=utc_timestamp())
+        lifecycle = load_json(operation_state) if operation_state.is_file() else {}
+        submission = lifecycle.get("target_submission", "ambiguous")
+        if submission not in {"not_submitted", "submitted", "ambiguous"}:
+            submission = "ambiguous"
+        finished_at = utc_timestamp()
+        attempt.update(
+            finished_at=finished_at,
+            target_submission=submission,
+            outcome="interrupted",
+        )
+        record.update(
+            status="interrupted",
+            finished_at=finished_at,
+            phase=lifecycle.get("phase", "target_execution"),
+            provider_state=lifecycle.get("provider_state", "unknown"),
+            runtime_state=lifecycle.get("runtime_state", record["runtime_state"]),
+            session_created=lifecycle.get("session_created", record["session_created"]),
+            preparation_state=lifecycle.get(
+                "preparation_state", record["preparation_state"]
+            ),
+            failure_code=lifecycle.get("failure_code", "interrupted"),
+            target_submission=submission,
+            retry_safe=bool(lifecycle.get("retry_safe", False)),
+            replay_safe=False,
+        )
         atomic_json(record_path, record)
         atomic_json(runs / "latest.json", record)
         raise
@@ -1142,6 +1381,69 @@ def run(arguments: list[str]) -> int:
         resource_id, source = os.fspath(project), {"mode": "local-working-tree"}
     else:
         resource_id, source = newest_source_manifest(state_root, backend, manifest_before)
+    finished_at = utc_timestamp()
+    if backend == "local":
+        phase = (
+            "artifact_retrieval"
+            if engine_target == "collect" and local_target_exit_code == 0 and exit_code != 0
+            else "target_execution"
+        )
+        provider_state = (
+            "succeeded"
+            if exit_code == 0
+            else "failed"
+        )
+        submission = "submitted"
+        runtime_state = "local"
+        session_created: bool | None = False
+        preparation_state = "not_requested"
+        failure_code = (
+            "artifact_collection_failed"
+            if phase == "artifact_retrieval"
+            else None
+        )
+        retry_safe = False
+    else:
+        phase = lifecycle.get("phase", "target_execution")
+        provider_state = lifecycle.get(
+            "provider_state", "succeeded" if exit_code == 0 else "unknown"
+        )
+        runtime_state = lifecycle.get("runtime_state", "unknown")
+        session_created = lifecycle.get("session_created")
+        preparation_state = lifecycle.get("preparation_state", "not_requested")
+        failure_code = lifecycle.get("failure_code")
+        submission = lifecycle.get(
+            "target_submission", "submitted" if exit_code == 0 else "ambiguous"
+        )
+        if submission not in {"not_submitted", "submitted", "ambiguous"}:
+            submission = "ambiguous"
+        retry_safe = bool(lifecycle.get("retry_safe", False))
+
+    if backend == "local":
+        attempt_exit_code = local_target_exit_code
+        attempt_outcome = "succeeded" if local_target_exit_code == 0 else "target_failed"
+    elif phase == "artifact_retrieval" and submission == "submitted":
+        attempt_exit_code = 0
+        attempt_outcome = "succeeded"
+    else:
+        attempt_exit_code = exit_code if submission == "submitted" else None
+        attempt_outcome = (
+            "succeeded"
+            if exit_code == 0
+            else "target_failed"
+            if submission == "submitted"
+            else "not_submitted"
+            if submission == "not_submitted"
+            else "ambiguous"
+        )
+    attempt.update(
+        finished_at=finished_at,
+        target_submission=submission,
+        outcome=attempt_outcome,
+    )
+    if attempt_exit_code is not None:
+        attempt["exit_code"] = attempt_exit_code
+
     record.update(
         status=(
             "succeeded"
@@ -1149,26 +1451,23 @@ def run(arguments: list[str]) -> int:
             else "interrupted" if exit_code == 130 else "failed"
         ),
         exit_code=exit_code,
-        finished_at=utc_timestamp(),
+        finished_at=finished_at,
         resource_id=resource_id,
         source=source,
+        phase=phase,
+        provider_state=provider_state,
+        runtime_state=runtime_state,
+        session_created=session_created,
+        preparation_state=preparation_state,
+        failure_code=failure_code,
+        target_submission=submission,
+        retry_safe=retry_safe,
+        replay_safe=False,
     )
     if lifecycle:
         record["lifecycle"] = lifecycle
-        for field in (
-            "phase",
-            "provider_state",
-            "runtime_state",
-            "session_created",
-            "target_submission",
-            "preparation_state",
-            "retry_safe",
-            "failure_code",
-        ):
-            if field in lifecycle:
-                record[field] = lifecycle[field]
     if engine_target == "collect" and exit_code == 0:
-        record["artifacts"] = artifact_receipt(project / "artifacts")
+        record["artifacts"] = artifact_receipt(collection_destination(project))
     atomic_json(record_path, record)
     atomic_json(runs / "latest.json", record)
     print(f"[cloudmake] run={run_id} provenance={record_path}")
