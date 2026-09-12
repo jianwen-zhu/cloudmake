@@ -245,7 +245,7 @@ stop-persistent Codespaces as a CPU remote-workstation reference: ordinary
 targets wake or reuse the named resource while its `/workspaces` tree avoids
 checkpoint transfer, and a selected OCI image becomes the native Codespaces
 workstation environment instead of a nested container. Cloudmake 2.3 makes a
-fail-closed subset of the standard Dev Container description the portable
+fail-closed subset of the standard Dev Container configuration the portable
 workstation contract across qualified backends, retaining `--image` as its
 minimal intrusion-free shorthand. Cloudmake 2.4 adds a single-node Google
 Compute Engine remote-workstation backend. It will wake and reuse an already
@@ -712,7 +712,7 @@ cloudmake -b colab --stop
 cloudmake --use local --image registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 cloudmake verify
 
-# Select the standard Dev Container workstation description once.
+# Select the standard Dev Container workstation configuration once.
 cloudmake --use ssh --host lab-gpu --devcontainer
 cloudmake verify
 ```
@@ -857,9 +857,9 @@ provider guarantees and may change on a replacement VM. The OCI runner performs
 its own execution preflight on every target invocation. The local backend
 supports the same observation command for comparison.
 
-`cloudmake --backends` also shows Dev Container engine type and loopback-port support, the
-ordered OCI runtime options, and separate public-inbound/workload-outbound
-Internet declarations for each backend.
+`cloudmake --backends` also shows the Dev Container execution-path type,
+loopback-port support, ordered OCI runtime options, and separate
+public-inbound/workload-outbound Internet declarations for each backend.
 Host-oriented backends can declare several choices for dynamic
 probing; managed notebook backends can declare one constrained adapter or
 explicitly declare OCI unsupported.
@@ -867,7 +867,7 @@ The exact per-backend semantic ceiling is documented in the
 [Dev Container capability matrix](docs/devcontainers.md#backend-realization).
 Cloudmake validates those descriptor claims for internal consistency and names
 the originating standard fields in compatibility failures. A rejected or stale
-workstation description never blocks `--status` or `--stop`.
+workstation configuration never blocks `--status` or `--stop`.
 
 #### OCI/CDI execution
 
@@ -937,17 +937,18 @@ positive qualification claim.
 
 #### Capability-qualified Dev Container workstation
 
-Cloudmake 2.4 aligns the maintained backends on a standard project description
+Cloudmake 2.4 aligns the maintained backends on a standard project configuration
 without replacing the target-first Make interface. Opt in once with
 `--devcontainer`; the bare option discovers `.devcontainer/devcontainer.json`
 or `.devcontainer.json`, while an explicit project-relative path is accepted.
 Configuration presence alone never changes execution, preserving existing
 projects and prior CLI behavior.
 
-The cross-backend portable profile consumes a digest-pinned `image`, literal `containerEnv`
-and `remoteEnv`, basic CPU/memory/storage/GPU `hostRequirements`, loopback-only
-`forwardPorts`, and CDI names in `customizations.cloudmake.devices`. Richer
-standard fields become semantic requirements. The local backend can select the
+The cross-backend portable profile consumes a digest-pinned `image`, literal
+`containerEnv` and `remoteEnv`, basic CPU/memory/storage/GPU
+`hostRequirements`, loopback-only `forwardPorts`, and CDI names in
+`customizations.cloudmake.devices`. Richer standard fields become semantic
+requirements. The local backend can select the
 reference Dev Container CLI over Docker for tagged images, builds, Features,
 create-phase lifecycle commands, and user/workspace behavior. Restricted
 backends reject requirements they cannot honor before provider contact.
@@ -1745,7 +1746,7 @@ listener and compute. It neither publishes the port nor handles GitHub
 credentials. See
 [`tests/acceptance/codespaces-network`](tests/acceptance/codespaces-network/README.md).
 
-The v2.3 portable-profile gate runs the same Dev Container description through
+The v2.3 portable-profile gate runs the same Dev Container configuration through
 an existing Linux SSH host. It proves non-root execution, runtime qualification,
 incremental state, foreground loopback forwarding, and artifact collection; an
 optional strict mode requires the privilege-restricted PRoot path. See

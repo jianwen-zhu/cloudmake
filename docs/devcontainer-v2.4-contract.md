@@ -9,7 +9,7 @@ the bounded richer field set documented in `devcontainers.md`; other backends
 fail early when that richer set is requested.
 
 Cloudmake accepts the standard `devcontainer.json` format as a workstation
-description. It does not claim that every backend implements every part of the
+configuration. It does not claim that every backend implements every part of the
 Dev Container specification. Instead, Cloudmake analyzes the behavior required
 by the selected configuration, compares it with the selected backend's declared
 and observed capabilities, and either realizes the configuration faithfully or

@@ -1,8 +1,8 @@
 # Portable Dev Container workstations
 
 For a conceptual introduction to application bundles, OCI image/runtime
-layers, CDI devices, native engines, and restricted adapters, read the
-[Dev Container execution landscape](devcontainer-execution-landscape.md).
+layers, CDI devices, Dev Container implementations, and the portable adapter,
+read the [Dev Container execution landscape](devcontainer-execution-landscape.md).
 
 Cloudmake 2.4 retains this portable profile as the cross-backend baseline and
 adds capability negotiation for richer standard configurations. The accepted
@@ -12,8 +12,8 @@ semantics, and rollout gates are specified in the
 
 Cloudmake 2.4 accepts the standard
 [Dev Container specification](https://containers.dev/implementors/spec/) as a
-workstation description, analyzes the behavior it requires, and chooses a
-qualified backend engine. The project still exposes only its ordinary Make
+workstation configuration, analyzes the behavior it requires, and chooses a
+qualified execution path. The project still exposes only its ordinary Make
 targets. Cloudmake does not silently discard standard behavior to fit a weaker
 backend.
 
@@ -45,7 +45,7 @@ The portable adapter remains the cross-backend baseline:
 
 | Dev Container field | Portable adapter behavior |
 | --- | --- |
-| `image` | Required immutable Linux OCI reference in `REF@sha256:DIGEST` form. Tagged references require a qualified native engine. |
+| `image` | Required immutable Linux OCI reference in `REF@sha256:DIGEST` form. Tagged references require a qualified Dev Container implementation. |
 | `containerEnv`, `remoteEnv` | Literal string values are merged; `remoteEnv` wins. Host-variable interpolation and null/unset values are rejected. |
 | `hostRequirements.cpus` | Positive integer, checked on the actual execution host before Make. |
 | `hostRequirements.memory`, `.storage` | Byte or `kb`/`mb`/`gb`/`tb` size, checked on the actual host. |
@@ -81,12 +81,12 @@ This example is portable across a qualified GPU host and Colab:
 }
 ```
 
-Richer standard fields become explicit semantic requirements rather than parser
-errors. The qualified local native engine currently adds tagged images,
-Dockerfile/image builds, Features, create-phase lifecycle commands, standard
-remote/container user selection, workspace layout, process control, and
-restrictive security policy. It invokes the reference Dev
-Container CLI over the existing local Docker service, records the actual image
+Richer standard fields become explicit required behavior rather than parser
+errors. The qualified local reference implementation currently adds tagged
+images, Dockerfile/image builds, Features, create-phase lifecycle commands,
+standard remote/container user selection, workspace layout, process control,
+and restrictive security policy. It invokes the reference Dev Container CLI
+over the existing local Docker service, records the actual image
 digest or derived image ID, and reuses the same prepared container while its
 configuration fingerprint is unchanged.
 
@@ -98,7 +98,8 @@ contacting that provider. No maintained backend currently accepts:
 - Compose configurations;
 - secrets, arbitrary mounts, arbitrary `runArgs`, or host lifecycle commands;
 - privileged mode, added Linux capabilities, or relaxed security options;
-- port attributes, published ports, attach hooks, or general start/shutdown lifecycle controls; or
+- port attributes, published ports, attach hooks, or general start/shutdown
+  lifecycle controls; or
 - interpolated host environment values and detailed GPU requirement objects.
 
 Unknown top-level fields are also rejected. This deliberately prevents a future
@@ -108,8 +109,8 @@ editor customizations do not affect execution and are ignored safely.
 
 Errors name both the semantic capability and the standard field that required
 it, for example `lifecycle-create (postCreateCommand)`. The complete
-configuration must fit one engine; the adapter and native capability sets are
-never combined to manufacture a pass.
+configuration must fit one execution path; the adapter and implementation
+capability sets are never combined to manufacture a pass.
 
 These are not claims that the Dev Container standard is unsafe. They are the
 parts for which the selected backends have materially different authority and
@@ -203,12 +204,12 @@ remains the explicit device request.
 The portable Cloudmake adapter drops capabilities, requests
 `no-new-privileges`, uses a read-only image root, exposes a fresh writable
 `/tmp`, and grants only the writable `/workspace` project mount plus explicitly
-requested CDI device edits. A qualified native engine follows its standard
-runtime model instead; Cloudmake still rejects requests for added privilege,
-but does not claim that Docker's default Dev Container boundary is the same as
-the restricted adapter sandbox. Provider-native Codespaces remains subject to
-metadata embedded in the selected image and is therefore a trusted-image
-boundary.
+requested CDI device edits. A qualified Dev Container implementation follows
+its standard runtime model instead; Cloudmake still rejects requests for added
+privilege, but does not claim that Docker's default Dev Container boundary is
+the same as the portable adapter's sandbox. Provider-native Codespaces remains
+subject to metadata embedded in the selected image and is therefore a
+trusted-image boundary.
 
 This feature does not make checkpoints authoritative. Native provider storage,
 managed checkpoints, OCI caches, and materialized layers are disposable ways
@@ -235,7 +236,7 @@ template. The gate records two distinct outcomes:
 - portable configurations execute a real project Make target through the local
   Docker adapter; and
 - richer configurations produce explicit requirement sets which are matched to
-  the local native engine or rejected by restricted backends.
+  the local reference implementation or rejected by restricted backends.
 
 The harness resolves the upstream image tags to recorded OCI digests but does
 not remove lifecycle, build, Feature, port, or privilege requirements merely to
