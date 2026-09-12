@@ -88,6 +88,9 @@ ACTION_OPTIONS = {
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.DOTALL)
 ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
 DURATION = re.compile(r"^([1-9][0-9]*)([smh])$")
+BACKEND_TARGET_REPLAY_DECLARATION = re.compile(
+    r"^\s*BACKEND_TARGET_REPLAY\s*:=\s*([^\s#]+)\s*(?:#.*)?$"
+)
 COLAB_SESSION_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 SSH_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 HOST_TEMPLATE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -118,6 +121,30 @@ RESERVED_ASSIGNMENTS = {
 
 class UsageError(RuntimeError):
     pass
+
+
+def backend_target_replay(backend: str) -> str:
+    """Read the static API-1 replay declaration without contacting a provider."""
+    descriptor = TOOL_ROOT / "backends" / f"{backend}.mk"
+    declarations = [
+        line
+        for line in descriptor.read_text(encoding="utf-8").splitlines()
+        if re.match(r"^\s*BACKEND_TARGET_REPLAY\b", line)
+    ]
+    if not declarations:
+        return "none"
+    if len(declarations) != 1:
+        raise UsageError(
+            f"backend {backend!r} must declare BACKEND_TARGET_REPLAY exactly once"
+        )
+    match = BACKEND_TARGET_REPLAY_DECLARATION.fullmatch(declarations[0])
+    if match is None or match.group(1) != "none":
+        value = match.group(1) if match is not None else declarations[0].strip()
+        raise UsageError(
+            f"backend {backend!r} has invalid target replay declaration {value!r}; "
+            "backend API 1 supports only 'none'"
+        )
+    return match.group(1)
 
 
 def default_home(variable: str, xdg_variable: str, fallback: Path) -> Path:
@@ -464,7 +491,7 @@ Artifacts: --collect DIR TARGET runs that target and fetches project-relative DI
 Capacity retry: cloudmake --retry-for=30m --start (classified allocation only).
 Delivery: targets are at-most-once by default. --replay-for requires the
           invocation-only --idempotent assertion and a replay-capable backend.
-          No current backend meets the fencing requirement.
+          Current backends declare target_replay=none.
 Information: --help, --version, --history, --host-templates,
              --host-template NAME
 """
@@ -1086,6 +1113,7 @@ def run(arguments: list[str]) -> int:
     backend, accelerator, accelerator_set, ssh_host = resolve_preferences(
         project, options, config_home, key
     )
+    target_replay = backend_target_replay(backend)
     if options["host"] is not None and backend != "host-ssh":
         raise UsageError("--host is valid only with the ssh backend")
     if accelerator_set and not ACCELERATOR.fullmatch(accelerator or ""):
@@ -1096,10 +1124,10 @@ def run(arguments: list[str]) -> int:
         raise UsageError(
             f"backend {backend!r} does not classify retryable allocation capacity"
         )
-    if replay_seconds is not None:
+    if replay_seconds is not None and target_replay == "none":
         raise UsageError(
-            f"backend {backend!r} cannot prove fenced, non-overlapping target attempts; "
-            "bounded replay is unsupported"
+            f"backend {backend!r} declares target_replay=none and cannot prove "
+            "fenced, non-overlapping target attempts; bounded replay is unsupported"
         )
     if retry_seconds is not None and action is None and not positional:
         raise UsageError("--retry-for requires --start, a project target, or --collect")

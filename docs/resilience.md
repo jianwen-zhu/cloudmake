@@ -175,9 +175,11 @@ ceiling. It does not permit replay after a normal nonzero Make result. Before a
 second submission, a transport must fence or observe the earlier attempt and
 prove that it cannot still overlap. No current transport can establish that at
 every ambiguous boundary. All backends therefore reject the option before
-provider contact rather than weakening the guarantee. A returned local Make
-process does not fence background side effects, and remote connection or status
-evidence does not prove non-overlap.
+provider contact rather than weakening the guarantee. Each bundled descriptor
+states `BACKEND_TARGET_REPLAY := none`; the launcher consults that declaration,
+and an older API-1 descriptor that omits it conservatively defaults to `none`.
+A returned local Make process does not fence background side effects, and remote
+connection or status evidence does not prove non-overlap.
 
 The optional launcher form `cloudmake --retry-for=DURATION ...` is narrower than
 a general operation retry. A backend may use it only around a provider allocation

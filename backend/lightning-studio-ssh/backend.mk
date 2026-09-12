@@ -6,6 +6,7 @@ BACKEND_ACCESS_CLASS := quota-tier
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel persistent-storage
+BACKEND_TARGET_REPLAY := none
 
 LIGHTNING_STUDIO ?=
 LIGHTNING_TEAMSPACE ?=

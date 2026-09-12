@@ -107,6 +107,11 @@ current backends reject bounded replay before provider contact. In particular,
 a returned local Make process does not fence background side effects, and a
 remote status or connection result does not prove non-overlap.
 
+This rejection is transport-aware without enabling replay: every bundled
+backend declares `BACKEND_TARGET_REPLAY := none`, and the launcher consults the
+selected descriptor before provider contact. API-1 descriptors that omit the
+field default conservatively to `none`; API 1 accepts no enabling value.
+
 A normal nonzero Make result is a confirmed project result and is never
 replayed. `--retry-for` remains a separate allocation-capacity control and does
 not grant permission to replay a target. Trailing `NAME=value` arguments retain
