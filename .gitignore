@@ -1,5 +1,5 @@
 .cloud-state/
-artifacts/
+.cloudmake/artifacts/
 build/
 dist/
 *_output.ipynb

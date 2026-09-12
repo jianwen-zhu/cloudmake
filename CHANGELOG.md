@@ -12,6 +12,28 @@ once a version is published as a GitHub release.
 - Record that UofT course projects own environment dependencies and that the
   teaching release does not rely on Dev Container functionality.
 
+Candidate planning note: this work remains unversioned on top of immutable
+`v1.0.1`; `VERSION` stays `1.0.1` until maintainers coordinate a release name
+and tag.
+
+- Move Cloudmake-owned collection output to `.cloudmake/artifacts/`, reserve
+  root `.cloudmake/` from synchronization and fingerprinting, and return root
+  `artifacts/` and `.artifacts/` to ordinary project source without migrating or
+  dual-writing legacy output.
+- Add an artifact migration preflight, including the rollback privacy rule to
+  ignore `.cloudmake/artifacts/` in both `.gitignore` and `.cloudmakeignore`.
+  Positively identified v1 collection output blocks remote synchronization until
+  excluded, deliberately changed/removed, or explicitly accepted by exact
+  fingerprint as project source.
+- Add invocation-only `--idempotent` target semantics and
+  `--replay-for=DURATION` bounded delivery policy. No current backend can prove
+  fenced non-overlap at every ambiguous boundary, so all reject the replay
+  request before provider contact. Normal nonzero Make results remain final.
+- Normalize run provenance with the existing v1 lifecycle/submission fields and
+  additive replay safety, target semantics, delivery policy, and ordered attempt
+  evidence.
+- Add the Day 1 stateless remote Make tutorial and link it from the README.
+
 ## 1.0.1 - 2026-09-07
 
 - Accept the notebook kernel's injected `-f <connection-file>` argument when

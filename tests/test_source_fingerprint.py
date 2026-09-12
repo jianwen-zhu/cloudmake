@@ -51,11 +51,18 @@ def test_fingerprint_ignores_only_cloudmake_owned_root_paths(tmp_path: Path) -> 
     (tmp_path / "kept.txt").write_text("kept\n", encoding="utf-8")
     initial = fingerprint(tmp_path)
 
-    for name in (".git", ".cloud-state", "artifacts"):
+    for name in (".git", ".cloud-state", ".cloudmake"):
         directory = tmp_path / name
         directory.mkdir()
         (directory / "changing.txt").write_text(name, encoding="utf-8")
     assert fingerprint(tmp_path) == initial
+
+    for name in ("artifacts", ".artifacts"):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "project-source.txt").write_text(name, encoding="utf-8")
+
+    assert fingerprint(tmp_path) != initial
 
     for name in ("build", ".venv", "__pycache__", ".pytest_cache"):
         directory = tmp_path / "any-layout" / name

@@ -147,7 +147,7 @@ The detailed exclusions follow from those principles:
 | Decide which project output is an artifact | The project chooses and populates a directory; `--collect` only retrieves the explicitly selected directory. |
 | Erase differences between reusable sessions, batch jobs, and SSH VMs | Each backend retains its real lifecycle and exposes it consistently through Cloudmake operations. |
 | Guarantee free compute, a particular accelerator, runtime duration, persistence, capacity, or price | The cloud provider's current policy, quota, image, and availability. |
-| Automatically retry an ambiguously completed project target | The developer must first determine whether the original execution produced side effects. |
+| Automatically replay a target without an invocation assertion and transport fencing | Delivery is at-most-once by default; unsupported transports reject bounded replay before provider contact. |
 | Provide a full remote IDE, job scheduler, or deployment platform | Existing provider interfaces and purpose-built tools. Cloudmake supplies only the documented execution, shell, browser, and artifact surfaces. |
 
 These exclusions are design boundaries rather than missing implicit behavior.
@@ -251,13 +251,14 @@ the [project contract](docs/project-contract.md):
 | The target named in `cloudmake TARGET` | Must exist or be resolvable by that Makefile. |
 | The target named in `cloudmake --collect DIR TARGET` | Has ordinary Make semantics; after success cloudmake collects project-relative `DIR`. |
 | Local `src/`, `build/`, or `output/` directories | Not required. |
-| Root `.git/`, `.cloud-state/`, and `artifacts/` | Reserved from source synchronization as metadata, tool state, and downloaded output. |
+| Root `.git/`, `.cloud-state/`, and `.cloudmake/` | Reserved from source synchronization as metadata, legacy state, and Cloudmake-owned output. Root `artifacts/` and `.artifacts/` are ordinary source. |
 
 Cloudmake injects no Make variables. The remote invocation contains the exact
 target plus only user-supplied `NAME=value` assignments. For
 `--collect DIR TARGET`, the project chooses the project-relative directory and
 populates it through its normal rules. After success, cloudmake creates or
-transactionally replaces the local `artifacts/` directory with those contents.
+transactionally replaces the local `.cloudmake/artifacts/` directory with those
+contents.
 
 ### Launcher and engine boundary
 
@@ -280,7 +281,7 @@ backend-variable injection on that path. A remote backend must preserve the same
 target and user-supplied assignments while adding only the transfer and lifecycle
 machinery its provider requires. Cloudmake still records local provenance, and
 `--collect DIR TARGET` still materializes the selected directory safely into the
-Cloudmake-owned `artifacts/` destination.
+Cloudmake-owned `.cloudmake/artifacts/` destination.
 
 Every positional name is passed through to the project:
 
@@ -325,7 +326,7 @@ configuration, and downloaded provider output under the user's configuration,
 state, and cache directories. Project identity is derived from the absolute local
 path.
 
-Cloudmake owns the project's local `artifacts/` directory. A successful
+Cloudmake owns the project's local `.cloudmake/artifacts/` directory. A successful
 `--collect DIR TARGET` creates or transactionally replaces it with the selected
 remote directory; the project does not need to create the local destination.
 
@@ -537,6 +538,9 @@ Common options:
 | `--gpu`, `--gpu=TYPE` | Select the default or a named GPU where supported; save it for the selected project unless `-b` is an explicit one-off override. |
 | `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
 | `--retry-for DURATION` | Retry only positively classified temporary allocation capacity, for example `30s`, `15m`, or `2h`. |
+| `--idempotent` | Assert that this target invocation is idempotent; the assertion is not persisted and cannot come from project files. |
+| `--replay-for DURATION` | Request bounded target replay; requires `--idempotent`. No current backend proves fenced, non-overlapping attempts, so all currently reject this option before provider contact. |
+| `--accept-legacy-artifacts-as-source` | After review, persist acceptance of an exact prior Cloudmake `artifacts/` collection fingerprint as ordinary project source. |
 | `--verbose` | Show provider and transfer commands. |
 
 Cloud operation options:
@@ -598,8 +602,8 @@ It requires only a readable root `Makefile` and GNU Make or a compatible Make
 implementation. Project targets run directly in the selected project directory.
 `--start`, `--sync`, `--sync-dry-run`, `--status`, and `--stop` report their local
 no-op or readiness semantics; there is no provider interface, separate shell, or fetch operation.
-Use `--collect DIR TARGET` when a uniform `artifacts/` materialization is useful
-locally as well as remotely.
+Use `--collect DIR TARGET` when a uniform `.cloudmake/artifacts/`
+materialization is useful locally as well as remotely.
 
 ### Colab native notebook backend
 
@@ -1071,10 +1075,17 @@ datasets/
 local-secrets.json
 ```
 
-Only the root `.git/`, `.cloud-state/`, and `artifacts/` paths are excluded
-automatically. Cloudmake does not infer that names such as `build/`, `.venv/`,
-`src/`, or `*_output.ipynb` are disposable; exclude them explicitly when that is
-correct for the project.
+Only the root `.git/`, `.cloud-state/`, and `.cloudmake/` paths are excluded
+automatically. Root `artifacts/` and `.artifacts/` are ordinary project source.
+Cloudmake does not infer that names such as `build/`, `.venv/`, `src/`, or
+`*_output.ipynb` are disposable; exclude them explicitly when that is correct
+for the project.
+
+Before remote synchronization, Cloudmake compares root `artifacts/` with known
+prior collection receipts. An exact legacy match is blocked as potentially
+private downloaded output until the operator excludes it, changes or removes it
+after review, or explicitly accepts that fingerprint as source. Follow the
+[artifact collection migration preflight](docs/artifact-collection-migration.md).
 
 Before transfer, Cloudmake refuses unmistakable private-key blocks and GitHub
 access-token forms. Credential-like filenames produce a warning. Exclude such
@@ -1088,17 +1099,18 @@ adjusting source limits, or recovering an interrupted operation.
 
 The launcher keeps state and cache data in user directories outside both
 repositories. Downloaded project output is extracted under the actual project's
-`artifacts/` directory. Artifact archives are bounded by configurable
+`.cloudmake/artifacts/` directory. Artifact archives are bounded by configurable
 member-count, total-size, per-file-size, compressed-size, and expansion-ratio
 limits before extraction.
 
 Every project execution creates a private local provenance record containing the
 backend, remote resource, target, source fingerprint, result, and—when collected—
 an artifact fingerprint. Make-assignment names are recorded, but their values are
-stored only as hashes. Native Colab records additionally identify the lifecycle
-phase, normalized provider/runtime state, whether this invocation created the
-session, target-submission certainty, and retry safety. `cloudmake --history`
-shows the ten latest runs.
+stored only as hashes. Provenance retains normalized lifecycle and submission
+fields and additively records replay safety, invocation-scoped target semantics,
+delivery policy, and ordered attempt evidence. `target_submission` remains one
+of `not_submitted`, `submitted`, or `ambiguous`. `cloudmake --history` shows the
+ten latest runs.
 
 Cloudmake verifies workspace ownership before destructive synchronization,
 serializes concurrent mutations, reconciles saved sessions with live provider
@@ -1112,6 +1124,8 @@ notebook or ignored filename is not a secrets manager. Review these focused
 documents before using private source or diagnosing a failure:
 
 - [Resilience and recovery](docs/resilience.md)
+- [Day 1: Stateless remote Make](docs/stateless-remote-make.md)
+- [Artifact collection migration preflight](docs/artifact-collection-migration.md)
 - [Security model](docs/security.md)
 - [Project contract](docs/project-contract.md)
 - [Backend contract](docs/backend-contract.md)

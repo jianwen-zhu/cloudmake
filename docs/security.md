@@ -14,9 +14,10 @@ necessarily delete notebook history, VM storage, logs, output, or account
 metadata.
 
 Provider output is untrusted input when it returns to the host. Cloudmake
-validates artifact archive members and replaces the local artifact directory
-transactionally, but users must still treat produced executables and data as
-code and content generated in a remote environment.
+validates artifact archive members and replaces the local
+`.cloudmake/artifacts/` directory transactionally, but users must still treat
+produced executables and data as code and content generated in a remote
+environment.
 
 ## Credentials
 
@@ -116,6 +117,18 @@ Source symbolic links may not escape the local project. SSH synchronization
 checks remote ownership before allowing `rsync --delete`. These controls protect
 filesystem boundaries during normal operation; they do not sandbox arbitrary
 commands in a project's Makefile.
+
+The root `.cloudmake/` namespace is excluded from source selection. Projects
+that may roll back to v1.0.1 must nevertheless list `.cloudmake/artifacts/` in
+both `.gitignore` and `.cloudmakeignore`; otherwise an older release can select
+collected output for commit or upload. The complete preflight is in
+[Artifact collection migration](artifact-collection-migration.md).
+
+This candidate also blocks remote synchronization when root `artifacts/`
+exactly matches a prior Cloudmake collection receipt. Exclusion is the safe
+default. `--accept-legacy-artifacts-as-source` is an explicit statement that the
+exact matching contents have been reviewed and may be uploaded; its private
+local acceptance is fingerprint-bound.
 
 ## Execution and supply chain
 
