@@ -27,7 +27,7 @@ workspaces, managed restoration, or automatic student-state migration.
 
 Requested targets use at-most-once delivery by default. The invocation-only
 `--idempotent` declaration does not itself authorize another submission, and
-every backend in this release declares `target-replay=none`. UofT workflows do
+every backend in this release declares `target_replay=none`. UofT workflows do
 not use `--idempotent` or `--replay-for`. If submission is ambiguous, retain the
 provenance record, do not resubmit, and escalate to course staff.
 
@@ -53,6 +53,10 @@ repositories must explicitly ignore `.cloudmake/artifacts/` in `.gitignore` and
 `.cloudmakeignore`, while retaining their legacy `/artifacts/` exclusion during
 the rollback window. This is a privacy requirement because v1.0.1 does not
 automatically exclude `.cloudmake/`.
+
+Frozen course version, commit, and archive identities change only after the
+v1.1.0 release has been published immutably and its archive digest has been
+verified. Until then, both courses remain pinned to their existing release.
 
 Do not teach `--accept-legacy-artifacts-as-source` as a migration shortcut.
 Inspect old root `artifacts/` contents and then archive, remove, change, or
@@ -114,6 +118,84 @@ All evidence must be sanitized before retention.
       session remains active.
 - [ ] The exact candidate commit has its CI evidence, checksum, and rollback
       release recorded.
+
+### ECE326 live gate
+
+Before allocating compute, run both v1.0.1 and the candidate in dry-run mode and
+prove that private markers in `/artifacts/` and `.cloudmake/artifacts/` are not
+selected. Run the course release builders, `grading/build_leaderboard_entry.py`,
+`scripts/build_student_release.py`, and `scripts/validate_leaderboard.py`; the
+student archive must contain both ignore files and no `.cloudmake/` payload.
+
+Use one fresh course-owned Colab CPU session for the public Lab 1 flow:
+
+```sh
+cloudmake setup
+cloudmake test
+cloudmake --collect reports benchmark MODEL=stories260K
+```
+
+Require all 17 public tests, exact `MODEL` pass-through, valid report counts,
+one submitted attempt, and output only in `.cloudmake/artifacts/reports/`.
+
+Use a second fresh CPU session for exactly one private grading submission:
+
+```sh
+cloudmake --collect reports leaderboard-pair-ready \
+  CANDIDATE_LABEL=ece326-v110-gate
+```
+
+Require 36 reference plus 36 candidate tests, five reference plus five candidate
+repetitions, all expected reports and frozen digests, and one target attempt. If
+submission is ambiguous, fail the gate and do not submit it again.
+
+### ECE467 live gate
+
+Run the local release checks and privacy preflight first:
+
+```sh
+make host-check
+make static-check
+make validate-releases
+cloudmake --sync-dry-run
+cloudmake -b colab-notebook --idempotent --replay-for=30s verify
+```
+
+The last command must fail before provider contact with
+`target_replay=none`. The dry run must exclude `/artifacts/`,
+`.cloudmake/artifacts/`, `release-student/`, and `release-grader/`.
+
+Use one bounded T4 session:
+
+```sh
+export COLAB_SESSION=ece467-labs
+cloudmake --use colab-notebook --gpu=T4
+cloudmake --retry-for=10m --start
+cloudmake bootstrap
+cloudmake bootstrap
+cloudmake verify
+cloudmake --collect acceptance-output regression \
+  TTL_BACKEND=libtorch_cuda REGRESSION_REPORT_DIR=acceptance-output
+```
+
+Both explicit bootstrap requests must report one runtime identity (UUID A). The
+selected regression must report `status=passed`, 19 checks,
+`TTL_BACKEND=libtorch_cuda`, and UUID A. The old root artifact's hash must not
+change. Use `--retry-for` only with `--start`.
+
+Then prove reconstruction on a clean runtime:
+
+```sh
+cloudmake --stop
+cloudmake --retry-for=10m --start
+cloudmake bootstrap
+cloudmake verify
+cloudmake lab-axpy-03-tilelang
+cloudmake --stop
+```
+
+The replacement runtime must report UUID B, distinct from UUID A. Confirm that
+only the temporary course-owned sessions were stopped and are absent.
 
 Live tests must run locally with the maintainer's existing provider-owned
 authorization. Private course paths may be recorded by identifier and result;
