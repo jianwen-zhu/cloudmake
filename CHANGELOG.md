@@ -42,6 +42,14 @@ once a version is published as a GitHub release.
   running, without syncing or submitting the project target during retries.
 - Propagate host cancellation through the foreground Make process tree so
   remote locks are released and interrupted provenance remains accurate.
+- Harden the Dev Container boundary across every backend: validate descriptor
+  consistency, attribute each semantic requirement to its standard source
+  field, prove portable selection and rich-profile rejection across the backend
+  matrix, and record the selected engine plus capability ceilings in
+  provenance.
+- Keep resource recovery independent from workstation compatibility. A stale
+  or newly unsupported saved configuration still cannot start or run work, but
+  it can no longer block status, stop, sync, or fetch operations.
 
 ## 2.3.1 - 2026-09-10
 

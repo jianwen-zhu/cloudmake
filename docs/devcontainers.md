@@ -102,6 +102,11 @@ Dev Container process-control field from being accepted but ignored by an older
 Cloudmake release. Descriptive `$schema` and `name` fields and non-Cloudmake
 editor customizations do not affect execution and are ignored safely.
 
+Errors name both the semantic capability and the standard field that required
+it, for example `lifecycle-create (postCreateCommand)`. The complete
+configuration must fit one engine; the adapter and native capability sets are
+never combined to manufacture a pass.
+
 These are not claims that the Dev Container standard is unsafe. They are the
 parts for which the selected backends have materially different authority and
 lifecycle semantics. Rejecting them prevents a configuration that works on a
@@ -141,6 +146,27 @@ prints that status and reason.
 
 The deprecated Kaggle adapter predates this portable profile and remains
 outside release qualification.
+
+The exact static capability ceiling is deliberately visible rather than
+inferred from the provider brand:
+
+| Backend | Product status | Adapter semantics | Native semantics |
+| --- | --- | --- | --- |
+| `local` | supported | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | digest/tag image, image build, Features, create lifecycle, user selection, literal environment, host requirements, workspace layout, process control, restrictive security policy |
+| `colab-notebook` | supported | digest image, literal environment, host requirements, CDI, restrictive security policy | none |
+| `codespaces-ssh` | supported | digest image, literal environment, host requirements, loopback ports, restrictive security policy, realized by the provider-native Codespace | none |
+| `host-ssh` | supported | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
+| `gcp-compute-ssh` | unqualified | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
+| `lightning-studio-ssh` | unqualified | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
+| `colab-ssh` | deprecated | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
+| `kaggle-notebook` | deprecated | none | none |
+
+“Adapter semantics” describes Cloudmake's portable contract even when the
+provider, as in Codespaces, materializes the selected image natively. It does
+not mean that Cloudmake starts a nested container. Product status is an
+independent release-quality statement. Dynamic runtime, host, device, and
+network probes may narrow this static ceiling for a particular invocation; they
+never widen it.
 
 ## Ports and host requirements
 
@@ -184,6 +210,17 @@ This feature does not make checkpoints authoritative. Native provider storage,
 managed checkpoints, OCI caches, and materialized layers are disposable ways
 to reduce repeated work. Source plus the project Makefile must remain sufficient
 to reconstruct the result.
+
+Workstation validation applies only at a workload boundary: `--start`, target
+execution, collection, and the selected-workstation portion of `--doctor`.
+Resource recovery operations such as `--status` and `--stop`, and independent
+source/artifact operations such as `--sync` and `--fetch`, remain available if
+a saved Dev Container becomes invalid or unsupported after an upgrade. This
+prevents a compatibility failure from stranding a running or billable resource.
+
+Run provenance records the chosen engine (`adapter` or `native`), the complete
+required-capability-to-field mapping, and both backend capability ceilings.
+Environment values remain excluded; only their names are recorded.
 
 ## Public compatibility corpus
 

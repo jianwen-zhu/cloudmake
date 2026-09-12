@@ -1100,6 +1100,13 @@ def test_host_ssh_devcontainer_uses_least_privilege_runtime_continuum_and_tunnel
     assert "--env FLOW=smoke" in serialized
     assert ".cloudmake-devcontainer.py --check-host" in serialized
     assert "backend=host-ssh runner=oci" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    contract = provenance["runner"]["devcontainer"]
+    assert contract["engine"] == "adapter"
+    assert contract["requirement_sources"]["forward-ports"] == ["forwardPorts"]
+    assert contract["native_capabilities"] == []
+    assert "image-digest" in contract["adapter_capabilities"]
 
 
 @pytest.mark.integration
@@ -1418,6 +1425,20 @@ def test_colab_devcontainer_profile_reaches_preflight_and_target_control(
         "FLOW=smoke"
     ]
     assert "workstation=devcontainer" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    contract = provenance["runner"]["devcontainer"]
+    assert contract["engine"] == "adapter"
+    assert contract["requirement_sources"]["host-requirements"] == [
+        "hostRequirements"
+    ]
+    assert contract["adapter_capabilities"] == [
+        "cdi",
+        "environment",
+        "host-requirements",
+        "image-digest",
+        "security-policy",
+    ]
 
 
 @pytest.mark.integration
@@ -3291,6 +3312,16 @@ def test_engine_defines_no_project_target_shortcuts(
             "yes",
         ),
         (
+            "gcp-compute-ssh",
+            "yes",
+            "environment-profile",
+            "native-persistence",
+            "provider-managed",
+            "stop-persistent",
+            "conditional",
+            "conditional",
+        ),
+        (
             "colab-ssh",
             "yes",
             "gpu",
@@ -3339,7 +3370,7 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
         "deprecated"
         if backend in {"kaggle-notebook", "colab-ssh"}
         else "unqualified"
-        if backend == "lightning-studio-ssh"
+        if backend in {"lightning-studio-ssh", "gcp-compute-ssh"}
         else "supported"
     )
     assert f"product-status={expected_status}" in result.stdout
@@ -3349,6 +3380,8 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
         assert "product-status-reason=paid Colab SSH duplicates host SSH" in result.stdout
     elif backend == "lightning-studio-ssh":
         assert "product-status-reason=Lightning Studio has no retained" in result.stdout
+    elif backend == "gcp-compute-ssh":
+        assert "product-status-reason=GCP Compute Engine passed the live e2-micro" in result.stdout
     assert f"session-reuse={session_reuse}" in result.stdout
     assert f"lifecycle-control={lifecycle_control}" in result.stdout
     assert f"workspace-durability={workspace_durability}" in result.stdout
@@ -3460,6 +3493,93 @@ def test_backend_contract_rejects_unknown_devcontainer_capability(tmp_path: Path
 
     assert result.returncode != 0
     assert "invalid Dev Container adapter capabilities" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "adapter", "native", "message"),
+    [
+        (
+            "sync execute status artifacts devcontainer oci-runner",
+            "none",
+            "none",
+            "declares devcontainer but no qualified engine capabilities",
+        ),
+        (
+            "sync execute status artifacts oci-runner",
+            "image-digest",
+            "none",
+            "engine capabilities without the devcontainer capability",
+        ),
+        (
+            "sync execute status artifacts devcontainer",
+            "image-digest",
+            "none",
+            "without the oci-runner capability",
+        ),
+        (
+            "sync execute status artifacts devcontainer oci-runner",
+            "environment",
+            "none",
+            "must support image-digest",
+        ),
+        (
+            "sync execute status artifacts devcontainer oci-runner",
+            "image-digest forward-ports",
+            "none",
+            "without the port-forward capability",
+        ),
+    ],
+)
+def test_backend_contract_rejects_inconsistent_devcontainer_claims(
+    tmp_path: Path,
+    capabilities: str,
+    adapter: str,
+    native: str,
+    message: str,
+) -> None:
+    descriptor = tmp_path / "inconsistent-devcontainer.mk"
+    descriptor.write_text(
+        "BACKEND := inconsistent-devcontainer\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_SESSION_REUSE := no\n"
+        f"BACKEND_CAPABILITIES := {capabilities}\n"
+        "BACKEND_OCI_RUNTIMES := proot\n"
+        f"BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := {adapter}\n"
+        f"BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := {native}\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert message in result.stdout
+
+
+def test_legacy_api1_devcontainer_descriptor_without_semantic_sets_remains_valid(
+    tmp_path: Path,
+) -> None:
+    descriptor = tmp_path / "legacy-devcontainer.mk"
+    descriptor.write_text(
+        "BACKEND := legacy-devcontainer\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_SESSION_REUSE := yes\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts devcontainer oci-runner\n"
+        "BACKEND_OCI_RUNTIMES := docker\n"
+        "BACKEND_TRANSPORT := legacy\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path
+    )
+
+    assert "devcontainer-adapter-capabilities=none" in result.stdout
+    assert "devcontainer-native-capabilities=none" in result.stdout
 
 
 def test_backend_contract_rejects_nested_runtime_for_native_oci(

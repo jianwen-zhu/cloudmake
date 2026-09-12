@@ -68,6 +68,13 @@ def test_portable_profile_parses_jsonc_and_standard_fields(tmp_path: Path) -> No
         {"host": "127.0.0.1", "port": 5432},
     ]
     assert profile["devices"] == ["nvidia.com/gpu=all"]
+    assert profile["requirement_sources"] == {
+        "cdi": ["customizations.cloudmake.devices"],
+        "environment": ["containerEnv", "remoteEnv"],
+        "forward-ports": ["forwardPorts"],
+        "host-requirements": ["hostRequirements"],
+        "image-digest": ["image"],
+    }
 
 
 @pytest.mark.parametrize(
@@ -92,6 +99,50 @@ def test_standard_fields_become_explicit_backend_requirements(
     profile = module.normalize(project)
 
     assert capability in profile["required_capabilities"]
+    assert field in profile["requirement_sources"][capability]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "capability"),
+    [
+        ("dockerComposeFile", "compose.yml", "compose"),
+        ("service", "worker", "compose"),
+        ("runServices", ["database"], "compose"),
+        ("overrideFeatureInstallOrder", ["example/tool"], "features"),
+        ("secrets", {"TOKEN": {"description": "token"}}, "secrets"),
+        ("workspaceMount", "source=.,target=/workspace,type=bind", "mounts"),
+        ("runArgs", ["--read-only"], "runtime-arguments"),
+        ("init", False, "runtime-arguments"),
+        ("overrideCommand", False, "process-control"),
+        ("appPort", [8080], "published-ports"),
+        ("initializeCommand", "true", "host-lifecycle"),
+        ("onCreateCommand", "true", "lifecycle-create"),
+        ("updateContentCommand", "true", "lifecycle-create"),
+        ("postStartCommand", "true", "lifecycle-start"),
+        ("postAttachCommand", "true", "lifecycle-attach"),
+        ("containerUser", "vscode", "user-selection"),
+        ("remoteUser", "vscode", "user-selection"),
+        ("updateRemoteUserUID", False, "user-selection"),
+        ("userEnvProbe", "loginShell", "user-selection"),
+        ("shutdownAction", "stopContainer", "lifecycle-control"),
+        ("waitFor", "postCreateCommand", "lifecycle-control"),
+        ("portsAttributes", {"8080": {"label": "web"}}, "port-attributes"),
+        ("otherPortsAttributes", {"onAutoForward": "silent"}, "port-attributes"),
+        ("capDrop", ["ALL"], "security-policy"),
+        ("securityOpt", ["no-new-privileges"], "security-policy"),
+    ],
+)
+def test_every_recognized_behavior_has_a_field_attribution(
+    tmp_path: Path, field: str, value: object, capability: str
+) -> None:
+    module = load("devcontainer_config_source_" + field.lower())
+    project = tmp_path / field
+    project.mkdir()
+    write_config(project, json.dumps({"image": IMAGE, field: value}))
+
+    profile = module.normalize(project)
+
+    assert field in profile["requirement_sources"][capability]
 
 
 def test_build_only_configuration_is_deferred_to_backend_matching(
@@ -109,6 +160,7 @@ def test_build_only_configuration_is_deferred_to_backend_matching(
 
     assert profile["image"] is None
     assert profile["required_capabilities"] == ["image-build"]
+    assert profile["requirement_sources"] == {"image-build": ["build"]}
 
 
 def test_tagged_image_requires_a_resolving_native_engine(tmp_path: Path) -> None:

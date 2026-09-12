@@ -288,42 +288,54 @@ def normalize(project: Path, selected: str = "") -> dict[str, Any]:
         raise DevContainerError(
             "unsupported Dev Container field(s): " + ", ".join(sorted(unknown))
         )
-    required_capabilities = {
-        capability
-        for name, capability in capability_fields.items()
-        if payload.get(name) not in (None, [], {}, "")
-        or name in {"updateRemoteUserUID", "overrideCommand"} and name in payload
-    }
+    requirement_sources: dict[str, set[str]] = {}
+
+    def require(capability: str, field: str) -> None:
+        requirement_sources.setdefault(capability, set()).add(field)
+
+    for name, capability in capability_fields.items():
+        if (
+            payload.get(name) not in (None, [], {}, "")
+            or name in {"updateRemoteUserUID", "overrideCommand"} and name in payload
+        ):
+            require(capability, name)
     if payload.get("privileged") not in (None, False) or payload.get("capAdd") not in (None, []):
-        required_capabilities.add("privilege")
+        if payload.get("privileged") not in (None, False):
+            require("privilege", "privileged")
+        if payload.get("capAdd") not in (None, []):
+            require("privilege", "capAdd")
     security = payload.get("securityOpt")
     if security not in (None, [], ["no-new-privileges"], ["no-new-privileges=true"]):
-        required_capabilities.add("privilege")
+        require("privilege", "securityOpt")
+    elif security not in (None, []):
+        require("security-policy", "securityOpt")
     if payload.get("workspaceFolder") not in (None, "/workspace"):
-        required_capabilities.add("workspace-layout")
+        require("workspace-layout", "workspaceFolder")
 
     image = payload.get("image")
     if image is not None and not isinstance(image, str):
         raise DevContainerError("image must be a string")
     if isinstance(image, str) and IMAGE.fullmatch(image) is not None:
-        required_capabilities.add("image-digest")
+        require("image-digest", "image")
     elif isinstance(image, str) and TAG_IMAGE.fullmatch(image) is not None and "@" not in image:
-        required_capabilities.add("image-tag")
+        require("image-tag", "image")
     elif image is not None:
         raise DevContainerError(
             "image must be a valid OCI tag reference or REF@sha256:<64 lowercase hex digits>"
         )
-    if image is None and not required_capabilities.intersection({"image-build", "compose"}):
+    if image is None and not set(requirement_sources).intersection({"image-build", "compose"}):
         raise DevContainerError("Dev Container configuration requires image, build, or Compose")
 
     environment = literal_environment(payload.get("containerEnv"), "containerEnv")
     environment.update(literal_environment(payload.get("remoteEnv"), "remoteEnv"))
-    if environment:
-        required_capabilities.add("environment")
+    if payload.get("containerEnv") not in (None, {}):
+        require("environment", "containerEnv")
+    if payload.get("remoteEnv") not in (None, {}):
+        require("environment", "remoteEnv")
     if payload.get("hostRequirements") is not None:
-        required_capabilities.add("host-requirements")
+        require("host-requirements", "hostRequirements")
     if payload.get("forwardPorts") not in (None, []):
-        required_capabilities.add("forward-ports")
+        require("forward-ports", "forwardPorts")
     customizations = payload.get("customizations", {})
     if not isinstance(customizations, dict):
         raise DevContainerError("customizations must be an object")
@@ -345,7 +357,7 @@ def normalize(project: Path, selected: str = "") -> dict[str, Any]:
     if len(devices) != len(set(devices)):
         raise DevContainerError("customizations.cloudmake.devices contains duplicates")
     if devices:
-        required_capabilities.add("cdi")
+        require("cdi", "customizations.cloudmake.devices")
     requirements = host_requirements(payload.get("hostRequirements"))
     if requirements.get("gpu") is True and not devices:
         raise DevContainerError(
@@ -362,7 +374,11 @@ def normalize(project: Path, selected: str = "") -> dict[str, Any]:
         "host_requirements": requirements,
         "forward_ports": forward_ports(payload.get("forwardPorts")),
         "devices": devices,
-        "required_capabilities": sorted(required_capabilities),
+        "required_capabilities": sorted(requirement_sources),
+        "requirement_sources": {
+            capability: sorted(fields)
+            for capability, fields in sorted(requirement_sources.items())
+        },
     }
 
 

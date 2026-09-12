@@ -694,6 +694,36 @@ def backend_devcontainer_capabilities(backend: str, kind: str) -> set[str]:
     return set(values)
 
 
+def validate_backend_devcontainer_contract(backend: str) -> tuple[set[str], set[str]]:
+    """Reject internally inconsistent descriptor claims before provider contact."""
+    capabilities = set(backend_declaration(backend, "BACKEND_CAPABILITIES").split())
+    adapter = backend_devcontainer_capabilities(backend, "adapter")
+    native = backend_devcontainer_capabilities(backend, "native")
+    advertised = "devcontainer" in capabilities
+    if advertised != bool(adapter or native):
+        detail = (
+            "declares devcontainer but no qualified engine capabilities"
+            if advertised
+            else "declares engine capabilities without the devcontainer capability"
+        )
+        raise UsageError(f"backend {backend!r} {detail}")
+    if adapter and "oci-runner" not in capabilities:
+        raise UsageError(
+            f"backend {backend!r} declares Dev Container adapter capabilities "
+            "without the oci-runner capability"
+        )
+    if adapter and "image-digest" not in adapter:
+        raise UsageError(
+            f"backend {backend!r} Dev Container adapter must support image-digest"
+        )
+    if "forward-ports" in adapter and "port-forward" not in capabilities:
+        raise UsageError(
+            f"backend {backend!r} declares Dev Container forward-ports without "
+            "the port-forward capability"
+        )
+    return adapter, native
+
+
 def backend_status(backend: str) -> tuple[str, str]:
     status = backend_declaration(backend, "BACKEND_PRODUCT_STATUS")
     if status not in {"supported", "unqualified", "deprecated"}:
@@ -740,8 +770,7 @@ def show_backends() -> None:
             backend_declaration(name, "BACKEND_CAPABILITIES").split()
         )
         devcontainer = "yes" if "devcontainer" in capabilities else "no"
-        adapter_capabilities = backend_devcontainer_capabilities(name, "adapter")
-        native_capabilities = backend_devcontainer_capabilities(name, "native")
+        adapter_capabilities, native_capabilities = validate_backend_devcontainer_contract(name)
         devcontainer_engine = (
             "adapter+native"
             if adapter_capabilities and native_capabilities
@@ -1316,26 +1345,40 @@ def select_devcontainer_runner(backend: str, profile: dict[str, Any]) -> str:
             f"backend {backend!r} has not qualified the Dev Container contract"
         )
     required = set(profile.get("required_capabilities", []))
-    adapter = backend_devcontainer_capabilities(backend, "adapter")
-    native = backend_devcontainer_capabilities(backend, "native")
+    adapter, native = validate_backend_devcontainer_contract(backend)
     if required <= adapter:
+        profile["selected_engine"] = "adapter"
         return "oci"
     if required <= native:
+        profile["selected_engine"] = "native"
         return "devcontainer-native"
+    sources = profile.get("requirement_sources", {})
+
+    def format_requirements(values: set[str] | list[str]) -> str:
+        return ", ".join(
+            f"{capability} ({', '.join(sources.get(capability, []))})"
+            if sources.get(capability)
+            else capability
+            for capability in sorted(values)
+        )
+
     missing = sorted(required - (adapter | native))
     if "privilege" in missing:
         raise UsageError(
-            f"backend {backend!r} cannot honor privileged Dev Container semantics; "
+            f"backend {backend!r} cannot honor privileged Dev Container semantics "
+            f"required by {format_requirements({'privilege'})}; "
             "Cloudmake's least-privilege profile fails closed"
         )
     if not missing:
         raise UsageError(
             f"backend {backend!r} cannot honor the complete Dev Container requirement set "
-            "with one qualified engine; Cloudmake does not combine partial semantics"
+            "with one qualified engine; Cloudmake does not combine partial semantics; "
+            f"adapter missing: {format_requirements(required - adapter)}; "
+            f"native missing: {format_requirements(required - native)}"
         )
     raise UsageError(
         f"backend {backend!r} cannot honor Dev Container requirement(s): "
-        + ", ".join(missing)
+        + format_requirements(missing)
     )
 
 
@@ -2281,9 +2324,27 @@ def run(arguments: list[str]) -> int:
         checkpoint,
         workspace_id,
     ) = resolve_preferences(project, options, config_home, key)
-    runner, image, devices, devcontainer = resolve_runner_preferences(
-        options, project, config_home, key, backend
+    workstation_option = (
+        options["image"] is not None
+        or options["devcontainer"] is not None
+        or options["native_runner"]
+        or options["devices_set"]
     )
+    workstation_actions = {None, "collect", "start", "doctor"}
+    if workstation_option and action not in {None, "collect", "start"}:
+        raise UsageError(
+            "workstation runner selection is valid only with --use, --start, a project target, "
+            "or --collect"
+        )
+    if action in workstation_actions:
+        runner, image, devices, devcontainer = resolve_runner_preferences(
+            options, project, config_home, key, backend
+        )
+    else:
+        # Resource inspection, shutdown, source transfer, and artifact retrieval
+        # must remain available even if a saved workstation profile becomes
+        # invalid or unsupported after an upgrade. They do not prepare or run it.
+        runner, image, devices, devcontainer = "native", None, [], None
     codespace = resolve_codespace(config_home, key) if backend == "codespaces-ssh" else None
     gcp_resource = (
         resolve_gcp_resource(config_home, key)
@@ -2316,16 +2377,6 @@ def run(arguments: list[str]) -> int:
         raise UsageError(
             "--persist/--no-persist is valid only with --use, --start, "
             "a project target, or --collect"
-        )
-    if (
-        options["image"] is not None
-        or options["devcontainer"] is not None
-        or options["native_runner"]
-        or options["devices_set"]
-    ) and action not in {None, "collect", "start"}:
-        raise UsageError(
-            "workstation runner selection is valid only with --use, --start, a project target, "
-            "or --collect"
         )
     if retry_seconds is not None and backend not in CAPACITY_RETRY_BACKENDS:
         raise UsageError(
@@ -2569,7 +2620,15 @@ def run(arguments: list[str]) -> int:
                 {
                     "path": devcontainer["path"],
                     "fingerprint": devcontainer["fingerprint"],
+                    "engine": devcontainer.get("selected_engine"),
                     "required_capabilities": devcontainer["required_capabilities"],
+                    "requirement_sources": devcontainer.get("requirement_sources", {}),
+                    "adapter_capabilities": sorted(
+                        backend_devcontainer_capabilities(backend, "adapter")
+                    ),
+                    "native_capabilities": sorted(
+                        backend_devcontainer_capabilities(backend, "native")
+                    ),
                     "host_requirements": devcontainer["host_requirements"],
                     "forward_ports": devcontainer["forward_ports"],
                     "environment_names": [

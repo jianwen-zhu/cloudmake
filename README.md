@@ -863,6 +863,11 @@ Internet declarations for each backend.
 Host-oriented backends can declare several choices for dynamic
 probing; managed notebook backends can declare one constrained adapter or
 explicitly declare OCI unsupported.
+The exact per-backend semantic ceiling is documented in the
+[Dev Container capability matrix](docs/devcontainers.md#backend-realization).
+Cloudmake validates those descriptor claims for internal consistency and names
+the originating standard fields in compatibility failures. A rejected or stale
+workstation description never blocks `--status` or `--stop`.
 
 #### OCI/CDI execution
 

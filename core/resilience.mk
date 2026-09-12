@@ -62,6 +62,8 @@ BACKEND_OCI_NATIVE ?= no
 # Dev Container semantics are declared independently for Cloudmake's portable
 # adapter and for a provider/reference-native engine. Older API-1 descriptors
 # remain valid but advertise neither until explicitly qualified.
+CLOUDMAKE_DEVCONTAINER_ADAPTER_DECLARED := $(if $(filter undefined,$(origin BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),no,yes)
+CLOUDMAKE_DEVCONTAINER_NATIVE_DECLARED := $(if $(filter undefined,$(origin BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),no,yes)
 BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES ?= none
 BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES ?= none
 CLOUDMAKE_DEVCONTAINER_CAPABILITIES := cdi compose environment features forward-ports host-lifecycle host-requirements image-build image-digest image-tag lifecycle-attach lifecycle-control lifecycle-create lifecycle-start mounts port-attributes privilege process-control published-ports runtime-arguments secrets security-policy user-selection workspace-layout
@@ -158,6 +160,30 @@ $(error Backend "$(BACKEND)" has invalid Dev Container adapter capabilities "$(B
 endif
 ifneq ($(filter-out none $(CLOUDMAKE_DEVCONTAINER_CAPABILITIES),$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
 $(error Backend "$(BACKEND)" has invalid Dev Container native capabilities "$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)")
+endif
+ifneq ($(filter yes,$(CLOUDMAKE_DEVCONTAINER_ADAPTER_DECLARED) $(CLOUDMAKE_DEVCONTAINER_NATIVE_DECLARED)),)
+ifneq ($(filter devcontainer,$(BACKEND_CAPABILITIES)),)
+ifeq ($(filter-out none,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES) $(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
+$(error Backend "$(BACKEND)" declares devcontainer but no qualified engine capabilities)
+endif
+else
+ifneq ($(filter-out none,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES) $(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
+$(error Backend "$(BACKEND)" declares Dev Container engine capabilities without the devcontainer capability)
+endif
+endif
+endif
+ifneq ($(filter-out none,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),)
+ifeq ($(filter oci-runner,$(BACKEND_CAPABILITIES)),)
+$(error Backend "$(BACKEND)" declares Dev Container adapter capabilities without the oci-runner capability)
+endif
+ifeq ($(filter image-digest,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),)
+$(error Backend "$(BACKEND)" Dev Container adapter must support image-digest)
+endif
+ifneq ($(filter forward-ports,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),)
+ifeq ($(filter port-forward,$(BACKEND_CAPABILITIES)),)
+$(error Backend "$(BACKEND)" declares Dev Container forward-ports without the port-forward capability)
+endif
+endif
 endif
 ifneq ($(filter-out yes no conditional inherited unknown,$(BACKEND_INTERNET_INBOUND)),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_INTERNET_INBOUND "$(BACKEND_INTERNET_INBOUND)")

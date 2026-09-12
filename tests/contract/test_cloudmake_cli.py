@@ -268,8 +268,187 @@ def test_richer_devcontainer_rejects_restricted_backend_before_dispatch(
     assert result.returncode == 2
     assert "cannot honor Dev Container requirement(s)" in result.stdout
     assert "image-tag" in result.stdout
+    assert "image-tag (image)" in result.stdout
     assert "lifecycle-create" in result.stdout
+    assert "lifecycle-create (postCreateCommand)" in result.stdout
     assert engine_calls(log) == []
+
+
+DEVCONTAINER_BACKEND_SELECTIONS = [
+    ("local", ()),
+    ("colab", ()),
+    ("codespaces", ()),
+    ("gcp", ()),
+    ("colab-ssh", ()),
+    ("ssh", ("--host", "lab-gpu")),
+    ("lightning", ()),
+]
+
+
+def devcontainer_backend_environment(
+    environment: dict[str, str], backend: str
+) -> dict[str, str]:
+    result = dict(environment)
+    if backend == "gcp":
+        result.update(
+            GCP_PROJECT="sample-project",
+            GCP_ZONE="us-central1-a",
+            GCP_INSTANCE="workstation",
+        )
+    return result
+
+
+@pytest.mark.parametrize(("backend", "extra"), DEVCONTAINER_BACKEND_SELECTIONS)
+def test_portable_devcontainer_profile_is_selectable_on_every_qualified_backend(
+    tmp_path: Path,
+    fake_bin: Path,
+    backend: str,
+    extra: tuple[str, ...],
+) -> None:
+    project = make_project(tmp_path / f"portable-{backend}")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    environment = devcontainer_backend_environment(environment, backend)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps(
+            {
+                "image": "registry.example/workstation@sha256:" + "a" * 64,
+                "remoteEnv": {"MODE": "portable"},
+                "hostRequirements": {"cpus": 1},
+                "securityOpt": ["no-new-privileges"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = invoke(
+        project, environment, "--use", backend, *extra, "--devcontainer"
+    )
+
+    assert "runner=oci" in result.stdout
+    assert "devcontainer=.devcontainer/devcontainer.json" in result.stdout
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize(
+    ("backend", "extra"),
+    [*DEVCONTAINER_BACKEND_SELECTIONS[1:], ("kaggle", ())],
+)
+def test_rich_devcontainer_profile_fails_before_every_remote_provider_contact(
+    tmp_path: Path,
+    fake_bin: Path,
+    backend: str,
+    extra: tuple[str, ...],
+) -> None:
+    project = make_project(tmp_path / f"rich-{backend}")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    environment = devcontainer_backend_environment(environment, backend)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "ubuntu:24.04", "postCreateCommand": "true"}),
+        encoding="utf-8",
+    )
+
+    result = invoke(
+        project,
+        environment,
+        "-b",
+        backend,
+        *extra,
+        "--devcontainer",
+        "build",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "Dev Container" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_incompatible_backend_switch_does_not_mutate_saved_workstation_selection(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "switch-rich-profile")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "ubuntu:24.04", "postCreateCommand": "true"}),
+        encoding="utf-8",
+    )
+    invoke(project, environment, "--use", "local", "--devcontainer")
+    preference = next((tmp_path / "config" / "projects").glob("*.json"))
+    before = preference.read_text(encoding="utf-8")
+
+    result = invoke(project, environment, "--use", "colab", check=False)
+
+    assert result.returncode == 2
+    assert "lifecycle-create (postCreateCommand)" in result.stdout
+    assert preference.read_text(encoding="utf-8") == before
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--start",),
+        ("build",),
+        ("--collect", "out", "build"),
+    ],
+)
+def test_incompatible_saved_profile_blocks_every_workload_boundary_before_provider_contact(
+    tmp_path: Path,
+    fake_bin: Path,
+    arguments: tuple[str, ...],
+) -> None:
+    project = make_project(tmp_path / "saved-incompatible-workload")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "ubuntu:24.04", "postCreateCommand": "true"}),
+        encoding="utf-8",
+    )
+    invoke(project, environment, "--use", "local", "--devcontainer")
+    preference = next((tmp_path / "config" / "projects").glob("*.json"))
+    saved = json.loads(preference.read_text(encoding="utf-8"))
+    saved["backend"] = "colab-notebook"
+    preference.write_text(json.dumps(saved), encoding="utf-8")
+
+    result = invoke(project, environment, *arguments, check=False)
+
+    assert result.returncode == 2
+    assert "lifecycle-create (postCreateCommand)" in result.stdout
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize("operation", ["--status", "--stop", "--sync", "--fetch"])
+def test_resource_recovery_operations_ignore_an_incompatible_saved_workstation(
+    tmp_path: Path,
+    fake_bin: Path,
+    operation: str,
+) -> None:
+    project = make_project(tmp_path / f"recover-{operation[2:]}")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps({"image": "ubuntu:24.04", "postCreateCommand": "true"}),
+        encoding="utf-8",
+    )
+    invoke(project, environment, "--use", "local", "--devcontainer")
+    preference = next((tmp_path / "config" / "projects").glob("*.json"))
+    saved = json.loads(preference.read_text(encoding="utf-8"))
+    saved["backend"] = "colab-notebook"
+    preference.write_text(json.dumps(saved), encoding="utf-8")
+
+    result = invoke(project, environment, operation)
+
+    assert "cannot honor Dev Container" not in result.stdout
+    assert len(engine_calls(log)) == 1
+    assert operation[2:] in engine_calls(log)[0]
 
 
 def test_devcontainer_requirements_are_not_satisfied_by_mixing_engines(
@@ -290,6 +469,8 @@ def test_devcontainer_requirements_are_not_satisfied_by_mixing_engines(
 
     assert result.returncode == 2
     assert "cannot honor the complete Dev Container requirement set" in result.stdout
+    assert "adapter missing: image-tag (image)" in result.stdout
+    assert "native missing: forward-ports (forwardPorts)" in result.stdout
     assert engine_calls(log) == []
 
 
@@ -343,6 +524,13 @@ elif sys.argv[1:3] == ['image', 'inspect']:
     assert provenance["runner"]["devcontainer"]["required_capabilities"] == [
         "image-tag", "lifecycle-create"
     ]
+    assert provenance["runner"]["devcontainer"]["engine"] == "native"
+    assert provenance["runner"]["devcontainer"]["requirement_sources"] == {
+        "image-tag": ["image"],
+        "lifecycle-create": ["postCreateCommand"],
+    }
+    assert "image-build" in provenance["runner"]["devcontainer"]["native_capabilities"]
+    assert "image-digest" in provenance["runner"]["devcontainer"]["adapter_capabilities"]
     assert engine_calls(log) == []
 
     environment["FAKE_NATIVE_TARGET_EXIT"] = "7"

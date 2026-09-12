@@ -73,6 +73,17 @@ Inspect the resolved descriptor with:
 make BACKEND=colab-notebook backend-info
 ```
 
+Descriptor consistency is also part of the contract. A backend advertising
+`devcontainer` must declare at least one nonempty adapter or native semantic
+set, while a backend not advertising it must declare neither. A portable
+adapter requires `oci-runner` and `image-digest`; declaring adapter
+`forward-ports` additionally requires the backend `port-forward` capability.
+These invariants are checked both by the shared Make layer and by the launcher,
+so an inconsistent descriptor fails before provider contact.
+API-1 descriptors that predate both semantic-set declarations remain accepted
+with an unqualified empty ceiling; the stricter invariants apply once either
+new declaration is present.
+
 Dev Container declarations use
 `BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES` and
 `BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES`. Each is either `none` or a closed
@@ -83,6 +94,12 @@ behavior Cloudmake can preserve, while the latter identifies who constructs the
 OCI workstation. The launcher compares a configuration's complete requirement
 set with one engine; it never combines partial engines or silently removes a
 requirement.
+
+The normalized profile also attributes every semantic requirement to the
+standard field or extension path that produced it. Rejection diagnostics and
+provenance therefore distinguish, for example, `image-tag (image)` from
+`lifecycle-create (postCreateCommand)` instead of reporting an unexplained
+backend mismatch.
 
 `BACKEND_PRODUCT_STATUS=unqualified` identifies an implemented adapter that has
 not passed and retained its required live release gate. It is neither a release
@@ -218,6 +235,12 @@ new transport verbs: the launcher normalizes the selected standard
 configuration into the existing image, environment, host-requirement, CDI, and
 execution fields. A backend must reject any normalized field it cannot honor
 before provider contact or target submission.
+
+That fail-closed workload boundary must not disable resource recovery. A saved
+profile is validated for `--start`, target execution, collection, and relevant
+doctor checks. It is not prepared or validated for `--status`, `--stop`,
+`--sync`, or `--fetch`; those operations must remain usable when a newer
+Cloudmake version no longer accepts an old workstation description.
 
 Cloudmake 2.4 extends this boolean baseline with capability-qualified standard
 behavior. The configuration analyzer produces explicit semantic requirements;
