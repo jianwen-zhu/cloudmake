@@ -54,7 +54,13 @@ once a version is published as a GitHub release.
 - Add a Dev Container execution-landscape tutorial explaining how OCI makes
   application environments portable, how Dev Containers add workstation
   behavior, and how registries, images, engines, low-level runtimes, CDI, host
-  capability, lifecycle, and persistence divide responsibility.
+  capability, and lifecycle divide responsibility.
+- Separate persistence into its own tutorial covering session reuse, native
+  storage, managed checkpoints, incremental cost, safe publication,
+  rebuildability, security, and backend-specific realization.
+- Add a four-day remote-workstation learning path and a standalone stateless
+  remote-Make tutorial for the 1.x foundation. Keep OCI/CDI and Dev Containers
+  together as Day 3; reserve Day 4 for the separate 3.x security model.
 
 ## 2.3.1 - 2026-09-10
 

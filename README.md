@@ -1685,13 +1685,16 @@ Cloudmake keeps provider credentials in their official clients, but a private
 notebook or ignored filename is not a secrets manager. Review these focused
 documents before using private source or diagnosing a failure:
 
+- [Remote workstation tutorials](docs/tutorials.md)
+- [Day 1: Stateless remote Make](docs/stateless-remote-make.md)
+- [Workspace persistence and checkpointing landscape](docs/workspace-persistence-landscape.md)
+- [Dev Container execution landscape](docs/devcontainer-execution-landscape.md)
 - [Resilience and recovery](docs/resilience.md)
 - [Colab session resilience design](docs/colab-session-resilience.md)
 - [Security model](docs/security.md)
 - [Cloudmake 2.0 stateful-workspace design](docs/stateful-workspaces.md)
 - [Execution environments and OCI runner](docs/execution-environments.md)
 - [Portable Dev Container workstations](docs/devcontainers.md)
-- [Dev Container execution landscape](docs/devcontainer-execution-landscape.md)
 - [Cloudmake 2.4 Dev Container contract](docs/devcontainer-v2.4-contract.md)
 - [Project contract](docs/project-contract.md)
 - [Backend contract](docs/backend-contract.md)

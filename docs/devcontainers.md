@@ -211,10 +211,10 @@ the same as the portable adapter's sandbox. Provider-native Codespaces remains
 subject to metadata embedded in the selected image and is therefore a
 trusted-image boundary.
 
-This feature does not make checkpoints authoritative. Native provider storage,
-managed checkpoints, OCI caches, and materialized layers are disposable ways
-to reduce repeated work. Source plus the project Makefile must remain sufficient
-to reconstruct the result.
+Workspace persistence is independent of Dev Container execution. This contract
+does not define checkpointing. Source plus the project Makefile remain the
+rebuild authority; persistence behavior is documented separately in
+[Workspace persistence and checkpointing](workspace-persistence-landscape.md).
 
 Workstation validation applies only at a workload boundary: `--start`, target
 execution, collection, and the selected-workstation portion of `--doctor`.

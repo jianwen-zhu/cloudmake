@@ -1,9 +1,13 @@
 # Stateful workspaces (Cloudmake 2.0 design)
 
-This document defines Cloudmake 2.0 managed checkpoint persistence, implemented
-and validated on the `feature/stateful-workspaces` branch. The high-level
-`--persist` option also covers backends whose ordinary storage is already
-persistent; those native modes do not invoke this checkpoint lifecycle.
+For a conceptual introduction to session reuse, native persistence, managed
+checkpoints, incremental transfer, and safe publication, read
+[Workspace persistence and checkpointing](workspace-persistence-landscape.md).
+
+This document defines the managed checkpoint persistence introduced in
+Cloudmake 2.0 and retained by the 2.x line. The high-level `--persist` option
+also covers backends whose ordinary storage is already persistent; those native
+modes do not invoke this checkpoint lifecycle.
 
 The problem is broader than one application. Accelerator sessions are often
 ephemeral, while installing a toolchain and producing intermediate build or

@@ -1,5 +1,9 @@
 # Dev Container execution landscape
 
+Day 3 of the [Remote workstation tutorials](tutorials.md). OCI/CDI and Dev
+Containers share one tutorial because they form one application-execution
+stack. This tutorial can also be read independently.
+
 ## Why application bundles exist
 
 Moving an executable to another machine sounds simple until it actually has to
@@ -53,8 +57,9 @@ provider lifecycle rules.
 This document explains that landscape for a developer who knows Docker or
 Codespaces but does not want to become a container-runtime specialist. It is a
 tutorial and implementation survey, not the Cloudmake product contract. The
-normative behavior is in the [Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md)
-and the exact accepted fields are in [Portable Dev Container workstations](devcontainers.md).
+Cloudmake-specific references are the [OCI/CDI runner](oci-runner.md), the
+[Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md), and
+[Portable Dev Container workstations](devcontainers.md).
 
 ## The one-minute model
 
@@ -181,7 +186,7 @@ platforms.
 
 | Execution path | Who prepares the workstation | Strength | Typical limitation |
 | --- | --- | --- | --- |
-| Provider-native Dev Container | Cloud service, such as Codespaces | Deep provider integration, durable workstation identity, ports and lifecycle managed by the service | Provider-specific field behavior and policy; one cannot assume every standard field is identical elsewhere |
+| Provider-native Dev Container | Cloud service, such as Codespaces | Deep provider integration, provider-managed workstation identity, ports and lifecycle | Provider-specific field behavior and policy; one cannot assume every standard field is identical elsewhere |
 | Reference Dev Container CLI over Docker | Reference CLI plus Docker daemon | Broad standard coverage, including builds, Features, users, and lifecycle commands | Requires a working Docker service and enough host authority; Docker's boundary is not Cloudmake's restricted sandbox |
 | High-level OCI engine | Docker, Podman, or nerdctl/containerd | Mature pulling, unpacking, storage, namespaces, and process execution | A plain image launch does not implement rich Dev Container lifecycle semantics |
 | Low-level OCI runtime | Cloudmake's portable adapter prepares a bundle for `crun` | Useful on a managed VM where the qualified kernel operations work but no daemon is available | Backend owns image materialization and exact runtime-profile qualification |
@@ -201,7 +206,7 @@ portable adapter therefore consumes only selected OCI image/runtime behavior.
 It must never be presented as implementing the entire OCI Runtime
 Specification.
 
-## Configuration, image, instance, and workspace are different state
+## Why execution identities differ
 
 Four identities evolve on different schedules:
 
@@ -210,26 +215,18 @@ Four identities evolve on different schedules:
 | Configuration | Hash of `devcontainer.json` and relevant local build input | Configuration or build-input change |
 | Image | Registry digest or derived image ID | Explicit rebuild or a new tag resolution |
 | Workstation instance | Codespace, container ID, or backend preparation receipt | Resource replacement, failed ownership proof, or incompatible preparation identity |
-| Workspace | Project source fingerprint plus generated files | Source reconciliation, project build rules, or resource/checkpoint loss |
+| Workspace | Project source fingerprint plus generated files | Source reconciliation or project build rules |
 
 A tag such as `ubuntu:24.04` is a convenient source reference, not an immutable
 execution identity. A capable implementation resolves it and records the
 actual digest used by the workstation. A digest-pinned image avoids tag drift,
 but it still does not prove platform, driver, or host compatibility.
 
-Persistence is only an optimization:
-
-- a stopped Codespace or GCP disk can preserve the workstation and workspace;
-- a Colab replacement VM requires image/tool preparation again unless selected
-  state is restored from a checkpoint;
-- an OCI layer cache can avoid downloading unchanged blobs without preserving
-  project output; and
-- a workspace checkpoint can preserve output without making the old kernel,
-  driver, or container process reusable.
-
-Source, the Dev Container configuration, and project Make targets remain the
-rebuild authority. A cache, stopped VM, image materialization, or checkpoint
-may disappear.
+These identities determine whether lifecycle work and image preparation can be
+reused. They do not define storage durability. Preserving a workspace across
+replacement VMs is a separate persistence concern, documented in
+[Workspace persistence and checkpointing](workspace-persistence-landscape.md);
+it is not part of the Dev Container execution contract.
 
 ## Lifecycle is observable behavior
 
@@ -244,8 +241,8 @@ resolve/build image
 ```
 
 If an adapter creates a fresh read-only image process for every Make target, it
-cannot honestly claim persistent `postCreateCommand` semantics merely because
-the project directory survives. Similarly, ignoring `remoteUser`, a mount, or
+cannot honestly claim reused-workstation `postCreateCommand` behavior merely
+because the project directory survives. Similarly, ignoring `remoteUser`, a mount, or
 `overrideCommand` may change permissions or the process being tested.
 
 Cloudmake consequently turns meaningful fields into required behavior. One
@@ -354,7 +351,7 @@ Least-privilege validation does not make an untrusted image safe to execute.
 | Codespaces | The provider itself owns the Dev Container workstation. Reusing that one active environment is preferable to nesting another container. |
 | Host SSH | Runtime choice must be probed dynamically: Docker, Podman, nerdctl, or PRoot may be the first usable option for the portable adapter. |
 | Colab notebook | A managed ephemeral VM can support a narrow `crun` adapter after bundle preparation, but not an assumed Docker daemon or the full Dev Container lifecycle. |
-| GCP Compute SSH | A conventional persistent VM resembles the host-SSH model, but billing, lifecycle, network policy, accelerator attachment, and disk type belong to the provider backend. |
+| GCP Compute SSH | A conventional Linux VM can use the Host SSH runtime continuum; actual GPU, driver, and device support must still be probed. |
 | Lightning Studio SSH | The common SSH adapter can be implemented, but product support still requires retained live qualification. |
 | Kaggle notebook | A fresh job per target and expensive materialization make it a poor remote workstation even when the portable adapter can technically run. Execution possibility is not usability. |
 
@@ -432,7 +429,7 @@ cloudmake --use BACKEND --devcontainer
 cloudmake TARGET [NAME=value ...]
 ```
 
-Backend allocation, image materialization, lifecycle receipts, and persistence
+Backend allocation, image materialization, workstation creation, and reuse
 remain hidden unless they fail or the user asks for status. `--status` and
 `--stop` remain available even if a saved Dev Container later becomes
 incompatible, so a validation change cannot strand a billable resource.
@@ -447,11 +444,12 @@ incompatible, so a validation change cannot strand a billable resource.
   identical.
 - It does not combine partial execution paths into a synthetic workstation.
 - It does not take custody of registry or provider credentials.
-- It does not make checkpoints authoritative or replay an ambiguous target.
+- It does not replay a target after an ambiguous transport failure.
 - It does not treat editor interaction as the primary workflow; the project
   Make target remains the automation boundary.
 
 The intended outcome is narrower and more useful: the same declared
 development workstation and automated Make targets can run across the widest
 set of qualified single-node resources without silently changing their
-meaning.
+meaning. Day 4 adds the security model on the separate Cloudmake 3.x
+development line.
