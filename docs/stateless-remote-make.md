@@ -228,7 +228,7 @@ After successful target execution, Cloudmake retrieves `dist` into
 `.cloudmake/artifacts/` through bounded, validated, transactional extraction.
 It never moves, deletes, overwrites, symlinks, or dual-writes root `artifacts/`.
 
-Before adopting this candidate, follow the
+Before upgrading from v1.0.1 to v1.1.0, follow the
 [artifact collection migration preflight](artifact-collection-migration.md).
 Projects that might roll back to v1.0.1 must explicitly ignore
 `.cloudmake/artifacts/` in both `.gitignore` and `.cloudmakeignore` to prevent an

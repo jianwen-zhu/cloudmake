@@ -124,7 +124,7 @@ both `.gitignore` and `.cloudmakeignore`; otherwise an older release can select
 collected output for commit or upload. The complete preflight is in
 [Artifact collection migration](artifact-collection-migration.md).
 
-This candidate also blocks remote synchronization when root `artifacts/`
+Cloudmake v1.1.0 also blocks remote synchronization when root `artifacts/`
 exactly matches a prior Cloudmake collection receipt. Exclusion is the safe
 default. `--accept-legacy-artifacts-as-source` is an explicit statement that the
 exact matching contents have been reviewed and may be uploaded; its private

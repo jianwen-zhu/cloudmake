@@ -370,6 +370,22 @@ Short names are for people; canonical names describe the transport unambiguously
 
 ## Onboarding
 
+### v1.1.0 compatibility and migration notice
+
+Cloudmake v1.1.0 intentionally changes the collection contract from root
+`artifacts/` to `.cloudmake/artifacts/` and reserves the entire root
+`.cloudmake/` namespace from source synchronization and fingerprinting. Root
+`artifacts/` and `.artifacts/` become ordinary project source. This is not a
+transparent compatibility change: complete the
+[artifact collection migration preflight](docs/artifact-collection-migration.md)
+before upgrading any v1.0.1 project.
+
+UofT course repositories and other integrations pinned immutably to v1.0.1
+must remain on that pin until their maintainers explicitly review the new
+namespace, add the required ignores, complete the preflight, and choose to
+advance the repository's pin. Preparing or publishing v1.1.0 does not update
+those repositories.
+
 ### 1. Install common host tools
 
 Cloudmake targets macOS and Linux. The common host needs:
@@ -386,19 +402,19 @@ drivers the project itself requires.
 
 ### 2. Install cloudmake
 
-The stable stateless base release is Cloudmake 1.0.1. Durable workspaces,
+The current stateless release is Cloudmake 1.1.0. Durable workspaces,
 checkpoints, and cross-VM restoration are reserved for the stateful 2.0 series.
 Install the stateless release's launcher from the versioned tool checkout:
 
 ```sh
-git clone --branch v1.0.1 --depth 1 https://github.com/jianwen-zhu/cloudmake.git
+git clone --branch v1.1.0 --depth 1 https://github.com/jianwen-zhu/cloudmake.git
 cd cloudmake
 make install
 ~/.local/bin/cloudmake --version
 ```
 
-The final command must print `cloudmake 1.0.1`. For an immutable deployment,
-also verify that the checkout's `HEAD` is the published 1.0.1 release commit
+The final command must print `cloudmake 1.1.0`. For an immutable deployment,
+also verify that the checkout's `HEAD` is the published 1.1.0 release commit
 listed with the release artifact and tag.
 
 Installation creates an unprivileged launcher under `~/.local/bin/cloudmake`
