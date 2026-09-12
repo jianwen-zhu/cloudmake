@@ -29,6 +29,9 @@ and tag.
   `--replay-for=DURATION` bounded delivery policy. No current backend can prove
   fenced non-overlap at every ambiguous boundary, so all reject the replay
   request before provider contact. Normal nonzero Make results remain final.
+- Make that rejection descriptor-driven: bundled API-1 backends explicitly
+  declare `BACKEND_TARGET_REPLAY := none`, older API-1 descriptors default to
+  `none`, and the shared contract rejects unknown values.
 - Normalize run provenance with the existing v1 lifecycle/submission fields and
   additive replay safety, target semantics, delivery policy, and ordered attempt
   evidence.

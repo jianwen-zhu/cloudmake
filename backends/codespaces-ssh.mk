@@ -4,6 +4,7 @@ BACKEND_ACCESS_CLASS := quota-tier
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts cancel
+BACKEND_TARGET_REPLAY := none
 
 # Required: the permanent Codespaces name shown by `gh codespace list`.
 CODESPACE ?=

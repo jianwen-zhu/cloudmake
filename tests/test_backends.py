@@ -1885,6 +1885,46 @@ def test_backend_contract_declares_lifecycle_and_capabilities(
     assert "api=1" in result.stdout
     assert f"lifecycle={lifecycle}" in result.stdout
     assert capability in result.stdout
+    assert "target_replay=none" in result.stdout
+
+
+def test_api_1_backend_without_replay_declaration_defaults_to_none(
+    prototype: Path,
+) -> None:
+    (prototype / "backends" / "legacy-api1.mk").write_text(
+        "BACKEND_TRANSPORT := local\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_LIFECYCLE := local\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "BACKEND=legacy-api1", "backend-info"], cwd=prototype
+    )
+
+    assert "api=1" in result.stdout
+    assert "target_replay=none" in result.stdout
+
+
+def test_api_1_backend_rejects_unknown_replay_declaration(prototype: Path) -> None:
+    (prototype / "backends" / "unsafe-api1.mk").write_text(
+        "BACKEND_TRANSPORT := local\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_LIFECYCLE := local\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_TARGET_REPLAY := overlapping\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "BACKEND=unsafe-api1", "backend-info"],
+        cwd=prototype,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert 'invalid BACKEND_TARGET_REPLAY "overlapping"' in result.stdout
 
 
 @pytest.mark.integration

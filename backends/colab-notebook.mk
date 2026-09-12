@@ -5,6 +5,7 @@ BACKEND_ACCESS_CLASS := notebook
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
 BACKEND_CAPABILITIES := sync execute status incremental-sync open artifacts gpu cancel capacity-retry
+BACKEND_TARGET_REPLAY := none
 
 COLAB_SESSION ?= $(PROJECT_SLUG)
 COLAB_GPU ?=

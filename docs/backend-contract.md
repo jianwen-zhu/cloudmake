@@ -59,7 +59,8 @@ Each backend declares:
 - the supported backend API version;
 - a canonical backend name;
 - a lifecycle: `local`, `session`, or `batch`;
-- an ordered set of capabilities; and
+- an ordered set of capabilities;
+- a static `BACKEND_TARGET_REPLAY` delivery declaration; and
 - a resource identifier suitable for local serialization.
 
 The shared core validates the descriptor before running an operational target.
@@ -73,6 +74,14 @@ Capabilities describe real behavior rather than provider branding. Examples
 include synchronization, execution, artifact retrieval, status, opening a web
 interface, stopping reusable compute, and an interactive shell. A backend must
 not advertise a shell merely because its provider has a browser terminal.
+
+Backend API 1 defines `BACKEND_TARGET_REPLAY := none` as its only accepted
+target-replay value. Every bundled backend declares it explicitly. An older
+API-1 descriptor that omits the field remains compatible and defaults to
+`none`; any other value is rejected by the shared contract. The declaration
+must be a single static literal so the launcher can inspect it without running
+Make or contacting a provider. `backend-info` reports the resolved value as
+`target_replay=none`.
 
 ## Lifecycle semantics
 
@@ -112,8 +121,11 @@ invocation, and `--replay-for` requires it. A replay-capable transport must use
 both a deadline and the fixed attempt ceiling, fence or observe each attempt,
 and prove that an earlier attempt cannot still overlap before another is
 submitted. A normal nonzero Make result is never replayable. Unsupported
-backends must reject the request before provider contact; an SSH connection,
-batch status poll, or provider timeout alone is not fencing evidence.
+backends declare `BACKEND_TARGET_REPLAY := none`, and the launcher consults that
+declaration to reject the request before provider contact. An SSH connection,
+batch status poll, or provider timeout alone is not fencing evidence. A future
+replay mode requires a coordinated backend API and launcher implementation; a
+descriptor edit alone cannot enable it.
 
 The engine's common lifecycle operations are `start`, `sync`, `status`, `fetch`,
 `open`, `shell`, and `stop`; the launcher exposes them as long options. A

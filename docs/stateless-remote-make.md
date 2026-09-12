@@ -187,8 +187,10 @@ by a later command. A normal nonzero Make result is never replayed.
 Replay also requires transport proof: Cloudmake must fence or observe attempts
 and establish that an earlier attempt cannot still overlap. No current backend
 has enough evidence at every ambiguous boundary, so all reject `--replay-for`
-before provider contact. A returned local Make process does not fence background
-side effects, and remote status or connection surfaces do not prove
+before provider contact. That decision comes from the selected backend's static
+`BACKEND_TARGET_REPLAY := none` declaration; an API-1 descriptor without the
+field also defaults to `none`. A returned local Make process does not fence
+background side effects, and remote status or connection surfaces do not prove
 non-overlap.
 
 If provenance says `target_submission=ambiguous`, inspect provider output, the

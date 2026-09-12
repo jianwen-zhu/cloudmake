@@ -539,7 +539,7 @@ Common options:
 | `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
 | `--retry-for DURATION` | Retry only positively classified temporary allocation capacity, for example `30s`, `15m`, or `2h`. |
 | `--idempotent` | Assert that this target invocation is idempotent; the assertion is not persisted and cannot come from project files. |
-| `--replay-for DURATION` | Request bounded target replay; requires `--idempotent`. No current backend proves fenced, non-overlapping attempts, so all currently reject this option before provider contact. |
+| `--replay-for DURATION` | Request bounded target replay; requires `--idempotent`. The launcher consults the selected backend's replay declaration; every current backend declares `none` and rejects this option before provider contact. |
 | `--accept-legacy-artifacts-as-source` | After review, persist acceptance of an exact prior Cloudmake `artifacts/` collection fingerprint as ordinary project source. |
 | `--verbose` | Show provider and transfer commands. |
 

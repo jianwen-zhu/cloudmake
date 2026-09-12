@@ -34,6 +34,9 @@ CLOUDMAKE_RECORD_STATE = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/run_state.p
 BACKEND_API_VERSION ?=
 BACKEND_LIFECYCLE ?=
 BACKEND_CAPABILITIES ?=
+# API 1 descriptors written before target replay was defined remain valid and
+# conservatively advertise no replay support.
+BACKEND_TARGET_REPLAY ?= none
 BACKEND_RESOURCE_ID ?= default
 BACKEND_CONTEXT_RESOURCE_LABEL ?= resource
 BACKEND_CONTEXT_RESOURCE ?= $(BACKEND_RESOURCE_ID)
@@ -64,6 +67,9 @@ endif
 ifeq ($(filter $(BACKEND_LIFECYCLE),local session batch),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_LIFECYCLE "$(BACKEND_LIFECYCLE)")
 endif
+ifneq ($(strip $(BACKEND_TARGET_REPLAY)),none)
+$(error Backend "$(BACKEND)" has invalid BACKEND_TARGET_REPLAY "$(BACKEND_TARGET_REPLAY)"; API 1 supports "none")
+endif
 
 CLOUDMAKE_LOCK_FILE := $(CLOUDMAKE_STATE_ROOT)/locks/$(BACKEND)/$(BACKEND_RESOURCE_ID).lock
 CLOUDMAKE_MANIFEST_DIR := $(CLOUDMAKE_STATE_ROOT)/manifests/$(BACKEND)
@@ -91,6 +97,7 @@ backend-info: backend-contract
 	@echo 'lifecycle=$(BACKEND_LIFECYCLE)'
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'
+	@echo 'target_replay=$(BACKEND_TARGET_REPLAY)'
 
 ifeq ($(BACKEND_TRANSPORT),local)
 sync-dry-run: backend-contract

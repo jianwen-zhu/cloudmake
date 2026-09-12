@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -169,6 +170,7 @@ def test_help_documents_bounded_capacity_retry(
     assert "--replay-for=DURATION" in result.stdout
     assert "--accept-legacy-artifacts-as-source" in result.stdout
     assert "at-most-once by default" in result.stdout
+    assert "Current backends declare target_replay=none" in result.stdout
     assert engine_calls(log) == []
 
 
@@ -231,7 +233,70 @@ def test_backends_without_fencing_reject_replay_before_provider_contact(
     )
 
     assert result.returncode == 2
+    assert "declares target_replay=none" in result.stdout
     assert "cannot prove fenced, non-overlapping target attempts" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_launcher_defaults_legacy_api_1_replay_declaration_to_none(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    runtime = tmp_path / "legacy-runtime"
+    shutil.copytree(PROJECT_ROOT, runtime)
+    descriptor = runtime / "backends" / "local.mk"
+    descriptor.write_text(
+        descriptor.read_text(encoding="utf-8").replace(
+            "BACKEND_TARGET_REPLAY := none\n", ""
+        ),
+        encoding="utf-8",
+    )
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = run_command(
+        [
+            runtime / "bin" / "cloudmake",
+            "-b",
+            "local",
+            "--idempotent",
+            "--replay-for=30s",
+            "build",
+        ],
+        cwd=project,
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "declares target_replay=none" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_launcher_rejects_unknown_api_1_replay_declaration_before_engine_use(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    runtime = tmp_path / "invalid-runtime"
+    shutil.copytree(PROJECT_ROOT, runtime)
+    descriptor = runtime / "backends" / "local.mk"
+    descriptor.write_text(
+        descriptor.read_text(encoding="utf-8").replace(
+            "BACKEND_TARGET_REPLAY := none",
+            "BACKEND_TARGET_REPLAY := overlapping",
+        ),
+        encoding="utf-8",
+    )
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = run_command(
+        [runtime / "bin" / "cloudmake", "-b", "local", "build"],
+        cwd=project,
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "invalid target replay declaration 'overlapping'" in result.stdout
     assert engine_calls(log) == []
 
 

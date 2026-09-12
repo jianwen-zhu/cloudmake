@@ -6,6 +6,7 @@ BACKEND_ACCESS_CLASS := local
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := local
 BACKEND_CAPABILITIES := sync execute status artifacts
+BACKEND_TARGET_REPLAY := none
 
 MAKE_BIN ?= make
 

@@ -6,6 +6,7 @@ BACKEND_ACCESS_CLASS := user-managed
 BACKEND_API_VERSION := 1
 BACKEND_LIFECYCLE := session
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts
+BACKEND_TARGET_REPLAY := none
 
 SSH_HOST ?=
 export SSH_HOST
