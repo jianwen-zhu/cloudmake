@@ -31,3 +31,8 @@ or SSH keys in GitHub Actions secrets or hosted runners.
 Hosted CI remains credential-free and uses provider doubles or public,
 non-allocating compatibility checks. A live gate is therefore a documented local
 release step, not a GitHub Actions job.
+
+The maintained UofT 1.x teaching line has an additional course support boundary,
+active-semester change policy, and private-material handling gate. Follow
+[`uoft-teaching-release.md`](uoft-teaching-release.md) before qualifying or
+tagging a teaching release.

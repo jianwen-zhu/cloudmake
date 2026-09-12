@@ -5,6 +5,13 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+- Make Colab doctor reject the reproduced local `google-colab-cli` kernel-client
+  API mismatch before probing account access or allocating compute.
+- Clarify that Colab reuse is limited to the current live runtime and document
+  the provider CLI's independent Python requirement for clean installations.
+- Record that UofT course projects own environment dependencies and that the
+  teaching release does not rely on Dev Container functionality.
+
 ## 1.0.1 - 2026-09-07
 
 - Accept the notebook kernel's injected `-f <connection-file>` argument when

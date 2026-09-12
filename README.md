@@ -376,7 +376,7 @@ Cloudmake targets macOS and Linux. The common host needs:
 - POSIX-compatible shell
 - GNU Make or a compatible Make implementation
 - `tar`
-- Python 3 for the current notebook helpers
+- Python 3.9 or newer for Cloudmake's current notebook helpers
 - One provider CLI where the selected backend requires one
 - OpenSSH and `rsync` only for SSH backends
 
@@ -610,7 +610,9 @@ Prerequisites:
 
 1. A Google account with access to Colab.
 2. macOS or Linux. The official CLI currently does not support Windows.
-3. The official [`google-colab-cli`](https://github.com/googlecolab/google-colab-cli):
+3. Python 3.12 or newer for the official Colab CLI. This may be an isolated
+   interpreter managed by `uv`; it does not change the project's toolchain.
+4. The official [`google-colab-cli`](https://github.com/googlecolab/google-colab-cli):
 
    ```sh
    uv tool install google-colab-cli
@@ -618,16 +620,22 @@ Prerequisites:
    python3 -m pip install google-colab-cli
    ```
 
-4. Complete the CLI's Google authorization flow on first use, then verify it:
+5. Complete the CLI's Google authorization flow on first use, then verify it:
 
    ```sh
    colab version
    colab sessions
    ```
 
+`cloudmake --doctor` also checks that the installed CLI can construct its local
+kernel client. This read-only compatibility check catches dependency API
+mismatches that `colab version` and `colab sessions` do not expose. If it fails,
+do not allocate compute or copy Google credentials into Cloudmake; reinstall the
+exact Colab CLI dependency set qualified by the Cloudmake release.
+
 Cloudmake uses `colab new`, `sessions`, `upload`, `download`, `exec`, `url`, and
 `stop`. The source is fingerprinted before upload. An unchanged tree reuses the
-remote source and persistent build directory in the named session.
+remote source and session-local build directory in the named live runtime.
 
 Unless `COLAB_SESSION` is set explicitly, the launcher derives a readable,
 collision-resistant session name from the local project identity. Projects
@@ -1110,6 +1118,7 @@ documents before using private source or diagnosing a failure:
 - [Security reporting](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Release process](docs/releasing.md)
+- [UofT teaching release qualification](docs/uoft-teaching-release.md)
 
 ## Testing
 

@@ -21,6 +21,7 @@ BACKEND_REQUIRED_COMMANDS := $(COLAB_BIN) $(PYTHON_BIN) tar
 BACKEND_REQUIRES_PYTHON := yes
 BACKEND_INSTALL_HINT := Install the official CLI with: uv tool install google-colab-cli
 BACKEND_VALIDATE := case '$(COLAB_SESSION)' in ''|*[!A-Za-z0-9._-]*) echo 'COLAB_SESSION contains unsupported characters' >&2; exit 2;; esac; case '$(COLAB_GPU)' in *[!A-Za-z0-9._-]*) echo 'COLAB_GPU contains unsupported characters' >&2; exit 2;; esac; case '$(COLAB_TIMEOUT)' in ''|*[!0-9]*) echo 'COLAB_TIMEOUT must be a positive integer' >&2; exit 2;; 0) echo 'COLAB_TIMEOUT must be a positive integer' >&2; exit 2;; esac; case '$(COLAB_READY_TIMEOUT)' in ''|*[!0-9.]*) echo 'COLAB_READY_TIMEOUT must be a positive number' >&2; exit 2;; esac; case '$(COLAB_READY_PROBE_TIMEOUT)' in ''|*[!0-9.]*) echo 'COLAB_READY_PROBE_TIMEOUT must be a positive number' >&2; exit 2;; esac; case '$(COLAB_READY_POLL_SECONDS)' in ''|*[!0-9.]*) echo 'COLAB_READY_POLL_SECONDS must be a non-negative number' >&2; exit 2;; esac; case '$(COLAB_SESSION_PREPARE_TARGET)' in *[!A-Za-z0-9._/-]*) echo 'COLAB_SESSION_PREPARE_TARGET must be a simple Make target name' >&2; exit 2;; esac
+BACKEND_DOCTOR_COMPATIBILITY := '$(PYTHON_BIN)' '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_cli_compatibility.py' --colab-bin '$(COLAB_BIN)'
 BACKEND_DOCTOR_PROBE := $(COLAB_BIN) version >/dev/null && $(COLAB_BIN) sessions >/dev/null
 BACKEND_VERSION_COMMAND := $(COLAB_BIN) version
 BACKEND_TESTED_CLIENT := google-colab-cli 0.6.x

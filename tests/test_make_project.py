@@ -79,6 +79,7 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
         "host-templates/gcp-e2-micro.conf",
         "notebooks/colab.ipynb",
         "tools/colab_allocate.py",
+        "tools/colab_cli_compatibility.py",
         "tools/colab_control_state.py",
         "tools/colab_lifecycle.py",
         "tools/colab_prepare.py",

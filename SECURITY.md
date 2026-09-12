@@ -2,8 +2,10 @@
 
 ## Supported versions
 
-Security fixes are made on the latest released minor version. Older development
-snapshots are not maintained as separate security branches.
+Security fixes are made on the latest released minor version. The UofT 1.x
+teaching line is additionally maintained under its documented semester policy
+while it remains in course use. Older development snapshots are not maintained
+as separate security branches.
 
 ## Reporting a vulnerability
 
