@@ -4,16 +4,18 @@ For a conceptual introduction to application bundles, OCI image/runtime
 layers, CDI devices, Dev Container implementations, and the portable adapter,
 read the [Dev Container execution landscape](devcontainer-execution-landscape.md).
 
-Cloudmake 2.4 retains this portable profile as the cross-backend baseline and
-adds capability negotiation for richer standard configurations. The accepted
+Cloudmake 2.4 retains one stable meaning for its adapter-supported fields and
+adds capability negotiation across backends. Stable meaning does not imply
+universal availability: each backend must qualify every behavior requested by
+the selected configuration. The accepted
 design, immutable tag-resolution rules, credential boundary, lifecycle
 semantics, and rollout gates are specified in the
 [Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
 
 Cloudmake 2.4 accepts the standard
 [Dev Container specification](https://containers.dev/implementors/spec/) as a
-workstation configuration, analyzes the behavior it requires, and chooses a
-qualified execution path. The project still exposes only its ordinary Make
+workstation configuration, analyzes the behavior it requires, and dynamically
+qualifies one realization. The project still exposes only its ordinary Make
 targets. Cloudmake does not silently discard standard behavior to fit a weaker
 backend.
 
@@ -39,18 +41,19 @@ The choice is stored only in Cloudmake's local per-project preferences. Use
 `--native` to clear it. The older `--image REF@sha256:DIGEST` interface remains
 the image-only shorthand and is fully compatible.
 
-## Capability-qualified profile
+## Adapter-supported behavior
 
-The portable adapter remains the cross-backend baseline:
+The portable adapter defines these behaviors. A backend may support only a
+subset and rejects the others before Make:
 
 | Dev Container field | Portable adapter behavior |
 | --- | --- |
-| `image` | Required immutable Linux OCI reference in `REF@sha256:DIGEST` form. Tagged references require a qualified Dev Container implementation. |
+| `image` | Required immutable Linux OCI reference in `REF@sha256:DIGEST` form. Tagged references require a Dev Container implementation that declares and dynamically validates tag resolution. |
 | `containerEnv`, `remoteEnv` | Literal string values are merged; `remoteEnv` wins. Host-variable interpolation and null/unset values are rejected. |
 | `hostRequirements.cpus` | Positive integer, checked on the actual execution host before Make. |
 | `hostRequirements.memory`, `.storage` | Byte or `kb`/`mb`/`gb`/`tb` size, checked on the actual host. |
 | `hostRequirements.gpu` | `true`, `false`, or `"optional"`; required GPU presence is checked, and `true` must be paired with an explicit CDI device. Detailed core/memory objects are rejected until they can be validated honestly. |
-| `forwardPorts` | Integer or `localhost:PORT`. Local and SSH backends bind only host loopback. |
+| `forwardPorts` | Integer or `localhost:PORT`. Local and SSH backends bind only host loopback; Colab rejects the field because it has no corresponding tunnel. |
 | `workspaceFolder` | Omitted or exactly `/workspace`. |
 | `securityOpt` | Omitted or `no-new-privileges`. Cloudmake applies its own least-privileged policy regardless. |
 | `customizations.cloudmake.devices` | Optional array of CDI qualified device names, such as `nvidia.com/gpu=all`. |
@@ -60,7 +63,8 @@ JSON with comments is accepted. Environment values in this file are project
 configuration, are synchronized to the execution environment, and may appear
 encoded in provider control traffic. They are not a secret channel.
 
-This example is portable across a qualified GPU host and Colab:
+This example is portable across a supported GPU host and Colab when their live
+resources qualify:
 
 ```jsonc
 {
@@ -82,7 +86,7 @@ This example is portable across a qualified GPU host and Colab:
 ```
 
 Richer standard fields become explicit required behavior rather than parser
-errors. The qualified local reference implementation currently adds tagged
+errors. The declared local reference implementation currently adds tagged
 images, Dockerfile/image builds, Features, create-phase lifecycle commands,
 standard remote/container user selection, workspace layout, process control,
 and restrictive security policy. It invokes the reference Dev Container CLI
@@ -92,8 +96,10 @@ configuration fingerprint is unchanged.
 
 ## Fail-closed boundary
 
-Cloudmake rejects requirements the selected backend cannot preserve before
-contacting that provider. No maintained backend currently accepts:
+Cloudmake rejects statically impossible requirements before contacting the
+provider. Requirements that depend on the assigned runtime, driver, or device
+are rejected after live qualification but always before Make. No maintained
+backend currently accepts:
 
 - Compose configurations;
 - secrets, arbitrary mounts, arbitrary `runArgs`, or host lifecycle commands;
@@ -119,16 +125,16 @@ privileged Docker host from being silently weakened on a managed notebook VM.
 
 ## Backend realization
 
-The same profile may be realized differently without changing the project
+The same configuration may be realized differently without changing the project
 target:
 
 | Backend class | Workstation realization |
 | --- | --- |
-| Local, richer standard profile | Reference Dev Container CLI over Docker; the prepared container and create-phase receipt are reused by configuration fingerprint. |
-| Codespaces | Provider-native image-backed Dev Container for the portable adapter profile. Selecting a changed profile rebuilds the one active workstation environment; later targets and stop/start reuse it. |
-| Ordinary local or SSH Linux host, portable profile | Docker first, then Podman or nerdctl when ready. The host runtime constructs the least-privileged OCI process. |
+| Local, richer standard behavior | Reference Dev Container CLI over Docker; the prepared container and create-phase receipt are reused by configuration fingerprint. |
+| Codespaces | Provider-native image-backed Dev Container for the portable subset. Selecting a changed configuration rebuilds the one active workstation environment; later targets and stop/start reuse it. |
+| Ordinary local or SSH Linux host, portable subset | Docker first, then Podman or nerdctl when ready. The host runtime constructs the least-privileged OCI process. |
 | Privilege-restricted SSH host | `skopeo` and `umoci` materialize the image; PRoot and `setpriv` execute it without a daemon, root, a user namespace, or a privileged mount. |
-| Colab notebook | The single qualified `crun` adapter materializes the image and applies the managed-VM profile. |
+| Colab notebook | The single declared `crun` adapter materializes the image and is dynamically qualified against each managed VM. |
 
 Every non-native realization actively probes ordered runtime candidates. An
 installed client is not enough: a nonfunctional Docker daemon can fall through
@@ -143,13 +149,13 @@ adapter and native capability sets; these describe what can be honored, not
 merely which executable happens to be installed.
 
 Product qualification remains separate from implementation capability.
-Lightning Studio SSH implements this profile through the common SSH adapter but
+Lightning Studio SSH implements this subset through the common SSH adapter but
 remains `unqualified` until its live release gate succeeds and the evidence is
 retained. Paid Colab SSH also shares the implementation, but is deprecated
 because it adds no distinct qualified workstation capability. Selecting either
 prints that status and reason.
 
-The deprecated Kaggle adapter predates this portable profile and remains
+The deprecated Kaggle adapter predates this portable subset and remains
 outside release qualification.
 
 The exact static capability ceiling is deliberately visible rather than
@@ -159,19 +165,19 @@ inferred from the provider brand:
 | --- | --- | --- | --- |
 | `local` | supported | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | digest/tag image, image build, Features, create lifecycle, user selection, literal environment, host requirements, workspace layout, process control, restrictive security policy |
 | `colab-notebook` | supported | digest image, literal environment, host requirements, CDI, restrictive security policy | none |
-| `codespaces-ssh` | supported | digest image, literal environment, host requirements, loopback ports, restrictive security policy, realized by the provider-native Codespace | none |
+| `codespaces-ssh` | supported | none | digest image, literal environment, host requirements, loopback ports, restrictive security policy |
 | `host-ssh` | supported | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
 | `gcp-compute-ssh` | unqualified | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
 | `lightning-studio-ssh` | unqualified | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
 | `colab-ssh` | deprecated | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
 | `kaggle-notebook` | deprecated | none | none |
 
-“Adapter semantics” describes Cloudmake's portable contract even when the
-provider, as in Codespaces, materializes the selected image natively. It does
-not mean that Cloudmake starts a nested container. Product status is an
-independent release-quality statement. Dynamic runtime, host, device, and
-network probes may narrow this static ceiling for a particular invocation; they
-never widen it.
+“Native semantics” means the provider constructs the workstation, as
+Codespaces does. “Adapter semantics” means Cloudmake supplies the missing
+execution machinery. Product status is an independent release-quality
+statement. Each backend also declares the order in which its realizations are
+considered. Dynamic runtime, host, device, and network probes may narrow a
+static ceiling for a particular invocation; they never widen it.
 
 ## Ports and host requirements
 
@@ -187,12 +193,12 @@ foreground Cloudmake target:
 This is not public ingress, firewall management, or a durable service. If a
 target daemonizes and Make exits, the Cloudmake-owned SSH tunnel ends. The
 Colab notebook backend has no corresponding tunnel and therefore rejects a
-profile containing `forwardPorts` before allocation.
+configuration containing `forwardPorts` before allocation.
 
 Host requirements are checked on the actual machine immediately before OCI
 preflight and Make. They complement backend declarations: a backend may be
-qualified as GPU-capable while a particular allocation has no GPU. Codespaces
-is qualified as a CPU workstation and rejects a required GPU profile before a
+declared as GPU-capable while a particular allocation has no GPU. Codespaces
+is declared as a CPU workstation and rejects a required GPU configuration before a
 provider rebuild. On Colab and Lightning, `gpu: true` or a CDI device request
 requires `--gpu` (or a saved GPU selection) before allocation; the Dev Container
 file does not silently choose a provider product or accelerator model.
@@ -204,7 +210,7 @@ remains the explicit device request.
 The portable Cloudmake adapter drops capabilities, requests
 `no-new-privileges`, uses a read-only image root, exposes a fresh writable
 `/tmp`, and grants only the writable `/workspace` project mount plus explicitly
-requested CDI device edits. A qualified Dev Container implementation follows
+requested CDI device edits. A dynamically qualified Dev Container implementation follows
 its standard runtime model instead; Cloudmake still rejects requests for added
 privilege, but does not claim that Docker's default Dev Container boundary is
 the same as the portable adapter's sandbox. Provider-native Codespaces remains

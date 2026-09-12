@@ -27,7 +27,7 @@ Backend lifecycle operations are selected through launcher options such as
 project target. The target-agnostic `--collect DIR TARGET` operation must validate
 `DIR` as project-relative, invoke the exact requested target, archive that
 existing directory after success, and transactionally replace the local
-`artifacts/` directory.
+`.cloudmake/artifacts/` directory.
 
 ## Names and transports
 
@@ -58,6 +58,7 @@ Each backend declares:
 - whether its execution environment is reusable across target invocations;
 - who controls compute lifecycle;
 - how long the working filesystem survives;
+- whether target replay has proven fencing (`none` by default);
 - an ordered set of capabilities, including any persistence and bundle-runtime
   roles;
 - an ordered OCI runtime list, or `none`; and
@@ -72,6 +73,12 @@ Inspect the resolved descriptor with:
 ```sh
 make BACKEND=colab-notebook backend-info
 ```
+
+`BACKEND_TARGET_REPLAY` is separate from allocation-capacity retry. `none` is
+the backward-compatible API-1 default and preserves at-most-once delivery. A
+future `fenced` backend must prove that an ambiguous prior attempt cannot
+overlap a new attempt; the declaration alone never authorizes replay in a
+launcher that lacks the bounded dispatcher.
 
 Descriptor consistency is also part of the contract. A backend advertising
 `devcontainer` must declare at least one nonempty adapter or native semantic
@@ -95,11 +102,24 @@ OCI workstation. The launcher compares a configuration's complete requirement
 set with one engine; it never combines partial engines or silently removes a
 requirement.
 
-The normalized profile also attributes every semantic requirement to the
+`BACKEND_DEVCONTAINER_REALIZATION_ORDER` lists `adapter`, `native`, or both in
+the order the backend wants them considered. It must name each nonempty
+semantic set exactly once. API-1 descriptors that omit it retain the compatible
+adapter-then-native order. Codespaces declares only `native`; the local backend
+declares `adapter native` so its portable path does not unexpectedly require a
+Docker-backed Dev Container CLI.
+
+The normalized requirement set also attributes every semantic requirement to the
 standard field or extension path that produced it. Rejection diagnostics and
 provenance therefore distinguish, for example, `image-tag (image)` from
 `lifecycle-create (postCreateCommand)` instead of reporting an unexplained
 backend mismatch.
+
+After a realization passes those requirements, dynamic qualification returns
+the selected realization and the evidence proving that it satisfies the
+workstation contract. Backend declarations are static capability input;
+observed machine properties are live evidence. Neither becomes a second
+workload-description language.
 
 `BACKEND_PRODUCT_STATUS=unqualified` identifies an implemented adapter that has
 not passed and retained its required live release gate. It is neither a release
@@ -160,10 +180,11 @@ project targets remain opaque; Cloudmake does not infer their network needs
 from target names or recipes. A provider metadata request alone is not positive
 evidence.
 
-`environment-profile` is separate from these Cloudmake backend capabilities.
-It means the backend can observe the selected execution VM and report the
-machine, privilege, filesystem, isolation, device, and accelerator evidence
-defined in [Execution environments and OCI runner](execution-environments.md).
+The legacy transport capability named `environment-profile` supplies evidence
+for qualification; it is not a workstation contract. It means the backend can
+observe the selected execution VM and report the machine,
+privilege, filesystem, isolation, device, and accelerator evidence defined in
+[Execution environments and OCI runner](execution-environments.md).
 It does not imply support for a particular application format or runner.
 Observed properties are not provider guarantees and must not be cached as if
 they were promises for a replacement VM.
@@ -195,7 +216,7 @@ Every backend must also declare an ordered `BACKEND_OCI_RUNTIMES` list. Use
 # A host whose installed execution surface must be discovered dynamically.
 BACKEND_OCI_RUNTIMES := docker podman nerdctl proot
 
-# A managed notebook with one provider-qualified adapter.
+# A managed notebook with one backend-specific adapter.
 BACKEND_OCI_RUNTIMES := crun
 
 # A fresh managed VM with a least-privileged materialization adapter.
@@ -222,30 +243,30 @@ The declaration describes mechanisms the backend permits, not commands proven
 to work on every instance. Cloudmake rejects selections that no declared option
 can satisfy, then probes the actual VM in declaration order. An installed but
 unready native runtime is skipped so another declared option can qualify. A
-provider-qualified entry such as Colab's `crun` means the backend also owns the
+backend-specific entry such as Colab's `crun` means the backend also owns the
 exact OCI-spec adaptation, device integration, and security limitations; it is
 not a generic endorsement of that command on other managed VMs. The
 image-specific preflight remains the final authority and never causes target
 replay.
 
-Maintained backends that implement the Cloudmake 2.3 portable profile declare
+Maintained backends that implement the Cloudmake 2.3 portable subset declare
 `devcontainer`. SSH transports that can keep a bounded loopback tunnel for a
 foreground target also declare `port-forward`. These capabilities do not add
 new transport verbs: the launcher normalizes the selected standard
 configuration into the existing image, environment, host-requirement, CDI, and
-execution fields. A backend must reject any normalized field it cannot honor
-before provider contact or target submission.
+execution fields. A backend must reject static incompatibilities before
+provider contact and live incompatibilities before target submission.
 
 That fail-closed workload boundary must not disable resource recovery. A saved
-profile is validated for `--start`, target execution, collection, and relevant
-doctor checks. It is not prepared or validated for `--status`, `--stop`,
+workstation selection is validated for `--start`, target execution, collection,
+and relevant doctor checks. It is not prepared or validated for `--status`, `--stop`,
 `--sync`, or `--fetch`; those operations must remain usable when a newer
 Cloudmake version no longer accepts an old workstation description.
 
-Cloudmake 2.4 extends this boolean baseline with capability-qualified standard
+Cloudmake 2.4 extends this boolean baseline with capability-negotiated standard
 behavior. The configuration analyzer produces explicit semantic requirements;
 backend descriptors declare the Dev Container behaviors they can implement,
-and dynamic preflight verifies the actual instance. These declarations are
+and dynamic qualification verifies the actual instance. These declarations are
 orthogonal to transport, persistence, `oci-native`, and the runtime candidate
 list. The normative vocabulary, immutable image-resolution rules, credential
 boundary, and lifecycle receipt requirements are defined in the
@@ -396,7 +417,8 @@ and whether retry is safe.
 The local transport is the deliberate exception to remote synchronization,
 ownership, locking, and retrieval responsibilities: it operates on the source of
 truth itself. It must still preserve exact Make dispatch and apply the same safe,
-transactional `artifacts/` materialization when `--collect` is requested.
+transactional `.cloudmake/artifacts/` materialization when `--collect` is
+requested.
 
 Notebook transports package the selected source and execute provider control
 cells. The generated notebook and control code belong to cloudmake rather than
@@ -425,7 +447,8 @@ project identity. They do not belong in either the cloudmake repository or the
 actual project repository.
 
 Downloaded project output is different: cloudmake creates and owns the local
-project `artifacts/` directory as the materialized result of `--collect`.
+project `.cloudmake/artifacts/` directory as the materialized result of
+`--collect`.
 
 Configuration precedence is:
 

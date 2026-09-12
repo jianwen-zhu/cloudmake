@@ -25,6 +25,11 @@ Cloudmake keeps one ordinary automation boundary across those environments:
 the project Makefile. The developer chooses a backend; Cloudmake reaches it,
 synchronizes the selected source, and invokes the exact project target.
 
+The project-facing principle is **intrusion-free (non-intrusive) adoption**:
+Cloudmake adapts the execution environment to an existing Make project instead
+of requiring provider notebooks, repository credentials, reserved Make targets,
+or a required Cloudmake-specific directory layout.
+
 In short, stateless Cloudmake answers: **how can a locally executable Make
 project run on remote hardware without adopting a provider-specific workflow?**
 
@@ -36,6 +41,30 @@ start again.
 The normative project interface is in the
 [Project contract](project-contract.md). Backend implementers should use the
 separate [Backend contract](backend-contract.md).
+
+## One command, unlike platforms
+
+A backend is Cloudmake's adapter for one platform through one concrete access
+path. The name identifies both, so two access paths to the same provider are
+different backends.
+
+The qualified paths already disagree on nearly every operational detail:
+
+| Backend and platform | Who controls the resource | Command and transfer path | What can be reused | Distinct failure boundary |
+| --- | --- | --- | --- | --- |
+| `local` — this computer | The developer | Direct Make; no transfer | The local filesystem | Local tools and hardware |
+| `colab-notebook` — Google Colab | The provider | Notebook upload, execution, and download APIs | Only the current live runtime | Capacity, authorization, and runtime replacement |
+| `codespaces-ssh` — GitHub Codespaces | The provider | Provider lifecycle, SSH, and rsync | A named stoppable Codespace | Quota, wake-up, and SSH reachability |
+| `host-ssh` — a lab or cloud host | The host operator | User-managed SSH and rsync | Whatever that host preserves | Provisioning, access, and host policy |
+
+This heterogeneity is the problem Cloudmake absorbs. Without a backend adapter,
+each row requires a different allocation command, readiness test, transfer
+method, execution wrapper, failure interpretation, and cleanup procedure. With
+Cloudmake, those differences remain honest backend capabilities while the
+project-facing command remains `cloudmake TARGET`.
+
+`cloudmake --backends` remains the authoritative complete inventory when an
+operator needs status or richer capabilities introduced after Day 1.
 
 ## The one-minute model
 
@@ -49,14 +78,21 @@ Remember six rules:
 6. Generated remote state is useful while present but disposable.
 
 ```mermaid
-flowchart LR
-    P[Local Make project] --> S[Select and validate source]
-    S --> B[Backend adapter]
-    B --> R[Start or reuse compute]
-    R --> U[Synchronize source]
-    U --> M[Run exact Make target once]
-    M --> O[Stream output and record provenance]
-    O --> C[Optionally collect project output]
+flowchart TB
+    subgraph H[Local control]
+        direction LR
+        P[Make project] --> S[Validate source] --> B[Select backend]
+    end
+    subgraph R[Selected resource]
+        direction LR
+        A[Start or reuse] --> U[Synchronize] --> M[Run target once]
+    end
+    subgraph E[Evidence and output]
+        direction LR
+        O[Stream and record] --> C[Optional collection]
+    end
+    B --> A
+    M --> O
 ```
 
 The rest of this tutorial follows one invocation from project selection through
@@ -138,7 +174,7 @@ Three root paths are always outside source transfer:
 
 - `.git/`, because repository metadata is not execution source;
 - `.cloud-state/`, because Cloudmake control state must not upload itself; and
-- `artifacts/`, because it is Cloudmake's local collection destination.
+- `.cloudmake/`, because it contains Cloudmake-owned collected output.
 
 Projects can exclude more paths in `.cloudmakeignore`. Before contacting a
 provider, `cloudmake --sync-dry-run` shows the selected set.
@@ -165,6 +201,36 @@ Cloudmake therefore records target state explicitly:
 At-most-once submission matters because Make targets are not guaranteed to be
 pure. A target may upload a result, consume a license, modify a database, or
 trigger another external action. Cloudmake does not assume replay is harmless.
+
+When Cloudmake reports `target_submission=ambiguous`, do not immediately repeat
+the target. Keep the resource available for inspection, read the provider output
+and printed provenance path, and use `cloudmake --status` plus `--shell` or
+`--open` when available. Check the project's own outputs, logs, databases, and
+external side effects before deciding whether another invocation is safe.
+
+Cloudmake treats every project target as potentially effectful by default. An
+operator can assert idempotency for one invocation and separately request a
+bounded replay policy:
+
+```sh
+cloudmake --idempotent --replay-for=30s benchmark SIZE=large
+```
+
+The contract keeps three ideas separate:
+
+| Layer | Vocabulary | Who determines it |
+| --- | --- | --- |
+| Target semantics | Unknown/effectful or explicitly idempotent | The operator for this invocation |
+| Delivery policy | At-most-once or bounded retry | Cloudmake, under explicit user policy |
+| Observation | `not_submitted`, `submitted`, or `ambiguous` | The backend transport |
+
+`--replay-for` requires `--idempotent`; the assertion is never read from a
+project file or reused later. A normal nonzero Make result is never replayed.
+The backend must also prove that attempts cannot overlap. No current backend has
+enough evidence at every ambiguous boundary, so every backend rejects
+`--replay-for` before contacting its provider. `replay_safe` remains a derived
+Cloudmake decision, not a project property. Provenance records the assertion,
+delivery policy, and ordered attempt evidence.
 
 Temporary capacity retry is narrower. With `--retry-for`, a backend may retry a
 positively classified allocation-capacity failure before source synchronization
@@ -222,12 +288,16 @@ cloudmake --collect dist package-release VERSION=2.0
 
 Here `package-release` is a project target and `dist` is a project-relative
 directory chosen by that project. After confirmed success, Cloudmake retrieves
-it into the local `artifacts/` destination. Collection does not impose a common
-output layout on every Make project.
+it into the local `.cloudmake/artifacts/` destination. Collection does not
+impose a common output layout on every Make project. Cloudmake never moves,
+deletes, overwrites, symlinks, or dual-writes root `artifacts/`.
+
+Before adopting this contract, follow the
+[artifact collection migration preflight](artifact-collection-migration.md).
 
 ## What stateless execution can reuse
 
-Stateless operation can still be efficient during one resource lifetime:
+During one resource lifetime, stateless execution can reuse:
 
 - the backend selection can remain saved locally;
 - a named live session can be reused;
@@ -278,7 +348,9 @@ The first target may pay allocation and setup cost. Later targets can reuse the
 same session. If the session disappears, the next invocation starts from source
 and Make again.
 
-## What Cloudmake normalizes
+## The Day 1 boundary
+
+### What stateless Cloudmake normalizes
 
 - backend selection and prerequisite checks;
 - source selection and synchronization;
@@ -289,15 +361,21 @@ and Make again.
 - provenance and provider-output retention; and
 - explicit artifact collection.
 
-## What Cloudmake does not normalize
+### What Day 1 deliberately leaves open
 
 - provider authentication ceremonies or credential storage;
 - VM provisioning outside a backend's documented lifecycle;
-- installed compilers, libraries, drivers, or project dependencies;
 - target names, project directory layout, or output layout;
 - provider capacity, network, lifetime, quota, or price;
-- recovery of mutable state after resource replacement; or
-- automatic replay of an ambiguous target.
+- automatic replay of an ambiguous target;
+- recovery of mutable state after resource replacement, which Day 2 adds as an
+  optional acceleration layer; or
+- a portable application bundle and tool environment, which Day 3 adds through
+  OCI, CDI, and the Dev Container contract.
+
+These are the boundary of the stateless lesson, not a claim that later
+Cloudmake releases cannot add orthogonal capabilities. Day 4 then explains the
+security model shared by the resulting remote-workstation layers.
 
 The intended outcome is simple: a local Make project can use remote hardware
 without becoming a provider-specific project. When repeated reconstruction

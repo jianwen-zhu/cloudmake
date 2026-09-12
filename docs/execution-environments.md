@@ -48,7 +48,7 @@ This is both a security and portability contract:
 - providers should not have to grant capabilities, writable kernel control
   surfaces, or devices unrelated to the computation; and
 - backends that cannot support an unrestricted Docker host may still qualify a
-  smaller, actively validated OCI execution profile.
+  smaller, actively validated OCI/Dev Container subset.
 
 Every additional mount, capability, device, namespace exception, credential,
 or host integration must be justified by the backend, an explicit CDI request,
@@ -198,9 +198,9 @@ is known.
 | `host-ssh` | supported | Docker, Podman, nerdctl, then PRoot | native CDI or validated PRoot translation |
 | `lightning-studio-ssh` | unqualified | same ordered remote selection | native CDI or validated PRoot translation |
 | `colab-ssh` | deprecated compatibility adapter | same ordered remote selection | native CDI or validated PRoot translation |
-| `codespaces-ssh` | supported | selected image becomes the provider dev container; no nested runtime | none; qualified CPU backend |
+| `codespaces-ssh` | supported | selected image becomes the provider dev container; no nested runtime | none; declared CPU-only backend |
 | `gcp-compute-ssh` | unqualified 2.4 candidate | Docker, Podman, nerdctl, then PRoot on the selected VM | native CDI where the installed runtime and host driver qualify |
-| `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one provider-qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
+| `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one dynamically qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
 | `kaggle-notebook` | deprecated experimental profile for trusted Linux images | `skopeo` + `umoci` materialization and PRoot | qualified NVIDIA `all` device translated from generated CDI; fail closed when absent |
 
 These choices are backend declarations rather than launcher special cases:
@@ -286,7 +286,7 @@ image-only behavior.
 The normative field and backend mapping is in
 [Portable Dev Container workstations](devcontainers.md).
 
-## Cloudmake 2.4: capability-qualified Dev Containers
+## Cloudmake 2.4: capability-negotiated Dev Containers
 
 Cloudmake 2.4 keeps the 2.3 portable core but no longer treats the least capable
 backend as the ceiling for every standard configuration. It analyzes required
@@ -300,7 +300,7 @@ of a logical workstation instance, and existing provider/runtime identities
 remain responsible for registry access. The normative design is the
 [Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
 
-The first qualified richer engine is local Docker through the reference Dev
+The first declared richer implementation is local Docker through the reference Dev
 Container CLI. It supports tagged images, image builds, Features, create-phase
 lifecycle preparation, user/workspace selection, and the other bounded fields
 listed in the Dev Container guide. Preparation is receipt-bound to the selected

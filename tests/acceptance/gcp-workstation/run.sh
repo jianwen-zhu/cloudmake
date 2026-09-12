@@ -127,7 +127,7 @@ run_logged verify-after-restart "$cloudmake" -C "$project" verify
 grep 'resource=started' "$evidence/verify-after-restart.log" >/dev/null
 grep "persistent-count=$second_count" "$evidence/verify-after-restart.log" >/dev/null
 run_logged collect "$cloudmake" -C "$project" --collect dist export-artifact
-test "$(cat "$project/artifacts/count.txt")" = "$second_count"
+test "$(cat "$project/.cloudmake/artifacts/count.txt")" = "$second_count"
 run_logged stop-final "$cloudmake" -C "$project" --stop
 selected=
 trap - EXIT HUP INT TERM

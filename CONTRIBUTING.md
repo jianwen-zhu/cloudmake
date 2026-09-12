@@ -20,6 +20,11 @@ Direct engine tests must use its generic `dispatch` entry point rather than add
 or depend on convenience rules named after sample project targets. See the
 [backend contract](docs/backend-contract.md#internal-engine-dispatch).
 
+Open contract findings from the tutorial audit are tracked in
+[Contract review follow-ups](docs/contract-review-followups.md). Release review
+must either close each required item with tests or explicitly defer it to a
+named later release.
+
 ## Design boundaries
 
 - Keep the local working tree as the source of truth.

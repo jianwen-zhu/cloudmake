@@ -140,8 +140,9 @@ container-hosting interface.
 The Dev Container profile is parsed locally into explicit semantic
 requirements. Privileged mode, added capabilities, relaxed security options,
 arbitrary mounts/run arguments, and secret declarations remain fail-closed.
-Features and create-phase lifecycle hooks are accepted only by a qualified
-native engine; restricted adapters still reject them before provider contact.
+Features and create-phase lifecycle hooks are accepted only by a dynamically
+qualified native implementation; restricted adapters reject them before
+provider contact.
 The portable `forwardPorts` subset creates loopback reachability only for the
 foreground target; it does not expose a public listener. Literal environment
 entries are project configuration rather than credentials: Cloudmake transports
@@ -157,9 +158,9 @@ prove strong isolation; the backend's documented kernel and namespace sharing
 remains part of the trust decision.
 
 The image-only shorthand and portable adapter select OCI images only by
-immutable digest. A qualified native Dev Container engine may accept a standard
-tag, record the digest actually used by the logical workstation, and reuse that
-prepared instance. Registry authentication stays
+immutable digest. A dynamically qualified native Dev Container implementation
+may accept a standard tag, record the digest actually used by the logical
+workstation, and reuse that prepared instance. Registry authentication stays
 with the installed official runtime or registry client; Cloudmake does not read,
 copy, serialize, or log its credential store. Source archives, runner control
 files, notebooks, persistent-workspace snapshots, and provenance contain the

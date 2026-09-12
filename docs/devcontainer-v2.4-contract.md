@@ -4,7 +4,7 @@ Status: accepted design for the Cloudmake 2.4 development line.
 
 Implementation status: capability analysis and backend declarations are active.
 The existing restricted OCI adapter remains the portable baseline. The local
-backend additionally qualifies the reference Dev Container CLI over Docker for
+backend additionally declares the reference Dev Container CLI over Docker for
 the bounded richer field set documented in `devcontainers.md`; other backends
 fail early when that richer set is requested.
 
@@ -13,7 +13,10 @@ configuration. It does not claim that every backend implements every part of the
 Dev Container specification. Instead, Cloudmake analyzes the behavior required
 by the selected configuration, compares it with the selected backend's declared
 and observed capabilities, and either realizes the configuration faithfully or
-rejects it before provider allocation or target submission.
+rejects it before target submission. Static incompatibilities are rejected
+before allocation when they can be known locally. Requirements that depend on
+the assigned machine, runtime, driver, or device are qualified on the live
+resource after allocation and still before Make runs.
 
 This is capability negotiation, not best-effort translation. Cloudmake must
 never silently remove a lifecycle command, mount, privilege, user selection,
@@ -41,10 +44,11 @@ reconstruction remain implementation details behind target execution.
 
 Every recognized field belongs to one of three classes.
 
-1. **Portable behavior** has the same meaning across all qualified backends.
-   The 2.3 portable core remains the baseline: image, literal environment,
-   basic host requirements, bounded loopback forwarding, `/workspace`, strict
-   security options, and explicit CDI device names.
+1. **Portable behavior** has one defined meaning wherever a backend declares
+   support for it. The 2.3 adapter vocabulary includes image, literal
+   environment, basic host requirements, bounded loopback forwarding,
+   `/workspace`, strict security options, and explicit CDI device names. A
+   particular backend may support only a subset and must reject the rest.
 2. **Advisory metadata** has no process or resource effect and may be retained
    or ignored explicitly. Examples are `$schema`, `name`, and editor-specific
    `customizations`. The accepted advisory list is closed and documented;
@@ -55,9 +59,10 @@ Every recognized field belongs to one of three classes.
    additional capabilities, privileged execution, and device integration.
 
 The analyzer returns normalized portable values plus a set of required
-capabilities. Backend validation happens before any action that could allocate
-billable compute. An unsupported requirement produces a field-specific error
-that names both the requirement and backend.
+capabilities. Static backend validation happens before allocation. Live
+qualification may require the selected resource to exist, but it always
+completes before target submission. An unsupported requirement produces a
+field-specific error that names both the requirement and backend.
 
 Unknown top-level fields remain fail-closed. A future Dev Container field may
 alter process authority or lifecycle and must not acquire accidental semantics
@@ -88,15 +93,16 @@ Names describe semantics, not the executable used to implement them. A native
 Dev Container service, the reference Dev Container CLI over Docker, and a
 Cloudmake restricted OCI adapter may satisfy different capability sets.
 
-Static declarations are an upper bound. Dynamic preflight still verifies the
+Static declarations are an upper bound. Dynamic qualification still verifies the
 actual runtime, architecture, storage, network, driver, CDI, and resource state.
 A declared capability that fails its dynamic probe is unavailable for that
 workstation invocation.
 
-The portable profile is the intersection that can be selected across supported
-backends. Richer configurations remain standard Dev Containers but are portable
-only across backends advertising their requirements. Documentation and
-`cloudmake --backends` must not describe the richer set as universally portable.
+Portable describes stable semantics, not universal availability. The subset
+usable across a chosen set of backends is the intersection of their declared
+and dynamically qualified capabilities. Richer configurations remain standard
+Dev Containers but are usable only where every required behavior qualifies.
+Documentation and `cloudmake --backends` must not imply otherwise.
 
 ## Image references and immutable workstation instances
 
@@ -159,16 +165,41 @@ Checkpoints, native disks, stopped containers, and OCI caches reduce repeated
 work; none is authoritative project state. Source plus declared configuration
 and the project Makefile must remain sufficient to rebuild from scratch.
 
-## Least privilege
+## Workstation requirements and dynamic qualification
 
-The least-privileged profile remains the default. A configuration requesting
-additional authority does not automatically receive it because a backend could
-technically provide it.
+The workstation contract expresses workload behavior through OCI Runtime, CDI,
+and Dev Container semantics. Cloudmake does not replace their vocabulary with a
+second execution-profile language. Process authority, namespaces, mounts,
+resources, devices, and network behavior remain contract requirements.
 
-Privilege is a separate policy capability. It must be explicitly declared by
-the project, allowed by the backend, and reported in preflight/provenance.
+Cloudmake separately records **launcher authority**: process-only, mediated, or
+host-engine. This describes what Cloudmake must trust to start the workload. It
+is backend implementation and security disclosure, not a project setting and
+not part of the workstation contract.
+
+Backends declare candidate native implementations and bounded adapters plus the
+capabilities each can provide. Dynamic qualification compares the complete
+workstation contract with one candidate and the live backend. It selects a
+realization only when that realization preserves all requested behavior;
+otherwise it rejects before target submission. The qualification result records
+the selected realization and the evidence behind the decision, without turning
+observed backend properties into project inputs.
+
+A process-only PRoot realization may provide weaker isolation than a
+host-engine Docker realization, and provider policy may permit outbound traffic
+while denying inbound service. Candidate order therefore remains
+backend-defined so a backend may prefer a reliable native engine over a weaker
+user-space substitute.
+
+Privilege must be explicitly requested by the workstation contract, allowed by
+the backend, and reported in preflight/provenance. Dynamic qualification
+resolves a statically declared realization against provider policy and live
+evidence. It preserves `conditional`, `inherited`, or `unknown` where a safe
+proof is unavailable and verifies every property required by the contract
+before target submission. It does not mean that the backend is supported.
+
 Restricted managed backends such as Colab may permanently reject privileged
-fields while still supporting the portable image profile and CDI device
+fields while still supporting the portable image subset and CDI device
 injection. Provider-native implementations remain bounded by provider policy.
 
 This separation lets mainstream Dev Container configurations use capable

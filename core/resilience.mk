@@ -54,6 +54,9 @@ BACKEND_SESSION_REUSE ?= $(if $(filter batch,$(BACKEND_LIFECYCLE)),no,$(if $(fil
 BACKEND_LIFECYCLE_CONTROL ?= unknown
 BACKEND_WORKSPACE_DURABILITY ?= unknown
 BACKEND_CAPABILITIES ?=
+# Target replay is separate from allocation retry. API-1 backends that predate
+# this declaration retain conservative at-most-once delivery.
+BACKEND_TARGET_REPLAY ?= none
 BACKEND_OCI_RUNTIMES ?=
 # A native OCI backend asks the provider to construct its execution environment
 # from the selected image. API-1 descriptors pre-dating this distinction retain
@@ -66,6 +69,7 @@ CLOUDMAKE_DEVCONTAINER_ADAPTER_DECLARED := $(if $(filter undefined,$(origin BACK
 CLOUDMAKE_DEVCONTAINER_NATIVE_DECLARED := $(if $(filter undefined,$(origin BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),no,yes)
 BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES ?= none
 BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES ?= none
+BACKEND_DEVCONTAINER_REALIZATION_ORDER ?= $(strip $(if $(filter-out none,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),adapter) $(if $(filter-out none,$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),native))
 CLOUDMAKE_DEVCONTAINER_CAPABILITIES := cdi compose environment features forward-ports host-lifecycle host-requirements image-build image-digest image-tag lifecycle-attach lifecycle-control lifecycle-create lifecycle-start mounts port-attributes privilege process-control published-ports runtime-arguments secrets security-policy user-selection workspace-layout
 # Public Internet reachability is independent of the provider control
 # transport.  A notebook backend can accept authenticated command submission
@@ -126,6 +130,9 @@ endif
 ifeq ($(filter $(BACKEND_WORKSPACE_DURABILITY),ephemeral stop-persistent host-persistent unknown),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_WORKSPACE_DURABILITY "$(BACKEND_WORKSPACE_DURABILITY)")
 endif
+ifeq ($(filter $(BACKEND_TARGET_REPLAY),none fenced),)
+$(error Backend "$(BACKEND)" has invalid BACKEND_TARGET_REPLAY "$(BACKEND_TARGET_REPLAY)"; expected none or fenced)
+endif
 ifeq ($(filter $(BACKEND_OCI_NATIVE),yes no),)
 $(error Backend "$(BACKEND)" has invalid BACKEND_OCI_NATIVE "$(BACKEND_OCI_NATIVE)"; expected yes or no)
 endif
@@ -161,10 +168,42 @@ endif
 ifneq ($(filter-out none $(CLOUDMAKE_DEVCONTAINER_CAPABILITIES),$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
 $(error Backend "$(BACKEND)" has invalid Dev Container native capabilities "$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)")
 endif
+ifeq ($(strip $(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),)
+BACKEND_DEVCONTAINER_REALIZATION_ORDER := none
+endif
+ifneq ($(filter none,$(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),)
+ifneq ($(words $(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),1)
+$(error Backend "$(BACKEND)" must declare Dev Container realization order "none" alone)
+endif
+endif
+ifneq ($(filter-out none adapter native,$(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),)
+$(error Backend "$(BACKEND)" has invalid Dev Container realization order "$(BACKEND_DEVCONTAINER_REALIZATION_ORDER)")
+endif
+ifneq ($(words $(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),$(words $(sort $(BACKEND_DEVCONTAINER_REALIZATION_ORDER))))
+$(error Backend "$(BACKEND)" Dev Container realization order contains duplicates)
+endif
+ifneq ($(filter-out none,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)),)
+ifeq ($(filter adapter,$(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),)
+$(error Backend "$(BACKEND)" Dev Container realization order omits adapter)
+endif
+else
+ifneq ($(filter adapter,$(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),)
+$(error Backend "$(BACKEND)" Dev Container realization order lists an undeclared adapter)
+endif
+endif
+ifneq ($(filter-out none,$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
+ifeq ($(filter native,$(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),)
+$(error Backend "$(BACKEND)" Dev Container realization order omits native)
+endif
+else
+ifneq ($(filter native,$(BACKEND_DEVCONTAINER_REALIZATION_ORDER)),)
+$(error Backend "$(BACKEND)" Dev Container realization order lists an undeclared native implementation)
+endif
+endif
 ifneq ($(filter yes,$(CLOUDMAKE_DEVCONTAINER_ADAPTER_DECLARED) $(CLOUDMAKE_DEVCONTAINER_NATIVE_DECLARED)),)
 ifneq ($(filter devcontainer,$(BACKEND_CAPABILITIES)),)
 ifeq ($(filter-out none,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES) $(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
-$(error Backend "$(BACKEND)" declares devcontainer but no qualified engine capabilities)
+$(error Backend "$(BACKEND)" declares devcontainer but no declared realization capabilities)
 endif
 else
 ifneq ($(filter-out none,$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES) $(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)),)
@@ -219,12 +258,14 @@ backend-info: backend-contract
 	@echo 'session-reuse=$(BACKEND_SESSION_REUSE)'
 	@echo 'lifecycle-control=$(BACKEND_LIFECYCLE_CONTROL)'
 	@echo 'workspace-durability=$(BACKEND_WORKSPACE_DURABILITY)'
+	@echo 'target-replay=$(BACKEND_TARGET_REPLAY)'
 	@echo 'oci-native=$(BACKEND_OCI_NATIVE)'
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'
 	@echo 'oci-runtimes=$(BACKEND_OCI_RUNTIMES)'
 	@echo 'devcontainer-adapter-capabilities=$(BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES)'
 	@echo 'devcontainer-native-capabilities=$(BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES)'
+	@echo 'devcontainer-realization-order=$(BACKEND_DEVCONTAINER_REALIZATION_ORDER)'
 	@echo 'internet-inbound=$(BACKEND_INTERNET_INBOUND)'
 	@echo 'internet-outbound=$(BACKEND_INTERNET_OUTBOUND)'
 

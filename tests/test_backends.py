@@ -91,6 +91,7 @@ def test_api1_backend_lifecycle_remains_a_compatible_session_reuse_input(
     assert "session-reuse=no" in result.stdout
     assert "lifecycle-control=unknown" in result.stdout
     assert "workspace-durability=unknown" in result.stdout
+    assert "target-replay=none" in result.stdout
     assert "oci-native=no" in result.stdout
     assert "internet-inbound=unknown" in result.stdout
     assert "internet-outbound=unknown" in result.stdout
@@ -893,7 +894,7 @@ def test_launcher_runs_external_project_through_codespaces_ssh(
     rsync_arguments = {
         argument for call in all_calls if call[0] == "rsync" for argument in call[1:]
     }
-    assert {"--exclude=/.git/", "--exclude=/.cloud-state/", "--exclude=/artifacts/"} <= rsync_arguments
+    assert {"--exclude=/.git/", "--exclude=/.cloud-state/", "--exclude=/.cloudmake/"} <= rsync_arguments
     assert "--delete" not in rsync_arguments
     assert not any(
         argument in rsync_arguments
@@ -999,7 +1000,7 @@ def test_ssh_collect_fetches_artifacts_transactionally(
         env=env,
     )
 
-    assert (project / "artifacts" / "hello").read_text(encoding="utf-8") == (
+    assert (project / ".cloudmake" / "artifacts" / "hello").read_text(encoding="utf-8") == (
         "fake ssh artifact\n"
     )
     assert any(
@@ -1135,7 +1136,7 @@ def test_ssh_oci_success_continues_to_artifact_collection(
         env=env,
     )
 
-    assert (project / "artifacts" / "hello").read_text(encoding="utf-8") == (
+    assert (project / ".cloudmake" / "artifacts" / "hello").read_text(encoding="utf-8") == (
         "fake ssh artifact\n"
     )
 
@@ -1168,8 +1169,8 @@ def test_ssh_collect_rejects_unsafe_artifact_and_preserves_previous_output(
 ) -> None:
     install_fake_ssh_tools(fake_bin)
     project = external_project(tmp_path / "external-malicious-package")
-    artifacts = project / "artifacts"
-    artifacts.mkdir()
+    artifacts = project / ".cloudmake" / "artifacts"
+    artifacts.mkdir(parents=True)
     (artifacts / "keep").write_text("keep", encoding="utf-8")
     env = launcher_environment(fake_bin, tmp_path)
     env["CODESPACE"] = "test-space"
@@ -1952,10 +1953,14 @@ def test_colab_native_archive_excludes_only_cloudmake_owned_root_paths(
 ) -> None:
     install_fake_colab(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
-    for name in (".git", ".cloud-state", "artifacts"):
+    for name in (".git", ".cloud-state", ".cloudmake"):
         directory = prototype / name
         directory.mkdir(exist_ok=True)
         (directory / "excluded.txt").write_text("excluded", encoding="utf-8")
+    for name in ("artifacts", ".artifacts"):
+        directory = prototype / name
+        directory.mkdir(exist_ok=True)
+        (directory / "included.txt").write_text("included", encoding="utf-8")
     for name in ("build", ".venv", "__pycache__", ".pytest_cache"):
         directory = prototype / "any-layout" / name
         directory.mkdir(parents=True, exist_ok=True)
@@ -1970,10 +1975,12 @@ def test_colab_native_archive_excludes_only_cloudmake_owned_root_paths(
         names = {name.removeprefix("./") for name in archive.getnames()}
     assert "kept.txt" in names
     assert "generated_output.ipynb" in names
+    for name in ("artifacts", ".artifacts"):
+        assert f"{name}/included.txt" in names
     for name in ("build", ".venv", "__pycache__", ".pytest_cache"):
         assert f"any-layout/{name}/included.txt" in names
     assert not any(
-        name.split("/", 1)[0] in {".git", ".cloud-state", "artifacts"}
+        name.split("/", 1)[0] in {".git", ".cloud-state", ".cloudmake"}
         for name in names
     )
 
@@ -1999,7 +2006,7 @@ def test_colab_native_collect_fetch_open_and_stop(
     run_command(["make", "open"], cwd=prototype, env=env)
     run_command(["make", "stop"], cwd=prototype, env=env)
 
-    assert (prototype / "artifacts" / "hello").read_text(encoding="utf-8") == "fake artifact\n"
+    assert (prototype / ".cloudmake" / "artifacts" / "hello").read_text(encoding="utf-8") == "fake artifact\n"
     colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
     assert sum(
         call[1] == "exec" and call[-1].endswith("remote_prerequisites.py")
@@ -2480,8 +2487,8 @@ def test_colab_fetch_rejects_malicious_artifact_and_preserves_existing_output(
     install_fake_colab(fake_bin)
     env = fake_environment(fake_bin, tmp_path)
     env["FAKE_MALICIOUS_ARTIFACT"] = "1"
-    artifacts = prototype / "artifacts"
-    artifacts.mkdir()
+    artifacts = prototype / ".cloudmake" / "artifacts"
+    artifacts.mkdir(parents=True)
     (artifacts / "keep").write_text("keep", encoding="utf-8")
 
     result = run_command(
@@ -2868,7 +2875,7 @@ def test_kaggle_collect_and_fetch_return_artifact(
         env=env,
     )
     run_command([*common, "fetch"], cwd=prototype, env=env)
-    assert (prototype / "artifacts" / "hello").read_text(encoding="utf-8") == "fake artifact\n"
+    assert (prototype / ".cloudmake" / "artifacts" / "hello").read_text(encoding="utf-8") == "fake artifact\n"
 
 
 @pytest.mark.integration
@@ -3385,6 +3392,7 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
     assert f"session-reuse={session_reuse}" in result.stdout
     assert f"lifecycle-control={lifecycle_control}" in result.stdout
     assert f"workspace-durability={workspace_durability}" in result.stdout
+    assert "target-replay=none" in result.stdout
     assert capability in result.stdout
     if persistence_capability is None:
         assert "native-persistence" not in result.stdout
@@ -3410,10 +3418,15 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
         assert "image-digest" in result.stdout
     else:
         assert "devcontainer-adapter-capabilities=none" in result.stdout
-    if backend == "local":
+    if backend in {"local", "codespaces-ssh"}:
         assert "devcontainer-native-capabilities=" in result.stdout
-        assert "image-build" in result.stdout
-        assert "lifecycle-create" in result.stdout
+        if backend == "local":
+            assert "image-build" in result.stdout
+            assert "lifecycle-create" in result.stdout
+            assert "devcontainer-realization-order=adapter native" in result.stdout
+        else:
+            assert "devcontainer-adapter-capabilities=none" in result.stdout
+            assert "devcontainer-realization-order=native" in result.stdout
     else:
         assert "devcontainer-native-capabilities=none" in result.stdout
     if backend.endswith("-ssh"):
@@ -3473,6 +3486,30 @@ def test_backend_contract_rejects_invalid_native_oci_value(tmp_path: Path) -> No
     assert "invalid BACKEND_OCI_NATIVE" in result.stdout
 
 
+def test_backend_contract_rejects_unknown_target_replay_capability(
+    tmp_path: Path,
+) -> None:
+    descriptor = tmp_path / "invalid-target-replay-backend.mk"
+    descriptor.write_text(
+        "BACKEND := invalid-target-replay\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_SESSION_REUSE := no\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts\n"
+        "BACKEND_TARGET_REPLAY := optimistic\n"
+        "BACKEND_OCI_RUNTIMES := none\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert "invalid BACKEND_TARGET_REPLAY" in result.stdout
+
+
 def test_backend_contract_rejects_unknown_devcontainer_capability(tmp_path: Path) -> None:
     descriptor = tmp_path / "invalid-devcontainer-capability.mk"
     descriptor.write_text(
@@ -3502,7 +3539,7 @@ def test_backend_contract_rejects_unknown_devcontainer_capability(tmp_path: Path
             "sync execute status artifacts devcontainer oci-runner",
             "none",
             "none",
-            "declares devcontainer but no qualified engine capabilities",
+            "declares devcontainer but no declared realization capabilities",
         ),
         (
             "sync execute status artifacts oci-runner",
@@ -3559,6 +3596,41 @@ def test_backend_contract_rejects_inconsistent_devcontainer_claims(
     assert message in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("order", "message"),
+    [
+        ("native", "omits adapter"),
+        ("adapter native", "undeclared native implementation"),
+        ("adapter adapter", "contains duplicates"),
+        ("magic", "invalid Dev Container realization order"),
+    ],
+)
+def test_backend_contract_rejects_inconsistent_devcontainer_realization_order(
+    tmp_path: Path, order: str, message: str
+) -> None:
+    descriptor = tmp_path / "inconsistent-devcontainer-order.mk"
+    descriptor.write_text(
+        "BACKEND := inconsistent-devcontainer-order\n"
+        "BACKEND_API_VERSION := 1\n"
+        "BACKEND_SESSION_REUSE := yes\n"
+        "BACKEND_CAPABILITIES := sync execute status artifacts devcontainer oci-runner\n"
+        "BACKEND_OCI_RUNTIMES := proot\n"
+        "BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := image-digest\n"
+        "BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := none\n"
+        f"BACKEND_DEVCONTAINER_REALIZATION_ORDER := {order}\n"
+        "BACKEND_TRANSPORT := invalid\n"
+        f"include {PROJECT_ROOT / 'core/resilience.mk'}\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        ["make", "-f", descriptor, "backend-info"], cwd=tmp_path, check=False
+    )
+
+    assert result.returncode != 0
+    assert message in result.stdout
+
+
 def test_legacy_api1_devcontainer_descriptor_without_semantic_sets_remains_valid(
     tmp_path: Path,
 ) -> None:
@@ -3580,6 +3652,7 @@ def test_legacy_api1_devcontainer_descriptor_without_semantic_sets_remains_valid
 
     assert "devcontainer-adapter-capabilities=none" in result.stdout
     assert "devcontainer-native-capabilities=none" in result.stdout
+    assert "devcontainer-realization-order=none" in result.stdout
 
 
 def test_backend_contract_rejects_nested_runtime_for_native_oci(

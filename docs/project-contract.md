@@ -109,8 +109,8 @@ For `--collect DIR TARGET`, `DIR` is a nonempty project-relative directory with
 no `..` components. The project chooses its location and contents through its
 normal Make rules; cloudmake neither creates nor clears it. After the target
 succeeds, cloudmake archives that directory and transactionally replaces the
-local `project-root/artifacts/` directory. The project must not create or manage
-that local destination.
+local `project-root/.cloudmake/artifacts/` directory. The project must not
+create or manage that local destination.
 
 ## Source selection
 
@@ -120,10 +120,21 @@ Cloudmake automatically omits only these root paths:
 | --- | --- |
 | `.git/` | Repository metadata is not part of remote execution. |
 | `.cloud-state/` | Legacy in-project cloudmake state must not upload itself. |
-| `artifacts/` | Cloudmake-owned local collection output must not be sent back as source. |
+| `.cloudmake/` | Cloudmake-owned local collection output must not be sent back as source. |
 
 All other names, including `src/`, `build/`, `.venv/`, cache directories, and
 notebook output files, have no built-in meaning and are synchronized normally.
+
+The former collection destination `artifacts/` is therefore project-owned
+source. To prevent an upgrade from uploading known prior collection output,
+Cloudmake compares it with retained old provenance and refuses remote transfer
+when it is an exact match. The operator must review and move/delete it or add
+`/artifacts/` to `.cloudmakeignore`. If those exact known contents truly are
+project source, one remote invocation may use
+`--accept-legacy-artifacts-as-source`; the private acceptance is bound to that
+fingerprint. Cloudmake never migrates, overwrites, symlinks, or dual-writes that
+directory automatically. See the
+[artifact collection migration preflight](artifact-collection-migration.md).
 Projects should list unwanted or sensitive paths in `.cloudmakeignore`, one
 exclusion pattern per line:
 

@@ -30,7 +30,7 @@ dispatch collect:
 	@exit 2
 
 fetch:
-	@echo '[local] Output is already local; use --collect DIR TARGET to materialize artifacts/.' >&2
+	@echo '[local] Output is already local; use --collect DIR TARGET to materialize .cloudmake/artifacts/.' >&2
 	@exit 2
 
 shell:

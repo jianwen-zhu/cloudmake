@@ -47,7 +47,7 @@ printf '%s\n' "$woken" | grep 'resource=started' >/dev/null
 printf '%s\n' "$woken" | grep 'state=reused' >/dev/null
 
 "$cloudmake" -C "$project" --collect dist export-artifact
-test -f "$project/artifacts/result.txt"
+test -f "$project/.cloudmake/artifacts/result.txt"
 
 "$cloudmake" -C "$project" --native native-anchor
 "$cloudmake" -C "$project" --stop

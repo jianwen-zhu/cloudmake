@@ -110,7 +110,7 @@ container and Make runs directly in that workstation environment. The adapter
 adds its non-root SSH/Make transport surface during provider rebuild; it does
 not launch Docker, Podman, crun, or PRoot for each target.
 
-The Colab notebook backend declares one provider-qualified runtime profile.
+The Colab notebook backend declares one dynamically qualified runtime profile.
 Cloudmake installs `skopeo`, `umoci`, and `crun` when absent, materializes the
 rootfs, and adapts its OCI runtime specification to Colab's managed-VM limits.
 It never installs project toolchains outside the image. NVIDIA device nodes and

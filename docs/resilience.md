@@ -30,9 +30,9 @@ permissions. Corrupt identity state is refused rather than silently replaced.
 
 Cloudmake creates a common source manifest for notebook archives and SSH
 transfers. Automatic exclusions are intentionally limited to root `.git/`,
-`.cloud-state/`, and `artifacts/`: repository metadata, legacy in-tree tool
-state, and downloaded output. Other names carry no built-in meaning, so a
-project may freely use directories such as `src/`, `build/`, or `.venv/`.
+`.cloud-state/`, and `.cloudmake/`: repository metadata, legacy in-tree tool
+state, and namespaced downloaded output. Other names carry no built-in meaning,
+so a project may freely use directories such as `src/`, `build/`, or `.venv/`.
 
 Projects can add exclusions in `.cloudmakeignore`, one glob per line. Blank
 lines and `#` comments are allowed:
@@ -42,6 +42,13 @@ datasets/
 *.trace
 local-secrets.json
 ```
+
+When upgrading from a release that collected into root `artifacts/`, Cloudmake
+uses retained provenance to recognize an unchanged legacy collection and fails
+before remote transfer. Review and move/delete that directory or exclude
+`/artifacts/`. If the exact known contents truly are project source, explicitly
+accept that fingerprint with `--accept-legacy-artifacts-as-source`. This guard
+preserves project ownership of the name without silently uploading old output.
 
 Negated patterns are deliberately unsupported. This keeps archive and rsync
 selection consistent instead of allowing the two transports to interpret the
@@ -87,7 +94,7 @@ Kaggle notebooks apply the same archive validation before execution.
 Downloaded artifact archives are treated as untrusted. Absolute paths,
 directory traversal, links, devices, and other special files are rejected. New
 artifacts are extracted into a staging directory, so an invalid or interrupted
-download leaves the previous `artifacts/` directory intact.
+download leaves the previous `.cloudmake/artifacts/` directory intact.
 
 Extraction is rejected before writing when configured file-count, total-size,
 per-file-size, compressed-size, or expansion-ratio budgets are exceeded. A

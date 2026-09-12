@@ -11,7 +11,7 @@ SCRIPT = PROJECT_ROOT / "tools" / "source_fingerprint.py"
 
 def fingerprint(directory: Path) -> str:
     result = run_command(["python3", SCRIPT], cwd=directory)
-    value = result.stdout.strip()
+    value = result.stdout.strip().splitlines()[-1]
     assert len(value) == 64
     int(value, 16)
     return value
@@ -51,12 +51,22 @@ def test_fingerprint_ignores_only_cloudmake_owned_root_paths(tmp_path: Path) -> 
     (tmp_path / "kept.txt").write_text("kept\n", encoding="utf-8")
     initial = fingerprint(tmp_path)
 
-    for name in (".git", ".cloud-state", "artifacts"):
+    for name in (".git", ".cloud-state", ".cloudmake"):
         directory = tmp_path / name
         directory.mkdir()
         (directory / "changing.txt").write_text(name, encoding="utf-8")
     assert fingerprint(tmp_path) == initial
 
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "source.txt").write_text("artifacts", encoding="utf-8")
+    with_artifacts = fingerprint(tmp_path)
+    assert with_artifacts != initial
+
+    hidden_artifacts = tmp_path / ".artifacts"
+    hidden_artifacts.mkdir()
+    (hidden_artifacts / "source.txt").write_text(".artifacts", encoding="utf-8")
+    assert fingerprint(tmp_path) != with_artifacts
     for name in ("build", ".venv", "__pycache__", ".pytest_cache"):
         directory = tmp_path / "any-layout" / name
         directory.mkdir(parents=True)
@@ -64,6 +74,20 @@ def test_fingerprint_ignores_only_cloudmake_owned_root_paths(tmp_path: Path) -> 
     (tmp_path / "run_output.ipynb").write_text("generated", encoding="utf-8")
 
     assert fingerprint(tmp_path) != initial
+
+
+def test_selected_root_artifacts_warns_about_legacy_collection_migration(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Makefile").write_text("all:\n\t@true\n", encoding="utf-8")
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "report.txt").write_text("output\n", encoding="utf-8")
+
+    result = run_command(["python3", SCRIPT], cwd=tmp_path)
+
+    assert "artifacts/ is selected as ordinary source" in result.stdout
+    assert ".cloudmakeignore" in result.stdout
 
 
 def test_fingerprint_includes_empty_directories_and_names(tmp_path: Path) -> None:

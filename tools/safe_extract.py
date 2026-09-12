@@ -91,6 +91,10 @@ def extract_atomically(
     max_ratio: float,
 ) -> None:
     archive_path = archive_path.resolve()
+    if destination.parent.is_symlink():
+        raise UnsafeArchive(
+            f"artifact destination parent must not be a symlink: {destination.parent}"
+        )
     if destination.is_symlink():
         raise UnsafeArchive(f"artifact destination must not be a symlink: {destination}")
     if destination.exists() and not destination.is_dir():

@@ -5,6 +5,21 @@ once a version is published as a GitHub release.
 
 ## Unreleased (2.4.0 candidate)
 
+- Move explicit collection output from the generic root `artifacts/` name to
+  `.cloudmake/artifacts/`. Root `artifacts/` and `.artifacts/` are ordinary
+  project source again; only the Cloudmake-qualified directory is reserved.
+  This corrects the last project-namespace exception to intrusion-free adoption
+  before the 2.4 contract is released. Existing root `artifacts/` output is not
+  deleted or migrated automatically. If it exactly matches a collection receipt
+  from an older local Cloudmake run, remote transfer fails closed until the
+  operator moves/deletes it, excludes `/artifacts/` in `.cloudmakeignore`, or
+  explicitly accepts the exact provenance-bound fingerprint as project source.
+- Add an invocation-only `--idempotent` semantic assertion and the separate
+  `--replay-for=DURATION` delivery-policy surface. Existing targets remain
+  at-most-once. Every current backend rejects replay before provider contact
+  because none yet proves non-overlapping attempts across every ambiguous
+  boundary; provenance nevertheless records target semantics, delivery policy,
+  ordered attempt evidence, and the derived `replay_safe` decision.
 - Replace global Dev Container field rejection with capability negotiation:
   the parser emits a closed required-behavior set and each backend declares
   separate adapter and Dev Container implementation capabilities. One

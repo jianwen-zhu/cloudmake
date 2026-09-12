@@ -6,11 +6,13 @@ BACKEND_PRODUCT_STATUS := supported
 BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := provider-managed
 BACKEND_WORKSPACE_DURABILITY := stop-persistent
+BACKEND_TARGET_REPLAY := none
 BACKEND_OCI_NATIVE := yes
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts cancel native-persistence oci-runner devcontainer port-forward
 BACKEND_OCI_RUNTIMES := none
-BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := image-digest environment host-requirements forward-ports security-policy
-BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := none
+BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := none
+BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := image-digest environment host-requirements forward-ports security-policy
+BACKEND_DEVCONTAINER_REALIZATION_ORDER := native
 BACKEND_INTERNET_INBOUND := conditional
 BACKEND_INTERNET_OUTBOUND := yes
 

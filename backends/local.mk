@@ -8,11 +8,13 @@ BACKEND_PRODUCT_STATUS := supported
 BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := local
 BACKEND_WORKSPACE_DURABILITY := host-persistent
+BACKEND_TARGET_REPLAY := none
 BACKEND_OCI_NATIVE := no
 BACKEND_CAPABILITIES := sync execute status artifacts environment-profile native-persistence oci-runner devcontainer port-forward
 BACKEND_OCI_RUNTIMES := docker podman nerdctl proot
 BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := image-digest environment host-requirements forward-ports cdi security-policy
 BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := image-digest image-tag image-build features lifecycle-create user-selection environment host-requirements workspace-layout process-control security-policy
+BACKEND_DEVCONTAINER_REALIZATION_ORDER := adapter native
 BACKEND_INTERNET_INBOUND := inherited
 BACKEND_INTERNET_OUTBOUND := inherited
 

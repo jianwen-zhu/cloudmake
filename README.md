@@ -246,7 +246,7 @@ targets wake or reuse the named resource while its `/workspaces` tree avoids
 checkpoint transfer, and a selected OCI image becomes the native Codespaces
 workstation environment instead of a nested container. Cloudmake 2.3 makes a
 fail-closed subset of the standard Dev Container configuration the portable
-workstation contract across qualified backends, retaining `--image` as its
+workstation contract across supported backends, retaining `--image` as its
 minimal intrusion-free shorthand. Cloudmake 2.4 adds a single-node Google
 Compute Engine remote-workstation backend. It will wake and reuse an already
 provisioned VM, preserve its workspace on an attached persistent disk, run the same Dev
@@ -358,13 +358,14 @@ the [project contract](docs/project-contract.md):
 | The target named in `cloudmake TARGET` | Must exist or be resolvable by that Makefile. |
 | The target named in `cloudmake --collect DIR TARGET` | Has ordinary Make semantics; after success cloudmake collects project-relative `DIR`. |
 | Local `src/`, `build/`, or `output/` directories | Not required. |
-| Root `.git/`, `.cloud-state/`, and `artifacts/` | Reserved from source synchronization as metadata, tool state, and downloaded output. |
+| Root `.git/`, `.cloud-state/`, and `.cloudmake/` | Reserved from source synchronization as metadata, legacy tool state, and namespaced downloaded output. |
 
 Cloudmake injects no Make variables. The remote invocation contains the exact
 target plus only user-supplied `NAME=value` assignments. For
 `--collect DIR TARGET`, the project chooses the project-relative directory and
 populates it through its normal rules. After success, cloudmake creates or
-transactionally replaces the local `artifacts/` directory with those contents.
+transactionally replaces the local `.cloudmake/artifacts/` directory with those
+contents.
 
 ### Launcher and engine boundary
 
@@ -387,7 +388,7 @@ backend-variable injection on that path. A remote backend must preserve the same
 target and user-supplied assignments while adding only the transfer and lifecycle
 machinery its provider requires. Cloudmake still records local provenance, and
 `--collect DIR TARGET` still materializes the selected directory safely into the
-Cloudmake-owned `artifacts/` destination.
+Cloudmake-owned `.cloudmake/artifacts/` destination.
 
 Every positional name is passed through to the project:
 
@@ -432,9 +433,16 @@ configuration, and downloaded provider output under the user's configuration,
 state, and cache directories. Project identity is derived from the absolute local
 path.
 
-Cloudmake owns the project's local `artifacts/` directory. A successful
+Cloudmake owns the project's local `.cloudmake/artifacts/` directory. A successful
 `--collect DIR TARGET` creates or transactionally replaces it with the selected
 remote directory; the project does not need to create the local destination.
+Root `artifacts/` is ordinary project source. During migration, if it still
+exactly matches output recorded by an older Cloudmake collection, remote source
+transfer fails before provider contact. Review that directory, then move or
+delete it, exclude `/artifacts/` in `.cloudmakeignore`, or explicitly accept its
+exact known fingerprint as source with
+`--accept-legacy-artifacts-as-source`. See the
+[artifact collection migration preflight](docs/artifact-collection-migration.md).
 
 Configuration precedence is:
 
@@ -658,7 +666,7 @@ Common options:
 | `--gpu`, `--gpu=TYPE` | Select the default or a named GPU where supported; save it for the selected project unless `-b` is an explicit one-off override. |
 | `--cpu` | Select a CPU runtime; save it for the selected project under the same rule. |
 | `--persist`, `--no-persist` | Enable or disable the selected backend's persistent-workspace mode and save the choice for later targets. The older `--checkpoint` and `--no-checkpoint` spellings remain compatible aliases. |
-| `--devcontainer[=PATH]` | Select a capability-qualified standard Dev Container workstation; discover the standard project path when `PATH` is omitted. |
+| `--devcontainer[=PATH]` | Select a capability-negotiated standard Dev Container workstation; discover the standard project path when `PATH` is omitted. |
 | `--image REF@sha256:DIGEST` | Select a digest-pinned OCI image as the project's Make execution environment; this remains the image-only shorthand. |
 | `--device CDI_NAME` | Request a CDI qualified device such as `nvidia.com/gpu=all`; repeat for multiple devices. |
 | `--no-devices` | Clear saved CDI requests while retaining the selected image. |
@@ -737,8 +745,8 @@ implementation. Project targets run directly in the selected project directory.
 no-op or readiness semantics. `--environment` characterizes the local machine
 using the same vocabulary as Colab. There is no provider interface, separate
 shell, or fetch operation.
-Use `--collect DIR TARGET` when a uniform `artifacts/` materialization is useful
-locally as well as remotely.
+Use `--collect DIR TARGET` when a uniform `.cloudmake/artifacts/`
+materialization is useful locally as well as remotely.
 
 The local backend also supports the managed OCI runner when Docker, Podman,
 nerdctl, or the `skopeo` + `umoci` + PRoot fallback is installed. Cloudmake
@@ -899,7 +907,7 @@ target failures retain their exit status and output.
 Local and SSH backends prefer Docker, Podman, then nerdctl, with a PRoot
 fallback. Codespaces instead declares `oci-native=yes`: the digest-pinned image
 is adapted into the provider's dev container and Make runs directly in that
-environment. Colab declares exactly one provider-qualified OCI
+environment. Colab declares exactly one dynamically qualified OCI
 runtime: Cloudmake's `crun` adapter. It materializes the digest-pinned rootfs,
 uses the namespace and cgroup profile established by live qualification, and
 applies NVIDIA devices and host driver libraries from a generated CDI
@@ -935,7 +943,7 @@ remote-workstation usability evaluation is preserved as a
 [historical backend report](docs/historical/kaggle-notebook.md), not as a
 positive qualification claim.
 
-#### Capability-qualified Dev Container workstation
+#### Capability-negotiated Dev Container workstation
 
 Cloudmake 2.4 aligns the maintained backends on a standard project configuration
 without replacing the target-first Make interface. Opt in once with
@@ -944,21 +952,23 @@ or `.devcontainer.json`, while an explicit project-relative path is accepted.
 Configuration presence alone never changes execution, preserving existing
 projects and prior CLI behavior.
 
-The cross-backend portable profile consumes a digest-pinned `image`, literal
+The portable contract vocabulary includes a digest-pinned `image`, literal
 `containerEnv` and `remoteEnv`, basic CPU/memory/storage/GPU
 `hostRequirements`, loopback-only `forwardPorts`, and CDI names in
-`customizations.cloudmake.devices`. Richer standard fields become semantic
-requirements. The local backend can select the
+`customizations.cloudmake.devices`; each backend must still qualify every
+requested behavior. Richer standard fields become semantic requirements. The
+local backend can select the
 reference Dev Container CLI over Docker for tagged images, builds, Features,
 create-phase lifecycle commands, and user/workspace behavior. Restricted
-backends reject requirements they cannot honor before provider contact.
+backends reject static incompatibilities before provider contact and live
+machine incompatibilities after allocation but before Make.
 Compose, secrets, arbitrary mounts/run arguments, added capabilities, and
 privileged mode remain fail-closed. This is capability negotiation, not a
 parallel project format.
 
 Codespaces realizes the profile as its provider-native Dev Container. Local and
 SSH hosts dynamically qualify Docker first, then Podman, nerdctl, and the
-rootless PRoot compatibility path. Colab uses its single qualified `crun`
+rootless PRoot compatibility path. Colab uses its single declared `crun`
 profile. Host requirements are checked on the actual execution machine before
 Make. SSH ports exist only as loopback tunnels for the foreground target; they
 are not public ingress. The Colab notebook backend rejects `forwardPorts`
@@ -1585,11 +1595,11 @@ The three service-adapter roles are visible in each backend's contract:
 
 | Backend | Status | Lifecycle control | Workspace durability | OCI native | Dev Container | Persistence adapter | Bundle-runtime adapter | Source transfer |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `local` | Supported | Local | Host-persistent | No | Adapter + qualified native CLI | Native tree; no transfer | Docker, Podman, nerdctl, or CPU PRoot; reference Dev Container CLI over Docker | None |
-| `colab-notebook` | Supported | Provider-managed | Ephemeral | No | Adapter; no ports | Encrypted Drive checkpoint | Qualified `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
-| `kaggle-notebook` | Deprecated; not recommended | Per target | Ephemeral | No | Not qualified | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
+| `local` | Supported | Local | Host-persistent | No | Adapter + native CLI | Native tree; no transfer | Docker, Podman, nerdctl, or CPU PRoot; reference Dev Container CLI over Docker | None |
+| `colab-notebook` | Supported | Provider-managed | Ephemeral | No | Adapter; no ports | Encrypted Drive checkpoint | Dynamically validated `crun`, including NVIDIA CDI | Fingerprinted archive via Colab API |
+| `kaggle-notebook` | Deprecated; not recommended | Per target | Ephemeral | No | No | Experimental alternating private output | Experimental PRoot; NVIDIA CDI subset | Source embedded in private notebook |
 | `codespaces-ssh` | Supported | Provider-managed | Stop-persistent | Yes | Provider-native | Native provider workspace | Provider dev container; CPU | Incremental rsync |
-| `gcp-compute-ssh` | Unqualified 2.4 candidate | Provider-managed | Stop-persistent | No | Adapter | Attached persistent disk (Persistent Disk or machine-compatible Hyperdisk) | Docker, Podman, nerdctl, or PRoot; CDI on qualified GPU host | Incremental rsync through `gcloud compute ssh` |
+| `gcp-compute-ssh` | Unqualified 2.4 candidate | Provider-managed | Stop-persistent | No | Adapter | Attached persistent disk (Persistent Disk or machine-compatible Hyperdisk) | Docker, Podman, nerdctl, or PRoot; CDI on a dynamically validated GPU host | Incremental rsync through `gcloud compute ssh` |
 | `colab-ssh` | Deprecated | Provider-managed | Ephemeral | No | Adapter | Unsupported | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
 | `host-ssh` | Supported | Externally managed | Host-persistent | No | Adapter | Host filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
 | `lightning-studio-ssh` | Unqualified | Provider-managed | Stop-persistent | No | Adapter | Studio filesystem | Docker, Podman, nerdctl, or CPU PRoot | Incremental rsync |
@@ -1648,10 +1658,10 @@ datasets/
 local-secrets.json
 ```
 
-Only the root `.git/`, `.cloud-state/`, and `artifacts/` paths are excluded
+Only the root `.git/`, `.cloud-state/`, and `.cloudmake/` paths are excluded
 automatically. Cloudmake does not infer that names such as `build/`, `.venv/`,
-`src/`, or `*_output.ipynb` are disposable; exclude them explicitly when that is
-correct for the project.
+`src/`, or `*_output.ipynb` are disposable; exclude them explicitly when that
+is correct for the project.
 
 Before transfer, Cloudmake refuses unmistakable private-key blocks and GitHub
 access-token forms. Credential-like filenames produce a warning. Exclude such
@@ -1665,7 +1675,7 @@ adjusting source limits, or recovering an interrupted operation.
 
 The launcher keeps state and cache data in user directories outside both
 repositories. Downloaded project output is extracted under the actual project's
-`artifacts/` directory. Artifact archives are bounded by configurable
+`.cloudmake/artifacts/` directory. Artifact archives are bounded by configurable
 member-count, total-size, per-file-size, compressed-size, and expansion-ratio
 limits before extraction.
 

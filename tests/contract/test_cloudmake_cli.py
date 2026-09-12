@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -93,6 +94,54 @@ def project_arguments(call: list[str]) -> list[str]:
     return json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
 
 
+def artifact_receipt(directory: Path) -> dict[str, object]:
+    digest = hashlib.sha256()
+    files = 0
+    total_bytes = 0
+    for path in sorted(directory.rglob("*"), key=lambda item: item.as_posix()):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(directory).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big") + relative)
+        files += 1
+        content = path.read_bytes()
+        total_bytes += len(content)
+        digest.update(content)
+    return {
+        "path": str(directory),
+        "fingerprint": digest.hexdigest(),
+        "files": files,
+        "total_bytes": total_bytes,
+    }
+
+
+def install_legacy_artifact_receipt(
+    project: Path,
+    environment: dict[str, str],
+    log: Path,
+    *,
+    fingerprint: str | None = None,
+) -> Path:
+    invoke(project, environment, "-b", "local", "build")
+    latest = next((Path(environment["CLOUDMAKE_STATE_HOME"]) / "projects").glob(
+        "*/runs/latest.json"
+    ))
+    legacy_artifacts = project / "artifacts"
+    legacy_artifacts.mkdir()
+    (legacy_artifacts / "private-result.txt").write_text(
+        "downloaded private output\n", encoding="utf-8"
+    )
+    receipt = artifact_receipt(legacy_artifacts)
+    if fingerprint is not None:
+        receipt["fingerprint"] = fingerprint
+    (latest.parent / "v1-legacy.json").write_text(
+        json.dumps({"schema": 1, "artifacts": receipt}) + "\n",
+        encoding="utf-8",
+    )
+    log.write_text("", encoding="utf-8")
+    return latest.parent.parent
+
+
 def test_no_arguments_is_read_only_and_does_not_invoke_engine(
     tmp_path: Path, fake_bin: Path
 ) -> None:
@@ -116,6 +165,71 @@ def test_help_documents_bounded_capacity_retry(
 
     assert "--retry-for=DURATION" in result.stdout
     assert "cloudmake --retry-for=30m --start" in result.stdout
+    assert "--idempotent" in result.stdout
+    assert "--replay-for=DURATION" in result.stdout
+    assert "--accept-legacy-artifacts-as-source" in result.stdout
+    assert "at-most-once by default" in result.stdout
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--replay-for=30s", "build"),
+        ("--idempotent", "--start"),
+        ("--idempotent",),
+        ("--idempotent", "--replay-for=0s", "build"),
+        ("--idempotent", "--replay-for=25h", "build"),
+        ("--accept-legacy-artifacts-as-source", "--version"),
+    ],
+)
+def test_invalid_target_semantic_options_fail_before_engine_use(
+    tmp_path: Path, fake_bin: Path, arguments: tuple[str, ...]
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(project, environment, *arguments, check=False)
+
+    assert result.returncode == 2
+    assert engine_calls(log) == []
+
+
+@pytest.mark.parametrize(
+    ("backend", "extra"),
+    [
+        ("local", ()),
+        ("colab", ()),
+        ("kaggle", ()),
+        ("codespaces", ()),
+        ("colab-ssh", ()),
+        ("ssh", ("--host", "lab-gpu")),
+        ("lightning", ()),
+    ],
+)
+def test_backends_without_fencing_reject_replay_before_provider_contact(
+    tmp_path: Path,
+    fake_bin: Path,
+    backend: str,
+    extra: tuple[str, ...],
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(
+        project,
+        environment,
+        "-b",
+        backend,
+        *extra,
+        "--idempotent",
+        "--replay-for=30s",
+        "build",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "cannot prove fenced, non-overlapping target attempts" in result.stdout
     assert engine_calls(log) == []
 
 
@@ -576,7 +690,7 @@ def test_unqualified_deprecated_backend_rejects_devcontainer_before_dispatch(
     )
 
     assert result.returncode == 2
-    assert "has not qualified" in result.stdout
+    assert "does not declare Dev Container support" in result.stdout
     assert engine_calls(log) == []
 
 
@@ -692,6 +806,36 @@ def test_codespaces_selection_persists_native_image_and_uses_resource_lock(
     )
     assert base64.urlsafe_b64decode(encoded_image).decode() == image
     assert_remote_target(call, "analyze")
+
+
+def test_codespaces_devcontainer_is_selected_as_provider_native_realization(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    environment["CODESPACE"] = "stable-workstation"
+    configuration = project / ".devcontainer" / "devcontainer.json"
+    configuration.parent.mkdir()
+    configuration.write_text(
+        json.dumps(
+            {
+                "image": "registry.example/science/tools@sha256:" + "c" * 64,
+                "remoteEnv": {"MODE": "native"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    invoke(project, environment, "--use", "codespaces", "--devcontainer")
+    invoke(project, environment, "analyze")
+
+    call = engine_calls(log)[0]
+    assert_assignment(call, "CLOUDMAKE_RUNNER", "oci")
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["runner"]["devcontainer"]["engine"] == "native"
+    assert provenance["runner"]["devcontainer"]["adapter_capabilities"] == []
+    assert "image-digest" in provenance["runner"]["devcontainer"]["native_capabilities"]
 
 
 def test_native_clears_saved_oci_runner_without_changing_make_surface(
@@ -842,6 +986,7 @@ def test_backends_reports_persistence_mode_for_every_backend(
         assert rows[backend][-5] == "yes"
     assert rows["local"][-4] == "adapter+native"
     assert rows["colab-notebook"][-4] == "adapter"
+    assert rows["codespaces-ssh"][-4] == "native"
     assert "loopback" in rows["host-ssh"]
     assert "loopback" in rows["codespaces-ssh"]
     assert "loopback" in rows["local"]
@@ -1560,7 +1705,59 @@ def test_local_backend_is_a_direct_make_passthrough_with_provenance(
     assert record["resource_id"] == str(project.resolve())
     assert record["source"] == {"mode": "local-working-tree"}
     assert record["assignments"][0]["name"] == "SIZE"
+    assert record["target_submission"] == "submitted"
+    assert record["target_semantic"] == {
+        "idempotency": "unknown",
+        "scope": "invocation",
+    }
+    assert record["delivery_policy"] == {"mode": "at-most-once", "max_attempts": 1}
+    assert record["attempts"][0]["outcome"] == "succeeded"
+    assert record["retry_safe"] is False
+    assert record["replay_safe"] is False
     assert "large" not in latest.read_text(encoding="utf-8")
+
+
+def test_idempotency_assertion_is_invocation_only_and_never_replays_failure(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    environment["CLOUDMAKE_TEST_ENGINE_EXIT"] = "7"
+
+    result = invoke(
+        project,
+        environment,
+        "-b",
+        "local",
+        "--idempotent",
+        "release candidate's [gpu]",
+        "MESSAGE=hello world",
+        "EMPTY=",
+        check=False,
+    )
+
+    assert result.returncode == 7
+    assert engine_calls(log) == [
+        [
+            "-f",
+            "Makefile",
+            "release candidate's [gpu]",
+            "MESSAGE=hello world",
+            "EMPTY=",
+        ]
+    ]
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    record = json.loads(latest.read_text(encoding="utf-8"))
+    assert record["target_semantic"] == {
+        "idempotency": "asserted",
+        "scope": "invocation",
+    }
+    assert record["delivery_policy"] == {"mode": "at-most-once", "max_attempts": 1}
+    assert len(record["attempts"]) == 1
+    assert record["attempts"][0]["target_submission"] == "submitted"
+    assert record["attempts"][0]["outcome"] == "target_failed"
+    assert record["attempts"][0]["exit_code"] == 7
+    assert record["replay_safe"] is False
 
 
 def test_local_oci_runner_preflights_then_submits_target_once(
@@ -1678,9 +1875,12 @@ def test_local_collect_runs_target_and_transactionally_materializes_artifacts(
         "fail:\n\t@false\n",
         encoding="utf-8",
     )
-    artifacts = project / "artifacts"
-    artifacts.mkdir()
+    artifacts = project / ".cloudmake" / "artifacts"
+    artifacts.mkdir(parents=True)
     (artifacts / "previous").write_text("keep", encoding="utf-8")
+    project_artifacts = project / "artifacts"
+    project_artifacts.mkdir()
+    (project_artifacts / "owned-by-project").write_bytes(b"project artifact\x00\xff")
     environment = {
         "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
         "CLOUDMAKE_STATE_HOME": str(tmp_path / "state"),
@@ -1699,6 +1899,10 @@ def test_local_collect_runs_target_and_transactionally_materializes_artifacts(
 
     assert (artifacts / "result").read_text(encoding="utf-8") == "fresh"
     assert not (artifacts / "previous").exists()
+    assert (project_artifacts / "owned-by-project").read_bytes() == b"project artifact\x00\xff"
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["artifacts"]["path"] == str(artifacts)
 
     (artifacts / "keep").write_text("keep", encoding="utf-8")
     failed = invoke(
@@ -1713,6 +1917,138 @@ def test_local_collect_runs_target_and_transactionally_materializes_artifacts(
     )
     assert failed.returncode != 0
     assert (artifacts / "keep").read_text(encoding="utf-8") == "keep"
+    assert (project_artifacts / "owned-by-project").read_bytes() == b"project artifact\x00\xff"
+
+
+def test_known_legacy_collection_is_not_uploaded_without_migration(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    invoke(project, environment, "-b", "local", "build")
+    log.unlink(missing_ok=True)
+    legacy = project / "artifacts"
+    legacy.mkdir()
+    content = b"private prior output\n"
+    (legacy / "report.txt").write_bytes(content)
+    digest = hashlib.sha256()
+    relative = b"report.txt"
+    digest.update(len(relative).to_bytes(8, "big") + relative)
+    digest.update(content)
+    runs = next((tmp_path / "state" / "projects").glob("*/runs"))
+    (runs / "legacy.json").write_text(
+        json.dumps(
+            {
+                "artifacts": {
+                    "path": str(legacy),
+                    "fingerprint": digest.hexdigest(),
+                    "files": 1,
+                    "total_bytes": len(content),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    blocked = invoke(project, environment, "-b", "colab", "build", check=False)
+
+    assert blocked.returncode == 2
+    assert "exactly matches prior Cloudmake collection provenance" in blocked.stdout
+    assert "may contain private downloaded output" in blocked.stdout
+    assert "add /artifacts/ to .cloudmakeignore" in blocked.stdout
+    assert engine_calls(log) == []
+
+    (project / ".cloudmakeignore").write_text("/artifacts/\n", encoding="utf-8")
+    invoke(project, environment, "-b", "colab", "build")
+    assert len(engine_calls(log)) == 1
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [("--collect", "dist", "build"), ("--fetch",)],
+)
+def test_artifact_materialization_rejects_a_symlinked_reserved_namespace(
+    tmp_path: Path, fake_bin: Path, arguments: tuple[str, ...]
+) -> None:
+    project = make_project(tmp_path / "project")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (project / ".cloudmake").symlink_to(outside, target_is_directory=True)
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = invoke(
+        project,
+        environment,
+        "-b",
+        "local",
+        *arguments,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "reserved Cloudmake namespace must not be a symlink" in result.stdout
+    assert engine_calls(log) == []
+    assert list(outside.iterdir()) == []
+
+
+def test_explicit_legacy_source_acceptance_is_bound_to_exact_fingerprint(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    state_root = install_legacy_artifact_receipt(project, environment, log)
+
+    invoke(
+        project,
+        environment,
+        "-b",
+        "colab",
+        "--accept-legacy-artifacts-as-source",
+        "build",
+    )
+
+    acceptance = state_root / "migrations" / "legacy-artifacts-source.json"
+    accepted = json.loads(acceptance.read_text(encoding="utf-8"))
+    assert accepted["fingerprint"] == artifact_receipt(project / "artifacts")[
+        "fingerprint"
+    ]
+    assert acceptance.stat().st_mode & 0o077 == 0
+    log.write_text("", encoding="utf-8")
+    invoke(project, environment, "-b", "colab", "build")
+    assert len(engine_calls(log)) == 1
+
+    (project / "artifacts" / "private-result.txt").write_text(
+        "changed output\n", encoding="utf-8"
+    )
+    log.write_text("", encoding="utf-8")
+    # A changed directory no longer matches the prior collection receipt and is
+    # therefore ordinary project source; the old acceptance does not bless it.
+    invoke(project, environment, "-b", "colab", "build")
+    assert len(engine_calls(log)) == 1
+
+
+def test_forged_legacy_receipt_cannot_be_explicitly_accepted(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+    install_legacy_artifact_receipt(
+        project, environment, log, fingerprint="0" * 64
+    )
+
+    result = invoke(
+        project,
+        environment,
+        "-b",
+        "colab",
+        "--accept-legacy-artifacts-as-source",
+        "build",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "requires an exact known legacy Cloudmake collection receipt" in result.stdout
+    assert engine_calls(log) == []
 
 
 def test_one_off_backend_does_not_replace_saved_preference(

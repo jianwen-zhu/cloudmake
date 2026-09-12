@@ -18,7 +18,7 @@ SCHEMA_VERSION = 1
 EXCLUDED_ROOTS = {
     ".git",
     ".cloud-state",
-    "artifacts",
+    ".cloudmake",
 }
 SECRET_SCAN_BYTES = 2 * 1024 * 1024
 SECRET_PATTERNS = (
@@ -264,6 +264,13 @@ def main() -> int:
 
     root = arguments.root.expanduser().resolve()
     manifest = scan(root)
+    if "artifacts" in manifest["entries"]:
+        print(
+            "[cloudmake] Warning: project-root artifacts/ is selected as ordinary "
+            "source. If it contains output collected by Cloudmake 2.3 or earlier, "
+            "exclude /artifacts/ in .cloudmakeignore before remote transfer.",
+            file=sys.stderr,
+        )
     blocked_secrets, secret_warnings = scan_secrets(root, manifest)
     for warning in secret_warnings[:10]:
         print(f"[cloudmake] Warning: {warning}", file=sys.stderr)

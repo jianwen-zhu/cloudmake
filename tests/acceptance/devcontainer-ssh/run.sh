@@ -89,8 +89,8 @@ wait "$serve_pid"
 cat "$evidence/serve.log"
 
 run_logged collect "$cloudmake" -C "$project" --collect dist export-artifact
-test -f "$project/artifacts/result.txt"
-grep 'devcontainer-ssh-ok' "$project/artifacts/result.txt" >/dev/null
+test -f "$project/.cloudmake/artifacts/result.txt"
+grep 'devcontainer-ssh-ok' "$project/.cloudmake/artifacts/result.txt" >/dev/null
 if [ -n "${CLOUDMAKE_EXPECT_RUNTIME:-}" ]; then
 	grep "runner=oci runtime=$CLOUDMAKE_EXPECT_RUNTIME" "$evidence/verify.log" >/dev/null
 fi

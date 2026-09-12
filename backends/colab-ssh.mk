@@ -8,11 +8,13 @@ BACKEND_PRODUCT_STATUS_REASON := paid Colab SSH duplicates host SSH without prov
 BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := provider-managed
 BACKEND_WORKSPACE_DURABILITY := ephemeral
+BACKEND_TARGET_REPLAY := none
 BACKEND_OCI_NATIVE := no
 BACKEND_CAPABILITIES := sync execute status incremental-sync shell artifacts gpu cancel oci-runner devcontainer port-forward
 BACKEND_OCI_RUNTIMES := docker podman nerdctl proot
 BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := image-digest environment host-requirements forward-ports cdi security-policy
 BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := none
+BACKEND_DEVCONTAINER_REALIZATION_ORDER := adapter
 BACKEND_INTERNET_INBOUND := no
 BACKEND_INTERNET_OUTBOUND := yes
 

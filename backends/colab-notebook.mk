@@ -7,11 +7,13 @@ BACKEND_PRODUCT_STATUS := supported
 BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := provider-managed
 BACKEND_WORKSPACE_DURABILITY := ephemeral
+BACKEND_TARGET_REPLAY := none
 BACKEND_OCI_NATIVE := no
 BACKEND_CAPABILITIES := sync execute status incremental-sync open artifacts gpu cancel capacity-retry persistent-workspace checkpoint-persistence environment-profile oci-runner devcontainer
 BACKEND_OCI_RUNTIMES := crun
 BACKEND_DEVCONTAINER_ADAPTER_CAPABILITIES := image-digest environment host-requirements cdi security-policy
 BACKEND_DEVCONTAINER_NATIVE_CAPABILITIES := none
+BACKEND_DEVCONTAINER_REALIZATION_ORDER := adapter
 BACKEND_INTERNET_INBOUND := no
 BACKEND_INTERNET_OUTBOUND := yes
 
