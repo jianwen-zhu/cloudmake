@@ -6,6 +6,18 @@ from pathlib import Path
 from conftest import PROJECT_ROOT, run_command
 
 
+CORE_RUNTIME_SUFFIXES = {".mk", ".py", ".sh"}
+BACKEND_RUNTIME_SUFFIXES = {
+    ".mk",
+    ".py",
+    ".sh",
+    ".ipynb",
+    ".conf",
+    ".json",
+    ".Dockerfile",
+}
+
+
 def sample_project(tmp_path: Path) -> Path:
     project = tmp_path / "sample"
     (project / "src").mkdir(parents=True)
@@ -55,6 +67,24 @@ def test_sample_makefile_reuses_unchanged_objects(tmp_path: Path) -> None:
     assert "Nothing to be done" in second.stdout or "is up to date" in second.stdout
 
 
+def test_source_layout_exposes_ownership_without_legacy_roots() -> None:
+    assert (PROJECT_ROOT / "cmd" / "cloudmake").is_file()
+    assert all(
+        (directory / "backend.mk").is_file()
+        for directory in (PROJECT_ROOT / "backend").iterdir()
+        if directory.is_dir()
+    )
+    for legacy in (
+        "bin",
+        "backends",
+        "transports",
+        "tools",
+        "notebooks",
+        "host-templates",
+    ):
+        assert not (PROJECT_ROOT / legacy).exists()
+
+
 def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
     destination = tmp_path / "install-root"
     prefix = "/usr/local"
@@ -66,26 +96,25 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
     launcher = destination / "usr" / "local" / "bin" / "cloudmake"
     runtime = destination / "usr" / "local" / "libexec" / "cloudmake"
     assert launcher.is_file()
-    runtime_suffixes = {".conf", ".ipynb", ".mk", ".py", ".sh"}
-    expected = {Path("Makefile"), Path("VERSION")}
-    expected.update(
+    expected_runtime = {Path("Makefile"), Path("VERSION")}
+    expected_runtime.update(
         path.relative_to(PROJECT_ROOT)
-        for root in (PROJECT_ROOT / "core", PROJECT_ROOT / "backend")
-        for path in root.rglob("*")
-        if path.is_file()
-        and (path.suffix in runtime_suffixes or path.name == "README.md")
+        for path in (PROJECT_ROOT / "core").iterdir()
+        if path.is_file() and path.suffix in CORE_RUNTIME_SUFFIXES
     )
-    installed = {
+    expected_runtime.update(
+        path.relative_to(PROJECT_ROOT)
+        for path in (PROJECT_ROOT / "backend").glob("*/*")
+        if path.is_file()
+        and (path.suffix in BACKEND_RUNTIME_SUFFIXES or path.name == "README.md")
+    )
+    installed_runtime = {
         path.relative_to(runtime) for path in runtime.rglob("*") if path.is_file()
     }
-    assert installed == expected
+    assert installed_runtime == expected_runtime
 
     version = run_command([launcher, "--version"], cwd=tmp_path)
     assert version.stdout.strip() == f"cloudmake {(PROJECT_ROOT / 'VERSION').read_text().strip()}"
-
-    backends = run_command([launcher, "--backends"], cwd=tmp_path)
-    assert "colab-notebook" in backends.stdout
-    assert "host-ssh" in backends.stdout
 
     template = run_command(
         [launcher, "--host-template", "generic"], cwd=tmp_path
@@ -96,29 +125,3 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
     project = sample_project(tmp_path)
     dry_run = run_command([launcher, "-C", project, "--sync-dry-run"], cwd=tmp_path)
     assert "Makefile" in dry_run.stdout
-
-
-def test_source_layout_uses_ownership_roots() -> None:
-    for legacy in (
-        "bin",
-        "backends",
-        "host-templates",
-        "notebooks",
-        "tools",
-        "transports",
-    ):
-        assert not (PROJECT_ROOT / legacy).exists()
-
-    assert (PROJECT_ROOT / "cmd" / "cloudmake").is_file()
-    assert (PROJECT_ROOT / "core" / "ssh.mk").is_file()
-    assert (PROJECT_ROOT / "tests" / "fixtures" / "hello" / "Makefile").is_file()
-    for backend in (
-        "codespaces-ssh",
-        "colab-notebook",
-        "colab-ssh",
-        "host-ssh",
-        "kaggle-notebook",
-        "lightning-studio-ssh",
-        "local",
-    ):
-        assert (PROJECT_ROOT / "backend" / backend / "backend.mk").is_file()

@@ -244,7 +244,7 @@ def test_launcher_defaults_legacy_api_1_replay_declaration_to_none(
 ) -> None:
     runtime = tmp_path / "legacy-runtime"
     shutil.copytree(PROJECT_ROOT, runtime)
-    descriptor = runtime / "backends" / "local.mk"
+    descriptor = runtime / "backend" / "local" / "backend.mk"
     descriptor.write_text(
         descriptor.read_text(encoding="utf-8").replace(
             "BACKEND_TARGET_REPLAY := none\n", ""
@@ -256,7 +256,7 @@ def test_launcher_defaults_legacy_api_1_replay_declaration_to_none(
 
     result = run_command(
         [
-            runtime / "bin" / "cloudmake",
+            runtime / "cmd" / "cloudmake",
             "-b",
             "local",
             "--idempotent",
@@ -278,7 +278,7 @@ def test_launcher_rejects_unknown_api_1_replay_declaration_before_engine_use(
 ) -> None:
     runtime = tmp_path / "invalid-runtime"
     shutil.copytree(PROJECT_ROOT, runtime)
-    descriptor = runtime / "backends" / "local.mk"
+    descriptor = runtime / "backend" / "local" / "backend.mk"
     descriptor.write_text(
         descriptor.read_text(encoding="utf-8").replace(
             "BACKEND_TARGET_REPLAY := none",
@@ -290,7 +290,7 @@ def test_launcher_rejects_unknown_api_1_replay_declaration_before_engine_use(
     environment, log = contract_environment(tmp_path, fake_bin)
 
     result = run_command(
-        [runtime / "bin" / "cloudmake", "-b", "local", "build"],
+        [runtime / "cmd" / "cloudmake", "-b", "local", "build"],
         cwd=project,
         env=environment,
         check=False,

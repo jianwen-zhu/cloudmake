@@ -17,6 +17,8 @@ documented migration preflight before upgrading.
   API mismatch before probing account access or allocating compute.
 - Clarify that Colab reuse is limited to the current live runtime and document
   the provider CLI's independent Python requirement for clean installations.
+- Document that the official Colab keep-alive daemon requires its client host
+  to remain awake and online for session reuse.
 - Record that UofT course projects own environment dependencies and that the
   teaching release does not rely on Dev Container functionality.
 

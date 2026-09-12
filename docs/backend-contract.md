@@ -144,8 +144,8 @@ Transports must not add convenience rules for project-like names such as
 only when they are supplied by the selected project's Makefile. Maintainer tests
 that exercise the engine directly must also enter project execution through
 `dispatch`, so the internal test surface cannot accidentally reintroduce a
-predefined project-target contract. `Makefile.build` is only Cloudmake's bundled
-sample project and does not define the public interface.
+predefined project-target contract. `tests/fixtures/hello/Makefile` is only
+Cloudmake's bundled sample project and does not define the public interface.
 
 ## Transport responsibilities
 

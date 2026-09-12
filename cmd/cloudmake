@@ -125,7 +125,7 @@ class UsageError(RuntimeError):
 
 def backend_target_replay(backend: str) -> str:
     """Read the static API-1 replay declaration without contacting a provider."""
-    descriptor = TOOL_ROOT / "backends" / f"{backend}.mk"
+    descriptor = TOOL_ROOT / "backend" / backend / "backend.mk"
     declarations = [
         line
         for line in descriptor.read_text(encoding="utf-8").splitlines()

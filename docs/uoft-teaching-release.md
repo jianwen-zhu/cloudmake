@@ -25,6 +25,13 @@ but a replacement runtime must be reproducible from the authoritative local
 project tree. The teaching line does not provide checkpoints, Drive-backed
 workspaces, managed restoration, or automatic student-state migration.
 
+Colab's official client maintains assignment activity from a daemon on the
+maintainer or student computer. Session reuse therefore requires that computer
+to remain awake and online. A host sleep can legitimately cause Colab to reclaim
+the runtime; the next Cloudmake request then starts a fresh stateless runtime.
+Qualification runs must use a bounded host-awake assertion and record any sleep
+event. Cloudmake does not assume ownership of the provider keep-alive daemon.
+
 Requested targets use at-most-once delivery by default. The invocation-only
 `--idempotent` declaration does not itself authorize another submission, and
 every backend in this release declares `target_replay=none`. UofT workflows do

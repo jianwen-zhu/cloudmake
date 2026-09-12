@@ -35,17 +35,24 @@ def execute_code_cells(notebook: dict, replacements: dict[str, str]) -> dict:
 
 def copy_sample_project(destination: Path) -> None:
     (destination / "src").mkdir(parents=True)
-    sample = PROJECT_ROOT / "tests" / "fixtures" / "hello"
-    shutil.copy2(sample / "Makefile", destination / "Makefile.build")
-    shutil.copy2(sample / "src" / "main.c", destination / "src" / "main.c")
+    shutil.copy2(
+        PROJECT_ROOT / "tests" / "fixtures" / "hello" / "Makefile",
+        destination / "Makefile.build",
+    )
+    shutil.copy2(
+        PROJECT_ROOT / "tests" / "fixtures" / "hello" / "src" / "main.c",
+        destination / "src" / "main.c",
+    )
 
 
 def source_archive() -> bytes:
     memory = io.BytesIO()
     with tarfile.open(fileobj=memory, mode="w:gz") as archive:
-        sample = PROJECT_ROOT / "tests" / "fixtures" / "hello"
-        archive.add(sample / "Makefile", arcname="Makefile.build")
-        archive.add(sample / "src", arcname="src")
+        archive.add(
+            PROJECT_ROOT / "tests" / "fixtures" / "hello" / "Makefile",
+            arcname="Makefile.build",
+        )
+        archive.add(PROJECT_ROOT / "tests" / "fixtures" / "hello" / "src", arcname="src")
     return memory.getvalue()
 
 

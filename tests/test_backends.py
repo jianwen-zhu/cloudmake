@@ -742,14 +742,20 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     assert "Source unchanged" not in first.stdout
     first_calls = calls(log, "colab")
     assert any(call[1] == "new" for call in first_calls)
-    assert any(call[1:3] == ["exec", "-s"] and call[-1].endswith("sync.py") for call in first_calls)
+    assert any(
+        call[1:3] == ["exec", "-s"]
+        and call[-1].endswith("backend/colab-notebook/sync.py")
+        for call in first_calls
+    )
     notebook_exec = next(
         call
         for call in first_calls
         if call[1] == "exec" and call[-1].endswith("runner.ipynb")
     )
     assert ".cloud-state/colab-notebook/cloud-build-prototype/runner.ipynb" in notebook_exec[-1]
-    assert not (prototype / "notebooks" / "colab_output.ipynb").exists()
+    assert not (
+        prototype / "backend" / "colab-notebook" / "colab_output.ipynb"
+    ).exists()
     assert all(
         call[call.index("--timeout") + 1] == "3600"
         for call in first_calls
@@ -1891,7 +1897,9 @@ def test_backend_contract_declares_lifecycle_and_capabilities(
 def test_api_1_backend_without_replay_declaration_defaults_to_none(
     prototype: Path,
 ) -> None:
-    (prototype / "backends" / "legacy-api1.mk").write_text(
+    descriptor = prototype / "backend" / "legacy-api1" / "backend.mk"
+    descriptor.parent.mkdir()
+    descriptor.write_text(
         "BACKEND_TRANSPORT := local\n"
         "BACKEND_API_VERSION := 1\n"
         "BACKEND_LIFECYCLE := local\n"
@@ -1908,7 +1916,9 @@ def test_api_1_backend_without_replay_declaration_defaults_to_none(
 
 
 def test_api_1_backend_rejects_unknown_replay_declaration(prototype: Path) -> None:
-    (prototype / "backends" / "unsafe-api1.mk").write_text(
+    descriptor = prototype / "backend" / "unsafe-api1" / "backend.mk"
+    descriptor.parent.mkdir()
+    descriptor.write_text(
         "BACKEND_TRANSPORT := local\n"
         "BACKEND_API_VERSION := 1\n"
         "BACKEND_LIFECYCLE := local\n"
