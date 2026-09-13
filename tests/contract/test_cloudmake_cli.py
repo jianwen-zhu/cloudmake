@@ -1034,6 +1034,7 @@ def test_backends_reports_persistence_mode_for_every_backend(
     assert "conditional" in rows["kaggle-notebook"]
     assert rows["colab-ssh"][1] == "deprecated"
     assert rows["lightning-studio-ssh"][1] == "unqualified"
+    assert rows["gcp-compute-ssh"][1] == "supported"
     assert rows["codespaces-ssh"][5] == "yes"
     assert "provider-native" in rows["codespaces-ssh"]
     assert "docker,podman,nerdctl,proot" in rows["host-ssh"]

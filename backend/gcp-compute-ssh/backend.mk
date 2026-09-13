@@ -3,8 +3,7 @@
 BACKEND_TRANSPORT := ssh
 BACKEND_ACCESS_CLASS := paid-tier
 BACKEND_API_VERSION := 1
-BACKEND_PRODUCT_STATUS := unqualified
-BACKEND_PRODUCT_STATUS_REASON := GCP Compute Engine passed the live e2-micro CPU gate; the paid G4 GPU/CDI gate remains pending
+BACKEND_PRODUCT_STATUS := supported
 BACKEND_SESSION_REUSE := yes
 BACKEND_LIFECYCLE_CONTROL := provider-managed
 BACKEND_WORKSPACE_DURABILITY := stop-persistent

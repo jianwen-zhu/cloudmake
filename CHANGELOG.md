@@ -47,7 +47,7 @@ published tag is rewritten by this decision.
 - Record source image, resolved registry digest or derived image ID, container
   ID, platform, preparation outcome, requirements, and confirmed target
   submission in provenance without taking custody of registry credentials.
-- Add an unqualified single-node Google Compute Engine backend for an existing
+- Add a supported, CPU-qualified single-node Google Compute Engine backend for an existing
   VM. It starts or reuses the named instance, adapts `gcloud compute ssh` to the
   common SSH/rsync transport, preserves generated work on attached Persistent
   Disk across stop/start, and never provisions or deletes infrastructure.
@@ -62,8 +62,8 @@ published tag is rewritten by this decision.
 - Add fake-provider coverage for lifecycle ambiguity, start/reuse/stop,
   native-disk persistence, the `gcloud` remote-shell adapter, real incremental
   rsync, target-at-most-once provenance, selection persistence, and credential
-  exclusion. The live `e2-micro` CPU gate passes; paid G4 GPU/CDI qualification
-  remains the release gate.
+  exclusion. The live `e2-micro` CPU gate passes. Paid G4 GPU/CDI enablement is
+  deferred to the 3.x security model and is not part of the 2.4 contract.
 - Wait independently for SSH/IAP readiness after Compute Engine reports a VM
   running, without syncing or submitting the project target during retries.
 - Propagate host cancellation through the foreground Make process tree so

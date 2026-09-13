@@ -39,7 +39,7 @@ User aliases are short; canonical names identify transport explicitly:
 | `colab` | `colab-notebook` | supported | Native Colab contents and kernel APIs | `checkpoint` |
 | `kaggle` | `kaggle-notebook` | deprecated | Private Kaggle notebook version | experimental `checkpoint` |
 | `codespaces` | `codespaces-ssh` | supported | SSH and rsync | `native` |
-| `gcp` | `gcp-compute-ssh` | unqualified | `gcloud compute ssh` and rsync | `native` |
+| `gcp` | `gcp-compute-ssh` | supported (CPU) | `gcloud compute ssh` and rsync | `native` |
 | `colab-ssh` | `colab-ssh` | deprecated | SSH and rsync | `unsupported` |
 | `ssh` | `host-ssh` | supported | User-managed SSH and rsync | `native` |
 | `lightning` | `lightning-studio-ssh` | unqualified | SSH and rsync | `native` |

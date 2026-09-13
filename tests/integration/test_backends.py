@@ -3383,7 +3383,7 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
         "deprecated"
         if backend in {"kaggle-notebook", "colab-ssh"}
         else "unqualified"
-        if backend in {"lightning-studio-ssh", "gcp-compute-ssh"}
+        if backend == "lightning-studio-ssh"
         else "supported"
     )
     assert f"product-status={expected_status}" in result.stdout
@@ -3393,8 +3393,6 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
         assert "product-status-reason=paid Colab SSH duplicates host SSH" in result.stdout
     elif backend == "lightning-studio-ssh":
         assert "product-status-reason=Lightning Studio has no retained" in result.stdout
-    elif backend == "gcp-compute-ssh":
-        assert "product-status-reason=GCP Compute Engine passed the live e2-micro" in result.stdout
     assert f"session-reuse={session_reuse}" in result.stdout
     assert f"lifecycle-control={lifecycle_control}" in result.stdout
     assert f"workspace-durability={workspace_durability}" in result.stdout

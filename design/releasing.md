@@ -18,10 +18,11 @@ pushed to `main` only after their gates pass.
    the bounded ECE326/ECE467 CPU-consumer gate documented in
    `tests/acceptance/codespaces-courses/README.md` and the authenticated inbound
    workload gate in `tests/acceptance/codespaces-network/README.md`.
-   GCP backend changes additionally require the local live `e2-micro` lifecycle,
-   persistence, Dev Container, and network gate plus a paid G4 driver/CDI/OCI
-   gate. Stop both instances after validation and retain their disks; never put
-   Google credentials in hosted CI.
+   GCP 2.4 backend changes additionally require the local live `e2-micro`
+   lifecycle, persistence, Dev Container, and network gate. Stop the instance
+   after validation and retain its disk; never put Google credentials in hosted
+   CI. A future 3.x change that enables GCP accelerators additionally requires
+   the paid G4 security, driver, CDI, OCI, billing, and cleanup gate.
 5. Confirm `git diff --check`, a clean working tree, and no active temporary
    compute.
 6. Create an annotated `v<VERSION>` tag and push `main` plus that tag.

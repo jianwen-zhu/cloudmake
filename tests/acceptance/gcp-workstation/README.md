@@ -24,7 +24,9 @@ Use `GCP_TUNNEL_THROUGH_IAP=yes` for an IAP-only VM. The configured image is
 public and digest-pinned. The VM still needs a qualified Docker, Podman,
 nerdctl, or restricted PRoot execution path.
 
-The paid G4 profile additionally proves real NVIDIA driver discovery, CDI
+The paid G4 profile is retained for the 3.x security qualification. It is not a
+2.4 release gate and carries no 2.4 release-quality claim. Once the 3.x security
+contract is firm, this profile must prove real NVIDIA driver discovery, CDI
 device injection, and immutable CUDA OCI execution:
 
 ```sh

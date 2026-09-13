@@ -104,18 +104,18 @@ Do not copy Lightning configuration, login tokens, or SSH keys into GitHub
 Actions. Until this gate succeeds and its evidence is retained for the current
 service and client, `lightning-studio-ssh` remains `unqualified`.
 
-The GCP 2.4 candidate has separate local-only CPU and paid G4 gates. They use an
-already-provisioned VM, retain its disk, and stop compute without creating or
+The supported GCP 2.4 CPU profile has a local-only gate. It uses an
+already-provisioned VM, retains its disk, and stops compute without creating or
 deleting infrastructure:
 
 ```sh
 CLOUDMAKE_TEST_LIVE_GCP=1 GCP_GATE=cpu \
   tests/acceptance/gcp-workstation/run.sh /tmp/cloudmake-gcp-cpu-evidence
-
-CLOUDMAKE_TEST_LIVE_GCP=1 GCP_GATE=g4 \
-  GCP_G4_IMAGE=REGISTRY/IMAGE@sha256:DIGEST \
-  tests/acceptance/gcp-workstation/run.sh /tmp/cloudmake-gcp-g4-evidence
 ```
+
+The same harness retains a paid `GCP_GATE=g4` path as a deferred 3.x security
+qualification target. CDI remains dynamically checked by the adapter, but the
+unexecuted G4 path carries no 2.4 release-quality claim.
 
 Set `GCP_PROJECT`, `GCP_ZONE`, and `GCP_INSTANCE` first. The detailed contract,
 billing warning, image requirements, and cleanup checks are in

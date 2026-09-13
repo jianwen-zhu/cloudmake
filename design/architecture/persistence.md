@@ -406,7 +406,7 @@ provisioned Compute Engine VM owns its Persistent Disk, so the backend's
 persistence operation is native and checkpoint transfer is a no-op. This keeps
 the Make invariant intact: durable state accelerates work, while source and the
 project's targets must still be sufficient to rebuild from scratch. See the
-[GCP candidate qualification](../qualification.md#gcp-compute-engine-candidate).
+[GCP qualification](../qualification.md#gcp-compute-engine).
 
 The feature branch now implements the local credential-store and
 encrypted-envelope path as well as the proven storage lifecycle. Focused

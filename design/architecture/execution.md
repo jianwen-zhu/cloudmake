@@ -200,7 +200,7 @@ is known.
 | `lightning-studio-ssh` | unqualified | same ordered remote selection | native CDI or validated PRoot translation |
 | `colab-ssh` | deprecated compatibility adapter | same ordered remote selection | native CDI or validated PRoot translation |
 | `codespaces-ssh` | supported | selected image becomes the provider dev container; no nested runtime | none; declared CPU-only backend |
-| `gcp-compute-ssh` | unqualified 2.4 candidate | Docker, Podman, nerdctl, then PRoot on the selected VM | native CDI where the installed runtime and host driver qualify |
+| `gcp-compute-ssh` | supported CPU profile | Docker, Podman, nerdctl, then PRoot on the selected VM | dynamically checked; paid G4 qualification deferred to the 3.x security model |
 | `colab-notebook` | supported for trusted Linux images | `skopeo` + `umoci` materialization and one dynamically qualified `crun` adapter | NVIDIA devices and driver mounts through generated CDI |
 | `kaggle-notebook` | deprecated experimental profile for trusted Linux images | `skopeo` + `umoci` materialization and PRoot | qualified NVIDIA `all` device translated from generated CDI; fail closed when absent |
 

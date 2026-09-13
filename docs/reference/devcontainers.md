@@ -181,7 +181,7 @@ inferred from the provider brand:
 | `colab-notebook` | supported | digest image, literal environment, host requirements, CDI, restrictive security policy | none |
 | `codespaces-ssh` | supported | none | digest image, literal environment, host requirements, loopback ports, restrictive security policy |
 | `host-ssh` | supported | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
-| `gcp-compute-ssh` | unqualified | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
+| `gcp-compute-ssh` | supported (CPU); G4 unqualified | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
 | `lightning-studio-ssh` | unqualified | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
 | `colab-ssh` | deprecated | digest image, literal environment, host requirements, loopback ports, CDI, restrictive security policy | none |
 | `kaggle-notebook` | deprecated | none | none |

@@ -229,10 +229,11 @@ This gate tests application-level use of the provider-native OCI environment;
 the separate workstation gate tests image transitions, stop/start reuse,
 artifact collection, neutral-anchor restoration, and confirmed shutdown.
 
-## GCP Compute Engine candidate
+## GCP Compute Engine
 
-> **Status:** Unqualified for the 2.4 release. The offline provider simulation
-> and live `e2-micro` CPU gate pass; the paid G4 GPU/CDI gate remains open.
+> **Status:** Qualified for 2.4 as a paid-tier CPU workstation. The offline
+> provider simulation and live `e2-micro` CPU gate pass. GPU/CDI is outside the
+> 2.4 contract.
 
 The `gcp-compute-ssh` adapter targets one already-provisioned, single-node VM.
 It starts or reuses the named instance, reaches it through the official
@@ -247,18 +248,18 @@ storage, transfer, accelerators, and excess compute may be billed. Cloud SDK
 authentication, OAuth material, service-account keys, and SSH keys remain with
 the official host clients.
 
-The retained CPU evidence covers start, incremental source reuse, Dev Container
+The retained 2.4 evidence covers start, incremental source reuse, Dev Container
 execution, attached-disk survival across stop/start, outbound access, bounded
 inbound forwarding, billing warnings, and clean stop. Release qualification
-still requires:
+requires unchanged local, Colab, Codespaces, and host-SSH regression gates plus
+a credential scan proving that no Google or SSH credential entered source,
+generated control files, logs, provenance, artifacts, or the remote workspace.
 
-1. a paid G4 gate proving driver and CDI qualification, immutable OCI
-   execution, target-at-most-once behavior, quota diagnostics, and stop without
-   disk deletion;
-2. unchanged local, Colab, Codespaces, and host-SSH regression gates; and
-3. a credential scan proving that no Google or SSH credential entered source,
-   generated control files, logs, provenance, artifacts, or the remote
-   workspace.
+The paid G4 harness is retained as a 3.x qualification target. Promoting that
+profile must first pass the 3.x security review of trusted images, host drivers,
+CDI device mapping, provider credentials, least privilege, billing bounds, and
+cleanup. The full VM and adapter retain dynamic CDI qualification; v2.4 simply
+makes no release-quality claim for the unexecuted G4 profile.
 
 The executable acceptance procedure lives with the harness under
 [`tests/acceptance/gcp-workstation`](../tests/acceptance/gcp-workstation/README.md).
