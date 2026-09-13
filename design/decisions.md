@@ -28,8 +28,8 @@ never moved, deleted, overwritten, symlinked, or dual-written by migration.
 Projects upgrading from an older release install both `.gitignore` and
 `.cloudmakeignore` protection for `.cloudmake/artifacts/` before changing the
 Cloudmake version. They retain any legacy `artifacts/` exclusion for rollback
-privacy. The stable migration procedure is in
-[`docs/guides/artifact-collection-migration.md`](../docs/guides/artifact-collection-migration.md).
+privacy. The stable behavior is specified under
+[source selection](../docs/reference/project-contract.md#source-selection).
 
 ## Persistence
 

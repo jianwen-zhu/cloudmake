@@ -299,7 +299,7 @@ The selection and target surface remains unchanged. Behavior-bearing fields are
 never silently discarded, tag references resolve to a digest for the lifetime
 of a logical workstation instance, and existing provider/runtime identities
 remain responsible for registry access. The normative design is the
-[Dev Container workstation contract](../../docs/reference/devcontainer-contract.md).
+[Dev Container workstation contract](../../docs/reference/devcontainers.md).
 
 The first declared richer implementation is local Docker through the reference Dev
 Container CLI. It supports tagged images, image builds, Features, create-phase

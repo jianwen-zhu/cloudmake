@@ -228,3 +228,37 @@ backend is qualified as CPU-only.
 This gate tests application-level use of the provider-native OCI environment;
 the separate workstation gate tests image transitions, stop/start reuse,
 artifact collection, neutral-anchor restoration, and confirmed shutdown.
+
+## GCP Compute Engine candidate
+
+> **Status:** Unqualified for the 2.4 release. The offline provider simulation
+> and live `e2-micro` CPU gate pass; the paid G4 GPU/CDI gate remains open.
+
+The `gcp-compute-ssh` adapter targets one already-provisioned, single-node VM.
+It starts or reuses the named instance, reaches it through the official
+`gcloud compute ssh` path, synchronizes source with rsync, executes one Make
+target, and retains generated work on the attached disk across stop/start. It
+does not create or delete projects, networks, VMs, disks, IAM bindings, billing
+accounts, or quota.
+
+GCP is classified as paid-tier even when a VM shape may qualify for a
+conditional free allowance. An active billing account is required, and IPv4,
+storage, transfer, accelerators, and excess compute may be billed. Cloud SDK
+authentication, OAuth material, service-account keys, and SSH keys remain with
+the official host clients.
+
+The retained CPU evidence covers start, incremental source reuse, Dev Container
+execution, attached-disk survival across stop/start, outbound access, bounded
+inbound forwarding, billing warnings, and clean stop. Release qualification
+still requires:
+
+1. a paid G4 gate proving driver and CDI qualification, immutable OCI
+   execution, target-at-most-once behavior, quota diagnostics, and stop without
+   disk deletion;
+2. unchanged local, Colab, Codespaces, and host-SSH regression gates; and
+3. a credential scan proving that no Google or SSH credential entered source,
+   generated control files, logs, provenance, artifacts, or the remote
+   workspace.
+
+The executable acceptance procedure lives with the harness under
+[`tests/acceptance/gcp-workstation`](../tests/acceptance/gcp-workstation/README.md).

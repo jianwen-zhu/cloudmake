@@ -108,7 +108,7 @@ valid; a batch backend starts from a fresh source snapshot.
 
 Preserving that workspace after an ephemeral VM disappears is the separate
 managed-checkpoint capability described in the
-[Day 2 tutorial](../tutorials/workspace-persistence-landscape.md). Its evolving
+[Day 2 tutorial](../tutorials/day2-workspace.md). Its evolving
 architecture and qualification history are retained in the maintainer design
 workspace rather than forming part of this recovery reference.
 

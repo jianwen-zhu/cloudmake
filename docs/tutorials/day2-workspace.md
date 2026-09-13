@@ -305,8 +305,9 @@ limits remain visible rather than being hidden behind the common `--persist`
 option.
 
 The result is a practical compromise: disposable compute can feel like a
-reusable workstation without making one remote filesystem irreplaceable. Day 3
-continues the remote-workstation story from this recovered execution workspace.
+reusable workstation without making one remote filesystem irreplaceable.
+[Day 3](day3-devcon.md) continues the remote-workstation story from this
+recovered execution workspace.
 
 The released operator contract is defined by this tutorial, the CLI help, and
 [Resilience and recovery](../reference/resilience.md). Credential handling is

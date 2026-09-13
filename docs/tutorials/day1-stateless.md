@@ -292,8 +292,9 @@ it into the local `.cloudmake/artifacts/` destination. Collection does not
 impose a common output layout on every Make project. Cloudmake never moves,
 deletes, overwrites, symlinks, or dual-writes root `artifacts/`.
 
-Before adopting this contract, follow the
-[artifact collection migration preflight](../guides/artifact-collection-migration.md).
+Older Cloudmake releases collected into root `artifacts/`. The current
+[source-selection contract](../reference/project-contract.md#source-selection)
+defines the fail-closed transition for that provenance-bound legacy output.
 
 ## What stateless execution can reuse
 
@@ -380,4 +381,4 @@ security model shared by the resulting remote-workstation layers.
 The intended outcome is simple: a local Make project can use remote hardware
 without becoming a provider-specific project. When repeated reconstruction
 becomes the dominant cost, continue to
-[Day 2: workspace persistence and checkpointing](workspace-persistence-landscape.md).
+[Day 2: workspace persistence and checkpointing](day2-workspace.md).

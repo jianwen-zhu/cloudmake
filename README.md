@@ -260,7 +260,7 @@ contracts are documented in
 [Persistence architecture](design/architecture/persistence.md) and
 [Execution architecture](design/architecture/execution.md). The
 revised release boundary is recorded in the
-[GCP backend design](docs/guides/gcp-backend.md).
+[GCP candidate qualification](design/qualification.md#gcp-compute-engine-candidate).
 
 ### Tool repository and project repository are separate
 
@@ -441,8 +441,8 @@ exactly matches output recorded by an older Cloudmake collection, remote source
 transfer fails before provider contact. Review that directory, then move or
 delete it, exclude `/artifacts/` in `.cloudmakeignore`, or explicitly accept its
 exact known fingerprint as source with
-`--accept-legacy-artifacts-as-source`. See the
-[artifact collection migration preflight](docs/guides/artifact-collection-migration.md).
+`--accept-legacy-artifacts-as-source`. The complete boundary is specified under
+[source selection](docs/reference/project-contract.md#source-selection).
 
 Configuration precedence is:
 
@@ -984,10 +984,10 @@ because it has no corresponding tunnel. On managed accelerator backends, a
 required GPU profile still needs `--gpu` or a saved GPU selection; Cloudmake
 does not silently choose a provider product or accelerator model.
 
-See the normative [Dev Container guide](docs/reference/devcontainers.md) and
-[workstation contract](docs/reference/devcontainer-contract.md) for field requirements,
-backend matching, restricted-host behavior, and the security boundary. Use
-`--native` to return to direct Make execution.
+See the normative
+[Dev Container workstation contract](docs/reference/devcontainers.md) for field
+requirements, backend matching, restricted-host behavior, and the security
+boundary. Use `--native` to return to direct Make execution.
 
 #### Persistent workspace modes
 
@@ -1433,7 +1433,8 @@ Inbound and outbound Internet are `conditional`: firewall rules, external IP or
 IAP configuration, organization policy, and the selected Dev Container can all
 change reachability. Dev Container `forwardPorts` remain local loopback tunnels
 for the foreground target and do not create public GCP firewall rules.
-See the complete [GCP backend design](docs/guides/gcp-backend.md).
+The remaining release evidence is tracked in
+[GCP candidate qualification](design/qualification.md#gcp-compute-engine-candidate).
 
 ### Historical Colab SSH backend
 
@@ -1703,9 +1704,9 @@ Cloudmake keeps provider credentials in their official clients, but a private
 notebook or ignored filename is not a secrets manager. Released behavior and
 operator guidance begin at the [user documentation index](docs/README.md):
 
-- [Day 1: Stateless remote Make](docs/tutorials/stateless-remote-make.md)
-- [Workspace persistence and checkpointing landscape](docs/tutorials/workspace-persistence-landscape.md)
-- [Dev Container execution landscape](docs/tutorials/devcontainer-execution-landscape.md)
+- [Day 1: Stateless remote Make](docs/tutorials/day1-stateless.md)
+- [Day 2: Workspace persistence](docs/tutorials/day2-workspace.md)
+- [Day 3: Dev Container workstations](docs/tutorials/day3-devcon.md)
 - [Resilience and recovery](docs/reference/resilience.md)
 - [Security model](docs/reference/security.md)
 - [Portable Dev Container workstations](docs/reference/devcontainers.md)

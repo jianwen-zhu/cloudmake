@@ -310,8 +310,6 @@ untrusted image safe. Its promise is narrower and more useful:
 
 Day 4 adds the identity, credential-custody, and trust model.
 
-The normative behavior is specified in the
-[Dev Container workstation contract](../reference/devcontainer-contract.md). Supported
-fields and commands are documented in
-[Portable Dev Container workstations](../reference/devcontainers.md). Runtime details are in
-the [OCI/CDI runner reference](../reference/oci-runner.md).
+The normative behavior, supported fields, and commands are specified in the
+[Dev Container workstation contract](../reference/devcontainers.md). Runtime
+details are in the [OCI/CDI runner reference](../reference/oci-runner.md).

@@ -8,9 +8,9 @@ once a version is published as a GitHub release.
 Compatibility note: this release deliberately takes one minor-version contract
 exception before external adoption. Collection moves from root `artifacts/` to
 `.cloudmake/artifacts/`, and `.cloudmake/` becomes a reserved Cloudmake
-namespace. The migration is explicit and fail-closed; follow
-[`docs/guides/artifact-collection-migration.md`](docs/guides/artifact-collection-migration.md)
-before upgrading. No published tag is rewritten by this decision.
+namespace. The migration is explicit and fail-closed under the
+[project contract](docs/reference/project-contract.md#source-selection). No
+published tag is rewritten by this decision.
 
 - Move explicit collection output from the generic root `artifacts/` name to
   `.cloudmake/artifacts/`. Root `artifacts/` and `.artifacts/` are ordinary

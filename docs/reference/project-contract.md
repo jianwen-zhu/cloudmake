@@ -133,8 +133,7 @@ when it is an exact match. The operator must review and move/delete it or add
 project source, one remote invocation may use
 `--accept-legacy-artifacts-as-source`; the private acceptance is bound to that
 fingerprint. Cloudmake never migrates, overwrites, symlinks, or dual-writes that
-directory automatically. See the
-[artifact collection migration preflight](../guides/artifact-collection-migration.md).
+directory automatically.
 Projects should list unwanted or sensitive paths in `.cloudmakeignore`, one
 exclusion pattern per line:
 

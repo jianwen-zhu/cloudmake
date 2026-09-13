@@ -1,22 +1,15 @@
-# Portable Dev Container workstations
+# Dev Container workstation contract
 
 For a conceptual introduction to application bundles, OCI image/runtime
 layers, CDI devices, Dev Container implementations, and the portable adapter,
-read the [Dev Container execution landscape](../tutorials/devcontainer-execution-landscape.md).
+read [Day 3: Dev Container workstations](../tutorials/day3-devcon.md).
 
-Cloudmake 2.4 retains one stable meaning for its adapter-supported fields and
-adds capability negotiation across backends. Stable meaning does not imply
-universal availability: each backend must qualify every behavior requested by
-the selected configuration. Immutable tag-resolution rules, the credential
-boundary, lifecycle semantics, and rollout gates are specified in the
-[Dev Container workstation contract](devcontainer-contract.md).
-
-Cloudmake 2.4 accepts the standard
+Cloudmake accepts the standard
 [Dev Container specification](https://containers.dev/implementors/spec/) as a
 workstation configuration, analyzes the behavior it requires, and dynamically
 qualifies one realization. The project still exposes only its ordinary Make
 targets. Cloudmake does not silently discard standard behavior to fit a weaker
-backend.
+backend. This file is the complete user-facing contract for that behavior.
 
 The normal project remains unchanged unless its developer chooses to add a Dev
 Container file. The feature is explicit: merely having a configuration does not
@@ -39,6 +32,28 @@ cloudmake --devcontainer=.devcontainer/cuda.json verify
 The choice is stored only in Cloudmake's local per-project preferences. Use
 `--native` to clear it. The older `--image REF@sha256:DIGEST` interface remains
 the image-only shorthand and is fully compatible.
+
+## Configuration and qualification
+
+Every recognized field has one of three meanings:
+
+1. **Portable behavior** has one stable meaning on every backend that declares
+   support for it.
+2. **Advisory metadata**, such as `$schema`, `name`, and editor-specific
+   customizations, has no process or resource effect and may be ignored.
+3. **Capability-requiring behavior**, such as image builds, Features,
+   lifecycle commands, user selection, mounts, ports, privilege, or devices,
+   is accepted only when one backend realization can preserve it completely.
+
+The accepted advisory set is closed. Unknown fields are not assumed harmless.
+Cloudmake derives a required-capability set from the complete configuration,
+checks static backend declarations before allocation where possible, and
+qualifies runtime-dependent requirements on the actual machine. Failure always
+occurs before the project target is submitted.
+
+One realization must satisfy the entire contract. Cloudmake does not combine
+partial capability sets from multiple adapters, and dynamic qualification may
+narrow a backend's declared ceiling but never widen it.
 
 ## Adapter-supported behavior
 
@@ -178,6 +193,41 @@ statement. Each backend also declares the order in which its realizations are
 considered. Dynamic runtime, host, device, and network probes may narrow a
 static ceiling for a particular invocation; they never widen it.
 
+## Image identity and registry access
+
+Digest references are used directly. A backend that accepts an image tag
+resolves it through its existing registry integration and records the source
+reference, resolved manifest digest or derived image identity, target platform,
+configuration fingerprint, and logical workstation identity. Later targets
+reuse that resolution while the same logical workstation remains valid. A
+configuration change or workstation reconstruction resolves the tag again;
+Cloudmake never changes the image merely because a remote tag moved.
+
+Registry authentication remains with the selected runtime, provider service,
+credential helper, or workload identity. Cloudmake does not read, upload,
+persist, or print registry credentials. A backend that cannot access a private
+reference using its existing identity rejects it before target submission.
+
+## Workstation lifecycle
+
+Lifecycle commands are behavior, not metadata. A backend may accept them only
+when it preserves their standard ordering:
+
+- create-phase commands run once for a newly constructed workstation;
+- start-phase commands run once for each corresponding workstation start; and
+- target execution begins only after required preparation succeeds.
+
+A preparation receipt binds completion to the configuration fingerprint, image
+identity, platform, and logical workstation. Ambiguous preparation does not
+authorize an automatic replay. Backends that launch a fresh read-only container
+for each target cannot claim persistent create-phase semantics merely because
+the project workspace survives.
+
+Image caches, prepared containers, native disks, and checkpoints may reduce
+repeated work, but they are not project authority. Source, the selected
+workstation configuration, and the project Makefile must remain sufficient to
+reconstruct the result.
+
 ## Ports and host requirements
 
 `forwardPorts` creates a loopback-only access path for the lifetime of the
@@ -219,7 +269,7 @@ trusted-image boundary.
 Workspace persistence is independent of Dev Container execution. This contract
 does not define checkpointing. Source plus the project Makefile remain the
 rebuild authority; persistence behavior is documented separately in
-[Workspace persistence and checkpointing](../tutorials/workspace-persistence-landscape.md).
+[Day 2: workspace persistence](../tutorials/day2-workspace.md).
 
 Workstation validation applies only at a workload boundary: `--start`, target
 execution, collection, and the selected-workstation portion of `--doctor`.

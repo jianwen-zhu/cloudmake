@@ -272,7 +272,7 @@ and dynamic qualification verifies the actual instance. These declarations are
 orthogonal to transport, persistence, `oci-native`, and the runtime candidate
 list. The normative vocabulary, immutable image-resolution rules, credential
 boundary, and lifecycle receipt requirements are defined in the
-[Dev Container workstation contract](devcontainer-contract.md).
+[Dev Container workstation contract](devcontainers.md).
 
 `checkpoint-persistence` means Cloudmake transfers a managed workspace through
 an independent durable checkpoint store. `native-persistence` means the
