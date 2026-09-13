@@ -64,7 +64,7 @@ status: doctor
 	@set -e; temporary='$(CLOUDMAKE_STATE_ROOT)/status/$(BACKEND)-$$$$.tmp'; \
 		if $(COLAB_BIN) status -s '$(COLAB_SESSION)' > "$$temporary" 2>&1; then \
 			cat "$$temporary"; \
-			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
+			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
 			rm -f "$$temporary"; \
 		else code=$$?; cat "$$temporary"; rm -f "$$temporary"; exit $$code; fi
 
@@ -101,17 +101,17 @@ _colab-start: ensure-owner | $(COLAB_STATE_DIR)
 	@rm -f '$(COLAB_CREATED_MARKER)' '$(COLAB_RESET_MARKER)'
 	@$(CLOUDMAKE_RECORD_STATE) --phase allocation --provider-state unknown \
 		--session-created false --target-submission not_submitted --retry-safe true
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_allocate.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/allocate.py' \
 		--client '$(COLAB_BIN)' --session '$(COLAB_SESSION)' \
 		$(if $(strip $(COLAB_GPU)),--gpu '$(COLAB_GPU)') \
 		--retry-seconds '$(CLOUDMAKE_RETRY_FOR_SECONDS)' \
 		--resource-state '$(COLAB_RESOURCE_STATE)' \
 		--result '$(CLOUDMAKE_ALLOCATION_RESULT)' \
 		--state-file '$(CLOUDMAKE_OPERATION_STATE)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_lifecycle.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/lifecycle.py' \
 		--client '$(COLAB_BIN)' --session '$(COLAB_SESSION)' \
 		$(if $(strip $(COLAB_GPU)),--gpu '$(COLAB_GPU)') \
-		--probe-file '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_prerequisites.py' \
+		--probe-file '$(CLOUDMAKE_TOOL_ROOT)/core/remote_prerequisites.py' \
 		--command-timeout '$(COLAB_READY_PROBE_TIMEOUT)' \
 		--ready-timeout '$(COLAB_READY_TIMEOUT)' \
 		--poll-seconds '$(COLAB_READY_POLL_SECONDS)' \
@@ -127,7 +127,7 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 		--target-submission not_submitted --retry-safe true; \
 	rm -f '$(COLAB_CONTROL_STATE_COPY)' '$(COLAB_CONTROL_STATE_COPY).tmp'; \
 	if ! $(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_READY_PROBE_TIMEOUT)' \
-		-f '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_control_state.py' \
+		-f '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/control_state.py' \
 		> '$(COLAB_CONTROL_STATE_COPY).tmp' 2>&1; then \
 		cat '$(COLAB_CONTROL_STATE_COPY).tmp' >&2; \
 		rm -f '$(COLAB_CONTROL_STATE_COPY).tmp'; \
@@ -140,7 +140,7 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 	fi; \
 	mv '$(COLAB_CONTROL_STATE_COPY).tmp' '$(COLAB_CONTROL_STATE_COPY)'; \
 	cat '$(COLAB_CONTROL_STATE_COPY)'; \
-	if ! owner_state="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_control_state.py' \
+	if ! owner_state="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/control_state.py' \
 		--parse '$(COLAB_CONTROL_STATE_COPY)' --field owner )"; then \
 		$(CLOUDMAKE_RECORD_STATE) --phase ownership --provider-state unknown \
 			--runtime-state unreachable --target-submission not_submitted \
@@ -162,7 +162,7 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 		fi; \
 		mv '$(COLAB_REMOTE_OWNER_COPY).tmp' '$(COLAB_REMOTE_OWNER_COPY)'; \
 		adopt=''; test '$(CLOUDMAKE_ADOPT)' = 1 && adopt='--adopt' || :; \
-		if ! $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/project_identity.py' check \
+		if ! $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/project_identity.py' check \
 			--expected '$(CLOUDMAKE_OWNER_FILE)' \
 			--actual '$(COLAB_REMOTE_OWNER_COPY)' \
 			--resource 'Colab session $(COLAB_SESSION)' $$adopt; then \
@@ -182,7 +182,7 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 			--runtime-state $$lifecycle --target-submission not_submitted --retry-safe true; \
 	fi
 	@mkdir -p '$(CLOUDMAKE_MANIFEST_DIR)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
 		$(CLOUDMAKE_SECRET_OPTION) \
@@ -193,7 +193,7 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 	$(CLOUDMAKE_RECORD_STATE) --phase synchronization --provider-state ready \
 		--target-submission not_submitted --retry-safe true; \
 	remote_fingerprint=''; \
-	if ! fingerprint_state="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_control_state.py' \
+	if ! fingerprint_state="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/control_state.py' \
 		--parse '$(COLAB_CONTROL_STATE_COPY)' --field fingerprint )"; then \
 		$(CLOUDMAKE_RECORD_STATE) --phase synchronization --provider-state unknown \
 			--runtime-state unreachable --target-submission not_submitted \
@@ -224,7 +224,7 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 			$(CLOUDMAKE_RECORD_STATE) --phase synchronization --provider-state ready \
 				--runtime-state reset --target-submission not_submitted --retry-safe true; \
 		fi; \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/source_fingerprint.py' \
 			--root '$(PROJECT_DIR)' \
 			--archive '$(COLAB_ARCHIVE)' \
 			$(CLOUDMAKE_SECRET_OPTION) \
@@ -236,14 +236,14 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
 			'$(CLOUDMAKE_OWNER_FILE)' '$(COLAB_REMOTE_OWNER_INCOMING)'; \
 		$(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
-			-f '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_sync.py'; \
+			-f '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/sync.py'; \
 		mv '$(CLOUDMAKE_CURRENT_MANIFEST)' '$(CLOUDMAKE_MANIFEST)'; \
 	fi
 
 _colab-prepare: _colab-sync | $(COLAB_STATE_DIR)
 	@set -e; \
 	if test -z '$(COLAB_SESSION_PREPARE_TARGET)'; then exit 0; fi; \
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_prepare_receipt.py' \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/prepare_receipt.py' \
 		--target '$(COLAB_SESSION_PREPARE_TARGET)' \
 		--source-fingerprint '$(COLAB_FINGERPRINT)' \
 		--output '$(COLAB_PREPARED_RECEIPT)'; \
@@ -260,7 +260,7 @@ _colab-prepare: _colab-sync | $(COLAB_STATE_DIR)
 	$(CLOUDMAKE_RECORD_STATE) --phase preparation --provider-state ready \
 		--preparation-state ambiguous --target-submission not_submitted --retry-safe true; \
 	printf '%s\n%s\n%s\n%s\n%s\n' \
-		"$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/encode_value.py' '$(COLAB_SESSION_PREPARE_TARGET)' )" \
+		"$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/encode_value.py' '$(COLAB_SESSION_PREPARE_TARGET)' )" \
 		'$(JOBS)' '$(PROJECT_MAKEFILE)' 'W10=' '' > '$(COLAB_PREPARE_TARGET_FILE).tmp'; \
 	mv '$(COLAB_PREPARE_TARGET_FILE).tmp' '$(COLAB_PREPARE_TARGET_FILE)'; \
 	cp '$(COLAB_NOTEBOOK)' '$(COLAB_RUN_NOTEBOOK).tmp'; mv '$(COLAB_RUN_NOTEBOOK).tmp' '$(COLAB_RUN_NOTEBOOK)'; \
@@ -284,7 +284,7 @@ _colab-prepare: _colab-sync | $(COLAB_STATE_DIR)
 		exit 1; \
 	fi; \
 	mv '$(COLAB_TARGET_RESULT).tmp' '$(COLAB_TARGET_RESULT)'; \
-	if ! $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/target_result.py' \
+	if ! $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/target_result.py' \
 		--result '$(COLAB_TARGET_RESULT)'; then \
 		$(CLOUDMAKE_RECORD_STATE) --phase preparation --provider-state failed \
 			--preparation-state failed --target-submission not_submitted \
@@ -301,7 +301,7 @@ _colab-prepare: _colab-sync | $(COLAB_STATE_DIR)
 		exit 1; \
 	fi; \
 	if ! $(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
-		-f '$(CLOUDMAKE_TOOL_ROOT)/tools/colab_prepare.py'; then \
+		-f '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/prepare.py'; then \
 		$(CLOUDMAKE_RECORD_STATE) --phase preparation --provider-state unknown \
 			--preparation-state ambiguous --target-submission not_submitted \
 			--retry-safe true --failure-code preparation_receipt_install_ambiguous; \
@@ -314,7 +314,7 @@ _colab-prepare: _colab-sync | $(COLAB_STATE_DIR)
 _colab-execute: _colab-prepare | $(COLAB_STATE_DIR)
 	@set -e; target_b64='$(REMOTE_TARGET_B64)'; \
 		if test -z "$$target_b64"; then \
-			target_b64="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/encode_value.py' '$(REMOTE_TARGET)' )"; \
+			target_b64="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/encode_value.py' '$(REMOTE_TARGET)' )"; \
 		fi; \
 		printf '%s\n%s\n%s\n%s\n%s\n' \
 			"$$target_b64" '$(JOBS)' '$(PROJECT_MAKEFILE)' \
@@ -367,7 +367,7 @@ _colab-execute: _colab-prepare | $(COLAB_STATE_DIR)
 	fi; \
 	exit $$download_status
 	@mv '$(COLAB_TARGET_RESULT).tmp' '$(COLAB_TARGET_RESULT)'
-	@set +e; $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/target_result.py' \
+	@set +e; $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/target_result.py' \
 		--result '$(COLAB_TARGET_RESULT)'; code=$$?; \
 	if test $$code -eq 0; then provider=succeeded; else provider=failed; fi; \
 	$(CLOUDMAKE_RECORD_STATE) --phase target_execution --provider-state $$provider \

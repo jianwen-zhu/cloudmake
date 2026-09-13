@@ -24,12 +24,12 @@ ARTIFACT_MAX_FILE_MB ?= 1024
 ARTIFACT_MAX_ARCHIVE_MB ?= 1024
 ARTIFACT_MAX_RATIO ?= 500
 
-CLOUDMAKE_SAFE_EXTRACT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/safe_extract.py' \
+CLOUDMAKE_SAFE_EXTRACT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/safe_extract.py' \
 	--max-files '$(ARTIFACT_MAX_FILES)' --max-total-mb '$(ARTIFACT_MAX_MB)' \
 	--max-file-mb '$(ARTIFACT_MAX_FILE_MB)' \
 	--max-archive-mb '$(ARTIFACT_MAX_ARCHIVE_MB)' \
 	--max-ratio '$(ARTIFACT_MAX_RATIO)'
-CLOUDMAKE_RECORD_STATE = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/run_state.py' --file '$(CLOUDMAKE_OPERATION_STATE)'
+CLOUDMAKE_RECORD_STATE = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/run_state.py' --file '$(CLOUDMAKE_OPERATION_STATE)'
 
 BACKEND_API_VERSION ?=
 BACKEND_LIFECYCLE ?=
@@ -75,7 +75,7 @@ CLOUDMAKE_LOCK_FILE := $(CLOUDMAKE_STATE_ROOT)/locks/$(BACKEND)/$(BACKEND_RESOUR
 CLOUDMAKE_MANIFEST_DIR := $(CLOUDMAKE_STATE_ROOT)/manifests/$(BACKEND)
 CLOUDMAKE_MANIFEST := $(CLOUDMAKE_MANIFEST_DIR)/$(BACKEND_RESOURCE_ID).json
 CLOUDMAKE_CURRENT_MANIFEST := $(CLOUDMAKE_MANIFEST).current
-CLOUDMAKE_WITH_LOCK = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/with_lock.py' --path '$(CLOUDMAKE_LOCK_FILE)' --timeout '$(CLOUDMAKE_LOCK_TIMEOUT)' --
+CLOUDMAKE_WITH_LOCK = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/with_lock.py' --path '$(CLOUDMAKE_LOCK_FILE)' --timeout '$(CLOUDMAKE_LOCK_TIMEOUT)' --
 
 .PHONY: backend-contract ensure-owner backend-info sync-dry-run
 
@@ -86,7 +86,7 @@ backend-contract:
 	done
 
 ensure-owner: prerequisites
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/project_identity.py' ensure \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/project_identity.py' ensure \
 		--state-dir '$(CLOUDMAKE_IDENTITY_DIR)' \
 		--project-root '$(CLOUDMAKE_PROJECT_ROOT)' \
 		--project-name '$(PROJECT)' >/dev/null
@@ -106,7 +106,7 @@ else
 sync-dry-run: backend-contract
 	@if ! command -v '$(PYTHON_BIN)' >/dev/null 2>&1; then \
 		echo 'Missing required command: $(PYTHON_BIN)' >&2; exit 2; fi
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--compare '$(CLOUDMAKE_MANIFEST)' --dry-run \
 		$(CLOUDMAKE_SECRET_OPTION) \

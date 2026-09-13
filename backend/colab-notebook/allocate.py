@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, os.fspath(Path(__file__).resolve().parents[2] / "core"))
 from run_state import update
 
 

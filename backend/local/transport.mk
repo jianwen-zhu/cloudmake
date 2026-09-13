@@ -1,5 +1,5 @@
 # Maintainer-facing operations for the local backend. The supported launcher
-# path invokes project Make directly in bin/cloudmake rather than entering here.
+# path invokes project Make directly in cmd/cloudmake rather than entering here.
 
 .PHONY: help start status stop sync collect dispatch fetch shell open
 

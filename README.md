@@ -163,18 +163,14 @@ Cloudmake is installed once as a stable tool:
 
 ```text
 cloudmake/
-|-- bin/cloudmake
+|-- cmd/cloudmake
 |-- Makefile
 |-- VERSION
 |-- core/
-|-- backends/
-|-- host-templates/
-|-- transports/
-|-- notebooks/
-|-- tools/
+|-- backend/
 |-- tests/
 |-- .devcontainer/
-`-- Makefile.build
+`-- tests/fixtures/hello/
 ```
 
 An actual project needs only an ordinary Makefile at its root. Everything else
@@ -420,7 +416,7 @@ listed with the release artifact and tag.
 Installation creates an unprivileged launcher under `~/.local/bin/cloudmake`
 and installs its self-contained runtime under `~/.local/libexec/cloudmake/`.
 Add `~/.local/bin` to `PATH` if necessary. Before installation, the same
-interface is available as `./bin/cloudmake` from the tool checkout.
+interface is available as `./cmd/cloudmake` from the tool checkout.
 
 ### 3. Check provider readiness
 
@@ -970,7 +966,7 @@ cloudmake --host-template gcp-e2-micro
 
 Rendering writes only to standard output. Cloudmake never edits `~/.ssh/config`
 or creates a key; the user reviews, edits, and installs a fragment explicitly.
-See the bundled [SSH host template guide](host-templates/README.md) for the safe
+See the bundled [SSH host template guide](backend/host-ssh/README.md) for the safe
 copy, `Include`, permission, and first-connection workflow.
 
 Source is synchronized incrementally under `.cloudmake/` in the configured

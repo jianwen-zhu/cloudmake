@@ -51,7 +51,7 @@ $(CODESPACE_SSH_CONFIG): doctor
 	fi
 	@mkdir -p '$(CODESPACE_STATE_DIR)'
 	@$(GH_BIN) codespace ssh --config -c '$(CODESPACE)' > '$@.tmp'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_config.py' '$@.tmp'
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/validate_ssh_config.py' '$@.tmp'
 	@mv '$@.tmp' '$@'
 
 .PHONY: refresh-ssh-config
@@ -62,5 +62,5 @@ refresh-ssh-config: doctor
 	fi
 	@mkdir -p '$(CODESPACE_STATE_DIR)'
 	@$(GH_BIN) codespace ssh --config -c '$(CODESPACE)' > '$(CODESPACE_SSH_CONFIG).tmp'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_config.py' '$(CODESPACE_SSH_CONFIG).tmp'
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/validate_ssh_config.py' '$(CODESPACE_SSH_CONFIG).tmp'
 	@mv '$(CODESPACE_SSH_CONFIG).tmp' '$(CODESPACE_SSH_CONFIG)'

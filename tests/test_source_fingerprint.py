@@ -6,7 +6,7 @@ from pathlib import Path
 from conftest import PROJECT_ROOT, run_command
 
 
-SCRIPT = PROJECT_ROOT / "tools" / "source_fingerprint.py"
+SCRIPT = PROJECT_ROOT / "core" / "source_fingerprint.py"
 
 
 def fingerprint(directory: Path) -> str:

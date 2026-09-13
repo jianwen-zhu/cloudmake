@@ -9,8 +9,8 @@ import pytest
 from conftest import PROJECT_ROOT, run_command
 
 
-SCRIPT = PROJECT_ROOT / "tools" / "kaggle_prepare.py"
-TEMPLATE = PROJECT_ROOT / "notebooks" / "kaggle.ipynb"
+SCRIPT = PROJECT_ROOT / "backend" / "kaggle-notebook" / "prepare.py"
+TEMPLATE = PROJECT_ROOT / "backend" / "kaggle-notebook" / "notebook.ipynb"
 
 
 def prepare(

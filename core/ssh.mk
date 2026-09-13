@@ -50,7 +50,7 @@ status: doctor
 	@set -e; temporary='$(CLOUDMAKE_STATE_ROOT)/status/$(BACKEND)-$$$$.tmp'; \
 		if $(BACKEND_STATUS) > "$$temporary" 2>&1; then \
 			cat "$$temporary"; \
-			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
+			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
 			rm -f "$$temporary"; \
 		else code=$$?; cat "$$temporary"; rm -f "$$temporary"; exit $$code; fi
 
@@ -103,15 +103,15 @@ _ssh-start: ensure-owner $(BACKEND_PREREQUISITE)
 _ssh-sync: _ssh-start
 	@set -eu; \
 	token="$$(cat '$(CLOUDMAKE_OWNER_ID_FILE)')-$$$$-$$(date +%s)"; \
-	$(SSH) "mkdir -p '$(REMOTE_ROOT)' && sh -s -- acquire '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh'; \
-	cleanup() { $(SSH) "sh -s -- release '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh' >/dev/null 2>&1 || :; }; \
+	$(SSH) "mkdir -p '$(REMOTE_ROOT)' && sh -s -- acquire '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/core/remote_lock.sh'; \
+	cleanup() { $(SSH) "sh -s -- release '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/core/remote_lock.sh' >/dev/null 2>&1 || :; }; \
 	trap cleanup EXIT HUP INT TERM; \
 	$(MAKE) --no-print-directory _ssh-sync-unlocked
 
 _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 	@mkdir -p '$(dir $(SSH_REMOTE_OWNER_COPY))'
 	@mkdir -p '$(CLOUDMAKE_MANIFEST_DIR)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
 		$(CLOUDMAKE_SECRET_OPTION) \
@@ -121,7 +121,7 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 	if $(SSH) "cat '$(REMOTE_OWNER_FILE)'" > "$$temporary" 2>/dev/null && test -s "$$temporary"; then \
 		mv "$$temporary" '$(SSH_REMOTE_OWNER_COPY)'; \
 		adopt=''; test '$(CLOUDMAKE_ADOPT)' = 1 && adopt='--adopt' || :; \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/project_identity.py' check \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/project_identity.py' check \
 			--expected '$(CLOUDMAKE_OWNER_FILE)' \
 			--actual '$(SSH_REMOTE_OWNER_COPY)' \
 			--resource '$(BACKEND) workspace $(REMOTE_ROOT)' $$adopt; \
@@ -143,21 +143,21 @@ _ssh-sync-unlocked: ensure-owner $(BACKEND_PREREQUISITE)
 _ssh-execute: _ssh-start
 	@set -eu; \
 	token="$$(cat '$(CLOUDMAKE_OWNER_ID_FILE)')-$$$$-$$(date +%s)"; \
-	$(SSH) "mkdir -p '$(REMOTE_ROOT)' && sh -s -- acquire '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh'; \
-	cleanup() { $(SSH) "sh -s -- release '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh' >/dev/null 2>&1 || :; }; \
+	$(SSH) "mkdir -p '$(REMOTE_ROOT)' && sh -s -- acquire '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/core/remote_lock.sh'; \
+	cleanup() { $(SSH) "sh -s -- release '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/core/remote_lock.sh' >/dev/null 2>&1 || :; }; \
 	trap cleanup EXIT HUP INT TERM; \
 	$(MAKE) --no-print-directory _ssh-sync-unlocked; \
 	if test -n '$(REMOTE_COLLECT_DIR_B64)'; then \
 		$(SSH) "rm -f '$(REMOTE_ARTIFACT_ARCHIVE)'"; \
 	fi; \
-	command="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_make_command.py' \
+	command="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/remote_make_command.py' \
 		--source '$(REMOTE_SRC)' --makefile '$(REMOTE_MAKEFILE)' \
 		--jobs '$(JOBS)' --target '$(REMOTE_TARGET)' \
 		--target-b64 '$(REMOTE_TARGET_B64)' \
 		--arguments-b64 '$(CLOUDMAKE_PROJECT_ARGS_B64)' )"; \
 	$(SSH) "$$command"; \
 	if test -n '$(REMOTE_COLLECT_DIR_B64)'; then \
-		collect_command="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_collect_command.py' \
+		collect_command="$$( $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/remote_collect_command.py' \
 			--source '$(REMOTE_SRC)' --directory-b64 '$(REMOTE_COLLECT_DIR_B64)' \
 			--archive '$(REMOTE_ARTIFACT_ARCHIVE)' )"; \
 		$(SSH) "$$collect_command"; \
@@ -170,8 +170,8 @@ _ssh-collect: _ssh-execute
 _ssh-fetch: _ssh-start
 	@set -eu; \
 	token="$$(cat '$(CLOUDMAKE_OWNER_ID_FILE)')-$$$$-$$(date +%s)"; \
-	$(SSH) "mkdir -p '$(REMOTE_ROOT)' && sh -s -- acquire '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh'; \
-	cleanup() { $(SSH) "sh -s -- release '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh' >/dev/null 2>&1 || :; }; \
+	$(SSH) "mkdir -p '$(REMOTE_ROOT)' && sh -s -- acquire '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/core/remote_lock.sh'; \
+	cleanup() { $(SSH) "sh -s -- release '$(REMOTE_LOCK)' '$$token' '$(REMOTE_LOCK_STALE)'" < '$(CLOUDMAKE_TOOL_ROOT)/core/remote_lock.sh' >/dev/null 2>&1 || :; }; \
 	trap cleanup EXIT HUP INT TERM; \
 	mkdir -p '$(dir $(SSH_ARTIFACT_ARCHIVE))'; \
 	$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
