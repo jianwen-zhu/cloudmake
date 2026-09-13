@@ -5,6 +5,13 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+## 1.1.1 - 2026-09-12
+
+- Reorganize the stateless source tree by ownership under `cmd/`, `core/`, and
+  `backend/`, while preserving the installed `PREFIX/bin/cloudmake` command.
+- Reconcile UofT ancestry with the shared release/1.x source layout. This is a
+  source-organization release with no product semantic change.
+
 ## 1.1.0 - 2026-09-12
 
 Compatibility notice: v1.1.0 intentionally changes Cloudmake's collection and
