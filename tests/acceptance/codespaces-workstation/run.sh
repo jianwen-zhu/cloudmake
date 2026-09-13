@@ -3,7 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 project="$root/tests/acceptance/codespaces-workstation/project"
-cloudmake="$root/bin/cloudmake"
+cloudmake="/cmd/cloudmake"
 
 : "${CODESPACE:?set CODESPACE to an existing cloudmake anchor Codespace}"
 

@@ -11,10 +11,10 @@ import tempfile
 from conftest import PROJECT_ROOT
 
 
-HOST_PATH = PROJECT_ROOT / "tools" / "colab_checkpoint_host.py"
-REMOTE_PATH = PROJECT_ROOT / "tools" / "colab_checkpoint.py"
-TRANSPORT_PATH = PROJECT_ROOT / "tools" / "checkpoint_transport.py"
-KEYCHAIN_PATH = PROJECT_ROOT / "tools" / "checkpoint_keychain.py"
+HOST_PATH = PROJECT_ROOT / "backend" / "colab-notebook" / "checkpoint_host.py"
+REMOTE_PATH = PROJECT_ROOT / "backend" / "colab-notebook" / "checkpoint.py"
+TRANSPORT_PATH = PROJECT_ROOT / "core" / "checkpoint_transport.py"
+KEYCHAIN_PATH = PROJECT_ROOT / "core" / "checkpoint_keychain.py"
 PROJECT_KEY = "0123456789abcdef01234567"
 WORKSPACE_ID = "fedcba9876543210fedcba98"
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from conftest import PROJECT_ROOT, run_command
 
 
-SCRIPT = PROJECT_ROOT / "tools" / "colab_sync.py"
+SCRIPT = PROJECT_ROOT / "backend" / "colab-notebook" / "sync.py"
 
 
 def transformed_script(tmp_path: Path) -> Path:

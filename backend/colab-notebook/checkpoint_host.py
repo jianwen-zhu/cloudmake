@@ -238,12 +238,12 @@ class ColabCheckpoint:
         )
         self.upload(self.control, REMOTE_CONTROL, quiet=True)
         self.upload(
-            self.tool_root / "tools/checkpoint_transport.py",
+            self.tool_root / "core/checkpoint_transport.py",
             REMOTE_TRANSPORT,
             quiet=True,
         )
         self.exec_tool(
-            self.tool_root / "tools/colab_checkpoint.py",
+            self.tool_root / "backend/colab-notebook/checkpoint.py",
             "CLOUDMAKE_CHECKPOINT_OPERATION",
             operation,
         )
@@ -261,7 +261,7 @@ class ColabCheckpoint:
         run(
             [
                 sys.executable,
-                self.tool_root / "tools/checkpoint_keychain.py",
+                self.tool_root / "core/checkpoint_keychain.py",
                 "ensure",
                 "--project-key",
                 self.workspace_id,
@@ -272,7 +272,7 @@ class ColabCheckpoint:
         self.public_key.unlink(missing_ok=True)
         self.envelope.unlink(missing_ok=True)
         self.exec_tool(
-            self.tool_root / "tools/checkpoint_transport.py",
+            self.tool_root / "core/checkpoint_transport.py",
             "CLOUDMAKE_CHECKPOINT_TRANSPORT_OPERATION",
             "generate",
         )
@@ -287,7 +287,7 @@ class ColabCheckpoint:
         run(
             [
                 sys.executable,
-                self.tool_root / "tools/checkpoint_keychain.py",
+                self.tool_root / "core/checkpoint_keychain.py",
                 "encrypt",
                 "--project-key",
                 self.workspace_id,
@@ -374,7 +374,7 @@ class ColabCheckpoint:
         try:
             self.retry_verified_remote_action(
                 operation="destroy",
-                tool=self.tool_root / "tools/checkpoint_transport.py",
+                tool=self.tool_root / "core/checkpoint_transport.py",
                 remote_result=REMOTE_TRANSPORT_RESULT,
                 local_result=self.transport_receipt,
                 variable="CLOUDMAKE_CHECKPOINT_TRANSPORT_OPERATION",
@@ -397,7 +397,7 @@ class ColabCheckpoint:
         try:
             self.retry_verified_remote_action(
                 operation="unmount",
-                tool=self.tool_root / "tools/colab_drive_unmount.py",
+                tool=self.tool_root / "backend/colab-notebook/drive_unmount.py",
                 remote_result=REMOTE_UNMOUNT_RESULT,
                 local_result=self.unmount_receipt,
             )
@@ -434,7 +434,7 @@ class ColabCheckpoint:
             run(
                 [
                     sys.executable,
-                    self.tool_root / "tools/checkpoint_keychain.py",
+                    self.tool_root / "core/checkpoint_keychain.py",
                     "delete",
                     "--project-key",
                     self.workspace_id,

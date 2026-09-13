@@ -10,7 +10,7 @@ import pytest
 from conftest import PROJECT_ROOT, run_command, write_executable
 
 
-HELPER = PROJECT_ROOT / "tools" / "codespaces_state.py"
+HELPER = PROJECT_ROOT / "backend" / "codespaces-ssh" / "state.py"
 
 
 def load(name: str):

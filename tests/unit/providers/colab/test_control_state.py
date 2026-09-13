@@ -8,7 +8,7 @@ import pytest
 from conftest import PROJECT_ROOT, run_command
 
 
-HELPER = PROJECT_ROOT / "tools" / "colab_control_state.py"
+HELPER = PROJECT_ROOT / "backend" / "colab-notebook" / "control_state.py"
 
 
 def test_remote_probe_accepts_injected_notebook_kernel_connection_file(

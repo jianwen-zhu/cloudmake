@@ -11,7 +11,7 @@ import pytest
 from conftest import PROJECT_ROOT
 
 
-TOOL = PROJECT_ROOT / "tools" / "gcp_ssh.py"
+TOOL = PROJECT_ROOT / "backend" / "gcp-compute-ssh" / "ssh.py"
 
 
 def load(name: str):

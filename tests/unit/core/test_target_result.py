@@ -7,7 +7,7 @@ from pathlib import Path
 from conftest import PROJECT_ROOT, run_command
 
 
-TOOL = PROJECT_ROOT / "tools" / "target_result.py"
+TOOL = PROJECT_ROOT / "core" / "target_result.py"
 
 
 def test_target_result_propagates_expected_make_failure_without_traceback(

@@ -41,10 +41,12 @@ parser.add_argument("--checkpoint-head", type=Path)
 parser.add_argument("--source-manifest", type=Path)
 parser.add_argument("--dispatch", type=Path)
 parser.add_argument(
-    "--remote-helper", type=Path, default=Path(__file__).with_name("kaggle_remote.py")
+    "--remote-helper", type=Path, default=Path(__file__).with_name("remote.py")
 )
 parser.add_argument(
-    "--oci-helper", type=Path, default=Path(__file__).with_name("oci_runner.py")
+    "--oci-helper",
+    type=Path,
+    default=Path(__file__).resolve().parents[2] / "core" / "oci_runner.py",
 )
 parser.add_argument("--runner", choices=("native", "oci"), default="native")
 parser.add_argument("--image-b64", default="")

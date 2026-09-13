@@ -19,7 +19,7 @@ stage1=$2
 stage2=$3
 collect_dir=$4
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../bin/cloudmake}
+cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../cmd/cloudmake}
 log_dir=${CLOUDMAKE_ACCEPTANCE_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/cloudmake-orfs.XXXXXX")}
 mkdir -p "$log_dir"
 

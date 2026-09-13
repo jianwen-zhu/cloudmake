@@ -35,9 +35,9 @@ jobs:
           python-version: "3.13"
       - name: Validate Python, shell, notebooks, and whitespace
         run: |
-          python -m compileall -q bin tools tests
-          sh -n tools/remote_lock.sh tests/compatibility/projects/prepare.sh
+          python -m compileall -q cmd core backend tests
+          sh -n core/remote_lock.sh tests/compatibility/projects/prepare.sh
           sh -n tests/compatibility/devcontainers/prepare.sh
-          python -m json.tool notebooks/colab.ipynb >/dev/null
-          python -m json.tool notebooks/kaggle.ipynb >/dev/null
+          python -m json.tool backend/colab-notebook/notebook.ipynb >/dev/null
+          python -m json.tool backend/kaggle-notebook/notebook.ipynb >/dev/null
           git diff --check

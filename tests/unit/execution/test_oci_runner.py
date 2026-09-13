@@ -14,8 +14,8 @@ import pytest
 from conftest import PROJECT_ROOT, run_command, write_executable
 
 
-TOOL = PROJECT_ROOT / "tools" / "oci_runner.py"
-RESULT_TOOL = PROJECT_ROOT / "tools" / "oci_result.py"
+TOOL = PROJECT_ROOT / "core" / "oci_runner.py"
+RESULT_TOOL = PROJECT_ROOT / "core" / "oci_result.py"
 IMAGE = "registry.example/tools/build@sha256:" + "a" * 64
 
 

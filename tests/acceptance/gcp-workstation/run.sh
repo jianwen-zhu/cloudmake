@@ -15,7 +15,7 @@ fi
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 project=$script_dir/project
-cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../bin/cloudmake}
+cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../cmd/cloudmake}
 gate=${GCP_GATE:-cpu}
 evidence=$1
 mkdir -p "$evidence"

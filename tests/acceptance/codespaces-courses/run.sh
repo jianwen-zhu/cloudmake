@@ -23,7 +23,7 @@ for project in "$lab1" "$lab4" "$ece467"; do
 done
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../bin/cloudmake}
+cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../cmd/cloudmake}
 course_image=${CODESPACES_COURSE_IMAGE:-docker.io/library/python@sha256:933b46a028fd786c9c3d426ebabc237e29a15912231ea8de576e95f0e4f41a4c}
 mkdir -p "$evidence"
 evidence=$(CDPATH= cd -- "$evidence" && pwd)

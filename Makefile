@@ -4,7 +4,7 @@ endif
 PROJECT_DIR ?= $(CURDIR)
 PROJECT ?= cloud-build-prototype
 PROJECT_SLUG ?= $(PROJECT)
-PROJECT_MAKEFILE ?= $(if $(filter $(abspath $(PROJECT_DIR)),$(CLOUDMAKE_TOOL_ROOT)),Makefile.build,Makefile)
+PROJECT_MAKEFILE ?= Makefile
 ARTIFACT_DIR ?= $(abspath $(PROJECT_DIR))/.cloudmake/artifacts
 CLOUDMAKE_STATE_ROOT ?= .cloud-state
 CLOUDMAKE_CACHE_ROOT ?= $(CLOUDMAKE_STATE_ROOT)/cache
@@ -15,19 +15,23 @@ VERSION := $(strip $(shell sed -n '1p' '$(CLOUDMAKE_TOOL_ROOT)/VERSION'))
 CLOUDMAKE_RUNTIME_DIR ?= $(PREFIX)/libexec/cloudmake
 DIST_DIR ?= $(CLOUDMAKE_TOOL_ROOT)/dist
 
-CLOUDMAKE_RUNTIME_DIRS := backends core host-templates notebooks tools transports
 CLOUDMAKE_RUNTIME_FILES := $(CLOUDMAKE_TOOL_ROOT)/Makefile $(CLOUDMAKE_TOOL_ROOT)/VERSION \
-	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/backends/*.mk) \
 	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/core/*.mk) \
-	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/host-templates/*) \
-	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/notebooks/*.ipynb) \
-	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/tools/*.py) \
-	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/tools/*.sh) \
-	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/transports/*.mk)
+	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/core/*.py) \
+	$(wildcard $(CLOUDMAKE_TOOL_ROOT)/core/*.sh) \
+	$(foreach directory,$(wildcard $(CLOUDMAKE_TOOL_ROOT)/backend/*), \
+		$(wildcard $(directory)/*.mk) \
+		$(wildcard $(directory)/*.py) \
+		$(wildcard $(directory)/*.sh) \
+		$(wildcard $(directory)/*.ipynb) \
+		$(wildcard $(directory)/*.conf) \
+		$(wildcard $(directory)/*.json) \
+		$(wildcard $(directory)/*.Dockerfile) \
+		$(wildcard $(directory)/README.md))
 
 .DEFAULT_GOAL := help
 
-BACKEND_FILE := $(CLOUDMAKE_TOOL_ROOT)/backends/$(BACKEND).mk
+BACKEND_FILE := $(CLOUDMAKE_TOOL_ROOT)/backend/$(BACKEND)/backend.mk
 
 ifeq ($(wildcard $(BACKEND_FILE)),)
 $(error Unknown backend "$(BACKEND)"; expected $(BACKEND_FILE))
@@ -38,13 +42,13 @@ include $(CLOUDMAKE_TOOL_ROOT)/core/prerequisites.mk
 include $(CLOUDMAKE_TOOL_ROOT)/core/resilience.mk
 
 ifeq ($(BACKEND_TRANSPORT),colab-native)
-include $(CLOUDMAKE_TOOL_ROOT)/transports/colab-native.mk
+include $(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/transport.mk
 else ifeq ($(BACKEND_TRANSPORT),kaggle-kernel)
-include $(CLOUDMAKE_TOOL_ROOT)/transports/kaggle-kernel.mk
+include $(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/transport.mk
 else ifeq ($(BACKEND_TRANSPORT),ssh)
-include $(CLOUDMAKE_TOOL_ROOT)/transports/ssh.mk
+include $(CLOUDMAKE_TOOL_ROOT)/core/ssh.mk
 else ifeq ($(BACKEND_TRANSPORT),local)
-include $(CLOUDMAKE_TOOL_ROOT)/transports/local.mk
+include $(CLOUDMAKE_TOOL_ROOT)/backend/local/transport.mk
 else
 $(error Backend "$(BACKEND)" has unknown BACKEND_TRANSPORT "$(BACKEND_TRANSPORT)")
 endif
@@ -53,14 +57,12 @@ endif
 install:
 	@mkdir -p '$(DESTDIR)$(PREFIX)/bin'
 	@mkdir -p '$(DESTDIR)$(CLOUDMAKE_RUNTIME_DIR)'
-	@for directory in $(CLOUDMAKE_RUNTIME_DIRS); do \
-		mkdir -p '$(DESTDIR)$(CLOUDMAKE_RUNTIME_DIR)/'"$$directory"; \
-	done
 	@for file in $(CLOUDMAKE_RUNTIME_FILES); do \
 		relative=$${file#'$(CLOUDMAKE_TOOL_ROOT)'/}; \
+		mkdir -p '$(DESTDIR)$(CLOUDMAKE_RUNTIME_DIR)/'"$$(dirname "$$relative")"; \
 		install -m 644 "$$file" '$(DESTDIR)$(CLOUDMAKE_RUNTIME_DIR)/'"$$relative"; \
 	done
-	@install -m 755 '$(CLOUDMAKE_TOOL_ROOT)/bin/cloudmake' '$(DESTDIR)$(PREFIX)/bin/cloudmake'
+	@install -m 755 '$(CLOUDMAKE_TOOL_ROOT)/cmd/cloudmake' '$(DESTDIR)$(PREFIX)/bin/cloudmake'
 	@echo 'Installed cloudmake $(VERSION) to $(DESTDIR)$(PREFIX)/bin/cloudmake'
 
 dist:

@@ -10,7 +10,7 @@ import sys
 from conftest import PROJECT_ROOT
 
 
-TOOL = PROJECT_ROOT / "tools" / "colab_oci_prepare.py"
+TOOL = PROJECT_ROOT / "backend" / "colab-notebook" / "oci_prepare.py"
 
 
 def load(name: str):

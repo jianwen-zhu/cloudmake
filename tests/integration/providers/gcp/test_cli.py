@@ -31,7 +31,7 @@ def test_use_gcp_persists_only_resource_coordinates(
     }
 
     result = run_command(
-        [prototype / "bin" / "cloudmake", "--use", "gcp"],
+        [prototype / "cmd" / "cloudmake", "--use", "gcp"],
         cwd=prototype,
         env=environment,
     )
@@ -56,7 +56,7 @@ def test_gcp_help_does_not_require_a_configured_resource(
     prototype: Path, tmp_path: Path
 ) -> None:
     result = run_command(
-        [prototype / "bin" / "cloudmake", "-b", "gcp", "--help"],
+        [prototype / "cmd" / "cloudmake", "-b", "gcp", "--help"],
         cwd=prototype,
         env=isolated_environment(tmp_path),
     )
@@ -67,7 +67,7 @@ def test_gcp_execution_rejects_incomplete_selection_before_provider(
     prototype: Path, tmp_path: Path
 ) -> None:
     result = run_command(
-        [prototype / "bin" / "cloudmake", "-b", "gcp", "smoke"],
+        [prototype / "cmd" / "cloudmake", "-b", "gcp", "smoke"],
         cwd=prototype,
         env={**isolated_environment(tmp_path), "GCP_PROJECT": "example-project"},
         check=False,
@@ -154,43 +154,43 @@ def test_fake_provider_full_target_stop_restart_and_native_persistence(
     }
 
     first = run_command(
-        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
+        [prototype / "cmd" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
         cwd=prototype,
         env=environment,
         timeout=60,
     )
     second = run_command(
-        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
+        [prototype / "cmd" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
         cwd=prototype,
         env=environment,
         timeout=60,
     )
     profile = run_command(
-        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "--environment"],
+        [prototype / "cmd" / "cloudmake", "-C", project, "-b", "gcp", "--environment"],
         cwd=prototype,
         env=environment,
         timeout=60,
     )
     stopped = run_command(
-        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "--stop"],
+        [prototype / "cmd" / "cloudmake", "-C", project, "-b", "gcp", "--stop"],
         cwd=prototype,
         env=environment,
         timeout=60,
     )
     status = run_command(
-        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "--status"],
+        [prototype / "cmd" / "cloudmake", "-C", project, "-b", "gcp", "--status"],
         cwd=prototype,
         env=environment,
         timeout=60,
     )
     third = run_command(
-        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
+        [prototype / "cmd" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
         cwd=prototype,
         env=environment,
         timeout=60,
     )
     failed = run_command(
-        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "fail-once"],
+        [prototype / "cmd" / "cloudmake", "-C", project, "-b", "gcp", "fail-once"],
         cwd=prototype,
         env=environment,
         check=False,
@@ -252,7 +252,7 @@ def test_doctor_rejects_absent_gcloud_auth_without_starting_compute(
     }
 
     result = run_command(
-        [prototype / "bin" / "cloudmake", "-C", prototype, "-b", "gcp", "--doctor"],
+        [prototype / "cmd" / "cloudmake", "-C", prototype, "-b", "gcp", "--doctor"],
         cwd=prototype,
         env=environment,
         check=False,
@@ -292,7 +292,7 @@ def test_sigterm_reaches_remote_make_and_releases_operation_lock(
         "FAKE_GCP_HOME": os.fspath(remote_home),
     }
     command = [
-        os.fspath(prototype / "bin" / "cloudmake"),
+        os.fspath(prototype / "cmd" / "cloudmake"),
         "-C",
         os.fspath(project),
         "-b",
@@ -323,7 +323,7 @@ def test_sigterm_reaches_remote_make_and_releases_operation_lock(
     assert running.returncode == 143, output
 
     resumed = run_command(
-        [prototype / "bin" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
+        [prototype / "cmd" / "cloudmake", "-C", project, "-b", "gcp", "smoke"],
         cwd=prototype,
         env=environment,
         timeout=30,

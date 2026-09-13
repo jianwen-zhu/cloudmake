@@ -26,6 +26,8 @@ item with tests or explicitly defer it to a named later release.
 
 ## Design boundaries
 
+- Keep executable source in `cmd/`, shared mechanisms in `core/`, and all
+  provider-specific implementation in `backend/<backend-id>/`.
 - Keep the local working tree as the source of truth.
 - Do not require Git hosting, committed source, fixed directory names, or
   provider-specific project files.

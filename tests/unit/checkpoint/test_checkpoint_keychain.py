@@ -10,8 +10,8 @@ from types import SimpleNamespace
 from conftest import PROJECT_ROOT, run_command
 
 
-KEYCHAIN_PATH = PROJECT_ROOT / "tools" / "checkpoint_keychain.py"
-TRANSPORT_PATH = PROJECT_ROOT / "tools" / "checkpoint_transport.py"
+KEYCHAIN_PATH = PROJECT_ROOT / "core" / "checkpoint_keychain.py"
+TRANSPORT_PATH = PROJECT_ROOT / "core" / "checkpoint_transport.py"
 PROJECT_KEY = "0123456789abcdef01234567"
 SENTINEL = b"checkpoint-sentinel-secret-94fd61b7"
 

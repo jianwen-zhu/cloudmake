@@ -26,7 +26,7 @@ for project in "$lab1" "$lab4" "$ece467"; do
 done
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../bin/cloudmake}
+cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../cmd/cloudmake}
 accelerator=${KAGGLE_COURSE_ACCELERATOR:-NvidiaTeslaT4}
 ece467_image=${KAGGLE_ECE467_IMAGE:-docker.io/pytorch/pytorch@sha256:53ab3de62f6101d1e42f9be28623ab7a468a24c070d632f211ed576e30b6abd3}
 ece467_state='STATE_ROOT=$(HOME)/.cache/ece467-labs'

@@ -8,7 +8,7 @@ import sys
 from conftest import PROJECT_ROOT, run_command
 
 
-TOOL = PROJECT_ROOT / "tools" / "vm_capabilities.py"
+TOOL = PROJECT_ROOT / "core" / "vm_capabilities.py"
 
 
 def load(name: str):

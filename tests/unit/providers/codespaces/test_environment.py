@@ -12,8 +12,8 @@ import sys
 from conftest import PROJECT_ROOT, run_command
 
 
-TOOL = PROJECT_ROOT / "tools" / "codespaces_environment.py"
-RESULT_TOOL = PROJECT_ROOT / "tools" / "provider_oci_result.py"
+TOOL = PROJECT_ROOT / "backend" / "codespaces-ssh" / "environment.py"
+RESULT_TOOL = PROJECT_ROOT / "core" / "provider_oci_result.py"
 IMAGE = "registry.example/science/tools@sha256:" + "a" * 64
 
 

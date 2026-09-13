@@ -184,7 +184,7 @@ if __name__ == "__main__":
         elif command == ["slots"]:
             exit_code = slots()
         else:
-            raise RuntimeError("usage: kaggle_result.py {field|complete|slots} ...")
+            raise RuntimeError("usage: result.py {field|complete|slots} ...")
     except RuntimeError as error:
         print(f"[cloudmake] Kaggle infrastructure failure: {error}", file=os.sys.stderr)
         exit_code = 70

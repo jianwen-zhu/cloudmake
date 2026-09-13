@@ -50,14 +50,14 @@ REMOTE_MAKEFILE ?= $(PROJECT_MAKEFILE)
 
 BACKEND_PREREQUISITE := codespaces-connection
 BACKEND_CONTEXT_RESOURCE_STATE_FILE := $(CODESPACE_RESOURCE_STATE)
-BACKEND_PRE_CONNECT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_environment.py' \
+BACKEND_PRE_CONNECT = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/codespaces-ssh/environment.py' \
 	--gh '$(GH_BIN)' --codespace '$(CODESPACE)' --mode '$(CLOUDMAKE_RUNNER)' \
 	--image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
 	--environment-b64 '$(CLOUDMAKE_OCI_ENVIRONMENT_B64)' \
 	--host-requirements-b64 '$(CLOUDMAKE_HOST_REQUIREMENTS_B64)' \
 	--forward-ports-b64 '$(CLOUDMAKE_FORWARD_PORTS_B64)' \
-	--native-config '$(CLOUDMAKE_TOOL_ROOT)/.devcontainer/devcontainer.json' \
-	--native-dockerfile '$(CLOUDMAKE_TOOL_ROOT)/.devcontainer/Dockerfile' \
+	--native-config '$(CLOUDMAKE_TOOL_ROOT)/backend/codespaces-ssh/anchor.json' \
+	--native-dockerfile '$(CLOUDMAKE_TOOL_ROOT)/backend/codespaces-ssh/anchor.Dockerfile' \
 	--receipt '$(CODESPACE_ENVIRONMENT_RECEIPT)'
 BACKEND_OCI_REMOTE_REQUIRED_COMMANDS := make rsync tar python3
 
@@ -67,7 +67,7 @@ BACKEND_START := :
 BACKEND_STATUS = $(GH_BIN) codespace view -c $(CODESPACE)
 BACKEND_STOP = if test -f '$(CODESPACE_SSH_CONFIG)' && test -n '$(SSH_HOST)'; then \
 	$(SSH_BIN) $(SSH_OPTIONS) -O exit $(SSH_HOST) >/dev/null 2>&1 || :; fi; \
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/codespaces-ssh/state.py' \
 		--gh '$(GH_BIN)' --codespace '$(CODESPACE)' \
 		--output '$(CODESPACE_RESOURCE_STATE)' --stop
 
@@ -79,15 +79,15 @@ codespaces-connection: doctor
 	fi
 	@mkdir -p '$(CODESPACE_STATE_DIR)'
 	@if test -f '$(CODESPACE_SSH_CONFIG)'; then \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/codespaces-ssh/state.py' \
 			--gh '$(GH_BIN)' --codespace '$(CODESPACE)' \
 			--output '$(CODESPACE_RESOURCE_STATE)'; \
 	else \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/codespaces-ssh/state.py' \
 			--gh '$(GH_BIN)' --codespace '$(CODESPACE)' \
 			--output '$(CODESPACE_RESOURCE_STATE)' \
 			--ssh-config '$(CODESPACE_SSH_CONFIG).tmp'; \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_config.py' \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/validate_ssh_config.py' \
 			'$(CODESPACE_SSH_CONFIG).tmp'; \
 		mv '$(CODESPACE_SSH_CONFIG).tmp' '$(CODESPACE_SSH_CONFIG)'; \
 	fi
@@ -100,7 +100,7 @@ refresh-ssh-config: doctor
 	fi
 	@mkdir -p '$(CODESPACE_STATE_DIR)'
 	@previous="$$(cat '$(CODESPACE_RESOURCE_STATE)' 2>/dev/null || :)"; \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/codespaces_state.py' \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/codespaces-ssh/state.py' \
 			--gh '$(GH_BIN)' --codespace '$(CODESPACE)' \
 			--output '$(CODESPACE_RESOURCE_STATE).refresh' \
 			--ssh-config '$(CODESPACE_SSH_CONFIG).tmp'; \
@@ -110,5 +110,5 @@ refresh-ssh-config: doctor
 			mv '$(CODESPACE_RESOURCE_STATE).refresh' '$(CODESPACE_RESOURCE_STATE)'; \
 		fi; \
 		rm -f '$(CODESPACE_RESOURCE_STATE).refresh'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_config.py' '$(CODESPACE_SSH_CONFIG).tmp'
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/validate_ssh_config.py' '$(CODESPACE_SSH_CONFIG).tmp'
 	@mv '$(CODESPACE_SSH_CONFIG).tmp' '$(CODESPACE_SSH_CONFIG)'

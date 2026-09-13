@@ -55,7 +55,7 @@ status: doctor
 		fi; temporary='$(CLOUDMAKE_STATE_ROOT)/status/$(BACKEND)-$$$$.tmp'; \
 		if $(KAGGLE_BIN) kernels status "$$reference" > "$$temporary" 2>&1; then \
 			cat "$$temporary"; \
-			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
+			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
 			rm -f "$$temporary"; \
 		else code=$$?; cat "$$temporary"; rm -f "$$temporary"; exit $$code; fi
 
@@ -89,7 +89,7 @@ _kaggle-start: ensure-owner
 
 _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 	@mkdir -p '$(CLOUDMAKE_MANIFEST_DIR)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
 		$(CLOUDMAKE_SECRET_OPTION) \
@@ -102,7 +102,7 @@ _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 		echo '[kaggle] Source unchanged; reusing cached source archive.'; \
 		mv '$(CLOUDMAKE_CURRENT_MANIFEST)' '$(CLOUDMAKE_MANIFEST)'; \
 	else \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/source_fingerprint.py' \
 			--root '$(PROJECT_DIR)' \
 			--archive '$(KAGGLE_ARCHIVE)' \
 			$(CLOUDMAKE_SECRET_OPTION) \
@@ -114,7 +114,7 @@ _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 
 _kaggle-execute: _kaggle-start _kaggle-sync | $(KAGGLE_KERNEL_DIR) $(KAGGLE_OUTPUT_DIR)
 	@CLOUDMAKE_RESOURCE_STATE=new; $(CLOUDMAKE_PRINT_CONTEXT)
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_prepare.py' \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/prepare.py' \
 		--template '$(KAGGLE_NOTEBOOK)' \
 		--archive '$(KAGGLE_ARCHIVE)' \
 		--owner '$(CLOUDMAKE_OWNER_FILE)' \
@@ -136,8 +136,8 @@ _kaggle-execute: _kaggle-start _kaggle-sync | $(KAGGLE_KERNEL_DIR) $(KAGGLE_OUTP
 		--checkpoint-head '$(KAGGLE_CHECKPOINT_HEAD)' \
 		--source-manifest '$(CLOUDMAKE_MANIFEST)' \
 		--dispatch '$(KAGGLE_DISPATCH)' \
-		--remote-helper '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_remote.py' \
-		--oci-helper '$(CLOUDMAKE_TOOL_ROOT)/tools/oci_runner.py' \
+		--remote-helper '$(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/remote.py' \
+		--oci-helper '$(CLOUDMAKE_TOOL_ROOT)/core/oci_runner.py' \
 		--runner '$(CLOUDMAKE_RUNNER)' \
 		--image-b64 '$(CLOUDMAKE_OCI_IMAGE_B64)' \
 		--devices-b64 '$(CLOUDMAKE_OCI_DEVICES_B64)' \
@@ -155,9 +155,9 @@ _kaggle-execute: _kaggle-start _kaggle-sync | $(KAGGLE_KERNEL_DIR) $(KAGGLE_OUTP
 		$(CLOUDMAKE_RECORD_STATE) --phase provider_execution --provider-state running \
 			--target-submission ambiguous --retry-safe false
 	@set +e; \
-	reference=`$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_result.py' field --dispatch '$(KAGGLE_DISPATCH)' --field kernel_ref`; \
+	reference=`$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/result.py' field --dispatch '$(KAGGLE_DISPATCH)' --field kernel_ref`; \
 	rm -f '$(KAGGLE_RUN_LOG)' '$(KAGGLE_TARGET_RESULT)' '$(KAGGLE_CHECKPOINT_RESULT)' '$(KAGGLE_OCI_RESULT)'; \
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_wait.py' \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/wait.py' \
 		--kaggle '$(KAGGLE_BIN)' \
 		--kernel "$$reference" \
 		--timeout '$(KAGGLE_TIMEOUT)' \
@@ -183,7 +183,7 @@ _kaggle-execute: _kaggle-start _kaggle-sync | $(KAGGLE_KERNEL_DIR) $(KAGGLE_OUTP
 	if test $$target_output_status -ne 0 || test $$checkpoint_output_status -ne 0 || test $$oci_output_status -ne 0; then \
 		if test $$wait_status -ne 0; then exit $$wait_status; fi; exit 70; \
 	fi; \
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_result.py' complete \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/result.py' complete \
 		--dispatch '$(KAGGLE_DISPATCH)' --target-result '$(KAGGLE_TARGET_RESULT)' \
 		--operation-state '$(CLOUDMAKE_OPERATION_STATE)' \
 		$(if $(filter 1,$(CLOUDMAKE_CHECKPOINT)),--checkpoint-result '$(KAGGLE_CHECKPOINT_RESULT)' --head '$(KAGGLE_CHECKPOINT_HEAD)' --provenance '$(KAGGLE_CHECKPOINT_PROVENANCE)',); \
@@ -226,7 +226,7 @@ _kaggle-workspace-purge: ensure-owner
 		trap 'rm -f "$$listing" "$$references"' EXIT HUP INT TERM; \
 		$(KAGGLE_BIN) kernels list -m --page-size 200 \
 			--search 'cloudmake-ws-$(CLOUDMAKE_WORKSPACE_ID)' --format json > "$$listing"; \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_result.py' slots \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/result.py' slots \
 			--listing "$$listing" --owner '$(KAGGLE_USERNAME)' \
 			--workspace-id '$(CLOUDMAKE_WORKSPACE_ID)' > "$$references"; \
 		while IFS= read -r reference; do \

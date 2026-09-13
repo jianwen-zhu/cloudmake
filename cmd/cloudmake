@@ -35,9 +35,9 @@ def locate_tool_root() -> Path:
 TOOL_ROOT = locate_tool_root()
 VERSION = (TOOL_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ENGINE = TOOL_ROOT / "Makefile"
-HOST_TEMPLATE_DIR = TOOL_ROOT / "host-templates"
+HOST_TEMPLATE_DIR = TOOL_ROOT / "backend/host-ssh"
 COLLECTION_RELATIVE = Path(".cloudmake") / "artifacts"
-sys.path.insert(0, os.fspath(TOOL_ROOT / "tools"))
+sys.path.insert(0, os.fspath(TOOL_ROOT / "core"))
 from devcontainer_config import (
     DevContainerError,
     check_host as check_devcontainer_host,
@@ -769,7 +769,7 @@ Information: --help, --version, --history, --host-templates,
 
 
 def backend_declaration(backend: str, name: str) -> str:
-    path = TOOL_ROOT / "backends" / f"{backend}.mk"
+    path = TOOL_ROOT / "backend" / backend / "backend.mk"
     try:
         source = path.read_text(encoding="utf-8")
     except OSError as error:
@@ -783,7 +783,7 @@ def backend_declaration(backend: str, name: str) -> str:
 
 
 def optional_backend_declaration(backend: str, name: str, default: str) -> str:
-    path = TOOL_ROOT / "backends" / f"{backend}.mk"
+    path = TOOL_ROOT / "backend" / backend / "backend.mk"
     try:
         source = path.read_text(encoding="utf-8")
     except OSError as error:
@@ -818,7 +818,7 @@ def backend_oci_native(backend: str) -> bool:
 
 def backend_target_replay(backend: str) -> str:
     """Read the static replay declaration without contacting a provider."""
-    descriptor = TOOL_ROOT / "backends" / f"{backend}.mk"
+    descriptor = TOOL_ROOT / "backend" / backend / "backend.mk"
     declarations = [
         line
         for line in descriptor.read_text(encoding="utf-8").splitlines()
@@ -2135,7 +2135,7 @@ def local_oci_command(
     result = state_root / "oci" / run_id / "result.json"
     common = [
         sys.executable,
-        os.fspath(TOOL_ROOT / "tools" / "oci_runner.py"),
+        os.fspath(TOOL_ROOT / "core" / "oci_runner.py"),
         "--image",
         image,
         "--runtime",
@@ -2198,7 +2198,7 @@ def local_native_devcontainer_command(
     result = state_root / "devcontainer" / run_id / "result.json"
     state = state_root / "devcontainer" / "workstation.json"
     command = [
-        sys.executable, os.fspath(TOOL_ROOT / "tools" / "devcontainer_native.py"),
+        sys.executable, os.fspath(TOOL_ROOT / "core" / "devcontainer_native.py"),
         "--project", os.fspath(project), "--config", profile["path"],
         "--project-key", project_key(project),
         "--fingerprint", profile["fingerprint"], "--target", target,
@@ -2250,7 +2250,7 @@ def collect_local_artifacts(
 
     command = [
         sys.executable,
-        os.fspath(TOOL_ROOT / "tools" / "safe_extract.py"),
+        os.fspath(TOOL_ROOT / "core" / "safe_extract.py"),
         "--archive",
         os.fspath(archive),
         "--destination",

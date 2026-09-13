@@ -1,5 +1,5 @@
 # Maintainer-facing operations for the local backend. The supported launcher
-# path invokes project Make directly in bin/cloudmake rather than entering here.
+# path invokes project Make directly in cmd/cloudmake rather than entering here.
 
 .PHONY: help start status stop sync collect dispatch fetch shell open environment
 
@@ -15,9 +15,9 @@ status: doctor
 
 environment: prerequisites
 	@profile='$(CLOUDMAKE_STATE_ROOT)/local/environment-profile.json'; \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/vm_capabilities.py' \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/vm_capabilities.py' \
 			--workspace '$(PROJECT_DIR)' --result "$$profile" >/dev/null; \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/vm_capabilities.py' --render "$$profile"
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/vm_capabilities.py' --render "$$profile"
 
 stop: prerequisites
 	@echo '[local] No compute environment needs to be stopped.'

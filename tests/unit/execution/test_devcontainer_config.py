@@ -12,7 +12,7 @@ import pytest
 from conftest import PROJECT_ROOT, run_command
 
 
-TOOL = PROJECT_ROOT / "tools" / "devcontainer_config.py"
+TOOL = PROJECT_ROOT / "core" / "devcontainer_config.py"
 IMAGE = "registry.example/tools/workstation@sha256:" + "a" * 64
 
 

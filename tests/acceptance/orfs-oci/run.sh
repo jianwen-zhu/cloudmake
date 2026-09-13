@@ -18,7 +18,7 @@ project=$1
 collect_dir=$2
 image='docker.io/openroad/orfs@sha256:cdb377cec7796c5cb01d482ca035811bfe559ca55dcca7f5e5f46fa811c63142'
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../bin/cloudmake}
+cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../cmd/cloudmake}
 log_dir=${CLOUDMAKE_ACCEPTANCE_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/cloudmake-orfs-oci.XXXXXX")}
 mkdir -p "$log_dir"
 

@@ -14,8 +14,8 @@ import pytest
 from conftest import PROJECT_ROOT, run_command
 
 
-REMOTE = PROJECT_ROOT / "tools" / "kaggle_remote.py"
-FINGERPRINT = PROJECT_ROOT / "tools" / "source_fingerprint.py"
+REMOTE = PROJECT_ROOT / "backend" / "kaggle-notebook" / "remote.py"
+FINGERPRINT = PROJECT_ROOT / "core" / "source_fingerprint.py"
 
 
 def load_remote():
@@ -66,7 +66,7 @@ def execute(
     return run_command(
         [
             "python3", REMOTE, "--control", run_control,
-            "--source-archive", archive, "--oci-runner", PROJECT_ROOT / "tools" / "oci_runner.py",
+            "--source-archive", archive, "--oci-runner", PROJECT_ROOT / "core" / "oci_runner.py",
             "--root", directory / "root", "--working", directory / "working",
             "--input-root", input_root,
         ],
@@ -192,7 +192,7 @@ def test_requested_network_failure_stops_before_target(tmp_path: Path, monkeypat
         old_argv = module.os.sys.argv
         module.os.sys.argv = [
             str(REMOTE), "--control", str(run_control), "--source-archive",
-            str(archive), "--oci-runner", str(PROJECT_ROOT / "tools/oci_runner.py"),
+            str(archive), "--oci-runner", str(PROJECT_ROOT / "core/oci_runner.py"),
             "--root", str(run_dir / "root"), "--working", str(run_dir / "working"),
             "--input-root", str(tmp_path / "input"),
         ]

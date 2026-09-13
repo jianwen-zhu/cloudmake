@@ -58,33 +58,33 @@ REMOTE_MAKEFILE ?= $(PROJECT_MAKEFILE)
 BACKEND_PREREQUISITE := gcp-connection
 BACKEND_CONTEXT_RESOURCE_STATE_FILE := $(GCP_RESOURCE_STATE)
 BACKEND_START := :
-BACKEND_STATUS = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/gcp_lifecycle.py' --gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' --instance '$(GCP_INSTANCE)' --output '$(GCP_RESOURCE_RECEIPT)' --state-file '$(GCP_RESOURCE_STATE)' --status
-BACKEND_STOP = if test -x '$(GCP_SSH_WRAPPER)'; then $(GCP_SSH_WRAPPER) -O exit '$(GCP_INSTANCE)' >/dev/null 2>&1 || :; fi; $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/gcp_lifecycle.py' --gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' --instance '$(GCP_INSTANCE)' --output '$(GCP_RESOURCE_RECEIPT)' --state-file '$(GCP_RESOURCE_STATE)' --stop
+BACKEND_STATUS = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/gcp-compute-ssh/lifecycle.py' --gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' --instance '$(GCP_INSTANCE)' --output '$(GCP_RESOURCE_RECEIPT)' --state-file '$(GCP_RESOURCE_STATE)' --status
+BACKEND_STOP = if test -x '$(GCP_SSH_WRAPPER)'; then $(GCP_SSH_WRAPPER) -O exit '$(GCP_INSTANCE)' >/dev/null 2>&1 || :; fi; $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/gcp-compute-ssh/lifecycle.py' --gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' --instance '$(GCP_INSTANCE)' --output '$(GCP_RESOURCE_RECEIPT)' --state-file '$(GCP_RESOURCE_STATE)' --stop
 
 .PHONY: gcp-connection refresh-ssh-config environment _gcp-environment
 gcp-connection: doctor
 	@mkdir -p '$(GCP_STATE_DIR)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/gcp_lifecycle.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/gcp-compute-ssh/lifecycle.py' \
 		--gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' \
 		--instance '$(GCP_INSTANCE)' --output '$(GCP_RESOURCE_RECEIPT)' \
 		--state-file '$(GCP_RESOURCE_STATE)' --ensure-running
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/gcp_ssh.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/gcp-compute-ssh/ssh.py' \
 		--gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' \
 		--instance '$(GCP_INSTANCE)' $(if $(filter yes,$(GCP_TUNNEL_THROUGH_IAP)),--tunnel-through-iap,) \
 		--create-wrapper '$(GCP_SSH_WRAPPER)' --python '$(PYTHON_BIN)' \
 		--control-directory '$(GCP_CONTROL_DIR)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/gcp_ssh.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/gcp-compute-ssh/ssh.py' \
 		--gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' \
 		--instance '$(GCP_INSTANCE)' $(if $(filter yes,$(GCP_TUNNEL_THROUGH_IAP)),--tunnel-through-iap,) \
 		--wait-ready
 	@if test "$$(cat '$(GCP_RESOURCE_STATE)')" = started; then \
 		$(SSH) "sh -s -- reset-after-restart '$(REMOTE_LOCK)' restarted 0" \
-			< '$(CLOUDMAKE_TOOL_ROOT)/tools/remote_lock.sh'; \
+			< '$(CLOUDMAKE_TOOL_ROOT)/core/remote_lock.sh'; \
 	fi
 
 refresh-ssh-config: prerequisites
 	@rm -f '$(GCP_SSH_WRAPPER)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/gcp_ssh.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/gcp-compute-ssh/ssh.py' \
 		--gcloud '$(GCLOUD_BIN)' --project '$(GCP_PROJECT)' --zone '$(GCP_ZONE)' \
 		--instance '$(GCP_INSTANCE)' $(if $(filter yes,$(GCP_TUNNEL_THROUGH_IAP)),--tunnel-through-iap,) \
 		--create-wrapper '$(GCP_SSH_WRAPPER)' --python '$(PYTHON_BIN)' \
@@ -99,12 +99,12 @@ _gcp-environment: _ssh-start
 	fi
 	@$(SSH) "mkdir -p '$(REMOTE_ROOT)'"
 	@$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
-		'$(CLOUDMAKE_TOOL_ROOT)/tools/vm_capabilities.py' \
+		'$(CLOUDMAKE_TOOL_ROOT)/core/vm_capabilities.py' \
 		$(SSH_HOST):$(GCP_REMOTE_ENVIRONMENT_TOOL)
 	@$(SSH) "python3 '$(GCP_REMOTE_ENVIRONMENT_TOOL)' --workspace '$(REMOTE_SRC)' --result '$(GCP_REMOTE_ENVIRONMENT_PROFILE)' >/dev/null"
 	@mkdir -p '$(GCP_STATE_DIR)'
 	@$(RSYNC_BIN) -az -e '$(RSYNC_RSH)' \
 		$(SSH_HOST):$(GCP_REMOTE_ENVIRONMENT_PROFILE) '$(GCP_ENVIRONMENT_PROFILE).tmp'
 	@mv '$(GCP_ENVIRONMENT_PROFILE).tmp' '$(GCP_ENVIRONMENT_PROFILE)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/vm_capabilities.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/vm_capabilities.py' \
 		--render '$(GCP_ENVIRONMENT_PROFILE)'

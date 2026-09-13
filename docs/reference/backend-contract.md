@@ -49,6 +49,15 @@ means native notebook access and never falls back to SSH.
 
 ## Backend descriptor
 
+Backend source is organized by ownership. The executable launcher lives at
+`cmd/cloudmake`; backend-neutral Make, Python, and shell mechanisms live in
+`core/`; and each provider implementation lives with its descriptor under
+`backend/<backend-id>/`. The descriptor is always
+`backend/<backend-id>/backend.mk`. A backend may use a shared core transport,
+but provider-specific lifecycle, notebook, checkpoint, and qualification code
+must remain in its own directory. This keeps backend boundaries visible without
+introducing a registry that maps names to source paths.
+
 Each backend declares:
 
 - the supported backend API version;
@@ -376,8 +385,8 @@ Transports must not add convenience rules for project-like names such as
 only when they are supplied by the selected project's Makefile. Maintainer tests
 that exercise the engine directly must also enter project execution through
 `dispatch`, so the internal test surface cannot accidentally reintroduce a
-predefined project-target contract. `Makefile.build` is only Cloudmake's bundled
-sample project and does not define the public interface.
+predefined project-target contract. `tests/fixtures/hello/Makefile` is only
+Cloudmake's bundled sample project and does not define the public interface.
 
 ## Transport responsibilities
 

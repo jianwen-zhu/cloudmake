@@ -53,17 +53,17 @@ REMOTE_ROOT ?= /teamspace/studios/this_studio/.cloudmake/$(PROJECT_SLUG)
 REMOTE_MAKEFILE ?= $(PROJECT_MAKEFILE)
 
 BACKEND_PREREQUISITE := $(LIGHTNING_SSH_CONFIG)
-BACKEND_START = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/lightning_ensure_studio.py' --client '$(LIGHTNING_BIN)' --teamspace '$(LIGHTNING_TEAMSPACE)' --name '$(LIGHTNING_STUDIO)' --machine '$(LIGHTNING_MACHINE)'
-BACKEND_STATUS = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/lightning_studio_status.py' --client '$(LIGHTNING_BIN)' --teamspace '$(LIGHTNING_TEAMSPACE)' --name '$(LIGHTNING_STUDIO)'
+BACKEND_START = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/lightning-studio-ssh/ensure_studio.py' --client '$(LIGHTNING_BIN)' --teamspace '$(LIGHTNING_TEAMSPACE)' --name '$(LIGHTNING_STUDIO)' --machine '$(LIGHTNING_MACHINE)'
+BACKEND_STATUS = $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/lightning-studio-ssh/status.py' --client '$(LIGHTNING_BIN)' --teamspace '$(LIGHTNING_TEAMSPACE)' --name '$(LIGHTNING_STUDIO)'
 BACKEND_STOP = $(LIGHTNING_BIN) studio stop --name '$(LIGHTNING_STUDIO)' --teamspace '$(LIGHTNING_TEAMSPACE)'
 
 $(LIGHTNING_SSH_CONFIG): doctor
 	@mkdir -p '$(LIGHTNING_STATE_DIR)'
 	@$(LIGHTNING_BIN) ssh generate --name '$(LIGHTNING_STUDIO)' --teamspace '$(LIGHTNING_TEAMSPACE)' > '$@.provider'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/rewrite_ssh_identity.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/rewrite_ssh_identity.py' \
 		--input '$@.provider' --output '$@.tmp' --identity '$(LIGHTNING_IDENTITY)'
 	@rm -f '$@.provider'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_config.py' '$@.tmp'
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/validate_ssh_config.py' '$@.tmp'
 	@mv '$@.tmp' '$@'
 
 .PHONY: refresh-ssh-config

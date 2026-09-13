@@ -10,8 +10,9 @@ import pytest
 from conftest import PROJECT_ROOT, run_command
 
 
-SCRIPT = PROJECT_ROOT / "tools" / "kaggle_prepare.py"
-TEMPLATE = PROJECT_ROOT / "notebooks" / "kaggle.ipynb"
+SCRIPT = PROJECT_ROOT / "backend" / "kaggle-notebook" / "prepare.py"
+TEMPLATE = PROJECT_ROOT / "backend" / "kaggle-notebook" / "notebook.ipynb"
+OCI_RUNNER = PROJECT_ROOT / "core" / "oci_runner.py"
 
 
 def embedded_control(output: Path) -> dict:
@@ -117,6 +118,7 @@ def test_prepare_embeds_archive_and_replaces_control_tokens(tmp_path: Path) -> N
     assert "__MAKEFILE_B64__" not in serialized
     assert "__PROJECT_ARGUMENTS_B64__" not in serialized
     assert "__COLLECT_DIR_B64__" not in serialized
+    assert base64.b64encode(OCI_RUNNER.read_bytes()).decode("ascii") in serialized
     control = embedded_control(output)
     assert control["target"] == "test"
     assert control["jobs"] == 7

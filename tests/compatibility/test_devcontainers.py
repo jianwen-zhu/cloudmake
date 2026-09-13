@@ -10,8 +10,8 @@ from conftest import PROJECT_ROOT, run_command
 
 
 PREPARE = PROJECT_ROOT / "tests" / "compatibility" / "devcontainers" / "prepare.sh"
-CONFIG_TOOL = PROJECT_ROOT / "tools" / "devcontainer_config.py"
-LAUNCHER = PROJECT_ROOT / "bin" / "cloudmake"
+CONFIG_TOOL = PROJECT_ROOT / "core" / "devcontainer_config.py"
+LAUNCHER = PROJECT_ROOT / "cmd" / "cloudmake"
 
 EXPECTED = {
     "cpp": {"image-build"},

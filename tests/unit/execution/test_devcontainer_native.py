@@ -8,7 +8,7 @@ import sys
 from conftest import PROJECT_ROOT, run_command, write_executable
 
 
-TOOL = PROJECT_ROOT / "tools" / "devcontainer_native.py"
+TOOL = PROJECT_ROOT / "core" / "devcontainer_native.py"
 
 
 def fake_tools(directory: Path) -> Path:

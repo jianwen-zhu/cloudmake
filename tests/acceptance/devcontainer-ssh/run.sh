@@ -13,7 +13,7 @@ fi
 : "${CLOUDMAKE_DEVCONTAINER_IMAGE:?set a digest-pinned image containing make and python3}"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../bin/cloudmake}
+cloudmake=${CLOUDMAKE_BIN:-$script_dir/../../../cmd/cloudmake}
 evidence=$1
 mkdir -p "$evidence"
 evidence=$(CDPATH= cd -- "$evidence" && pwd)
