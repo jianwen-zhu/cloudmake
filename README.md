@@ -257,8 +257,8 @@ Cloudmake will not imply that GPUs are free. Google Cloud Storage is no longer a
 2.4 objective and may remain a future optional storage adapter rather than a
 second Colab execution model. The storage-neutral lifecycle and runtime
 contracts are documented in
-[Stateful workspaces](design/architecture/stateful-workspaces.md) and
-[Execution environments and OCI runner](design/architecture/execution-environments.md). The
+[Persistence architecture](design/architecture/persistence.md) and
+[Execution architecture](design/architecture/execution.md). The
 revised release boundary is recorded in the
 [GCP backend design](docs/guides/gcp-backend.md).
 
@@ -944,11 +944,11 @@ working in a future release—nor a bare `chroot` CPU profile that cannot expose
 the accelerator motivating the backend. Details, backend coverage, security
 boundaries, and the ORFS validation ladder are in the
 [OCI/CDI runner guide](docs/reference/oci-runner.md) and
-[execution-environment contract](design/architecture/execution-environments.md). Colab's exact
+[execution architecture](design/architecture/execution.md). Colab's exact
 tested runtime boundary is recorded in
-[Colab OCI/CDI qualification](design/qualification/colab-oci-qualification.md). Kaggle's failed
+[backend qualification record](design/qualification.md). Kaggle's failed
 remote-workstation usability evaluation is preserved as a
-[historical backend report](design/history/kaggle-notebook.md), not as a
+[historical backend report](design/history.md#kaggle-notebook), not as a
 positive qualification claim.
 
 #### Capability-negotiated Dev Container workstation
@@ -1091,14 +1091,14 @@ fails, the target is blocked as an infrastructure failure.
 Persistent-workspace history is recovery state for Cloudmake, not archival backup. Losing the
 local credential-store item makes existing snapshots unreadable, although the
 local source remains unaffected. The complete lifecycle and custody boundaries
-are documented in [Stateful workspaces](design/architecture/stateful-workspaces.md) and the
+are documented in [Persistence architecture](design/architecture/persistence.md) and the
 [Security model](docs/reference/security.md).
 
 The 2.0 live acceptance gate has restored a 3.3 GB ORFS workspace into a
 replacement Colab VM, reused a previously completed floorplan without
 rebuilding it, completed placement, collected evidence, and published an
 incremental successor that added about 4.4 MB. Exact observations and the gate
-contract are recorded in [Stateful workspaces](design/architecture/stateful-workspaces.md).
+contract are recorded in [Persistence architecture](design/architecture/persistence.md).
 
 Cloudmake imposes no fixed byte or file-count ceiling on persistent workspaces.
 Before restore it compares the snapshot's logical bytes and entry count with the
@@ -1131,7 +1131,7 @@ checkpoint.
 > workstation backend. Because `session-reuse=no`, every target repeats VM
 > scheduling and—when selected—full checkpoint restore, OCI materialization,
 > and checkpoint publication. A live ECE467 workspace moved roughly 14.5 GB per
-> target cycle. See the [historical evaluation](design/history/kaggle-notebook.md).
+> target cycle. See the [historical evaluation](design/history.md#kaggle-notebook).
 
 Kaggle is a private batch-notebook backend. Every project-target submission
 creates a notebook version and runs in a fresh VM. There is no reusable
@@ -1343,7 +1343,7 @@ rebuild. One Codespace has one active workstation image; Cloudmake serializes
 its complete operation by resource name on the controlling host. The selected
 image is trusted input because GitHub may consume embedded Dev Container
 metadata during its provider-native rebuild. See
-[Codespaces native OCI](design/qualification/codespaces-native-oci.md).
+[Codespaces native OCI qualification](design/qualification.md#codespaces-native-oci-qualification).
 
 Codespaces permits workload connections to the public Internet, and the v2.2
 course gate proves that path with ECE326's real package, Git, and model
@@ -1442,7 +1442,7 @@ for `colab`, and it does not turn a managed Colab runtime into a full GCP VM.
 Native Colab remains the supported restricted-platform path; `ssh` covers an
 existing conventional VM, including GCP Compute Engine. The compatibility
 adapter and its prerequisites are retained in the
-[historical backend report](design/history/colab-ssh.md).
+[historical backend report](design/history.md#paid-colab-ssh).
 
 ### User-managed SSH host backend
 
@@ -1810,7 +1810,7 @@ created by the offline suite.
 The Kaggle notebook implementation remains available but is deprecated after
 live evaluation showed that its fresh-VM-per-target lifecycle makes the
 remote-workstation loop impractical. Its retained behavior and evidence are
-documented under [historical backends](design/history/kaggle-notebook.md).
+documented under [historical backends](design/history.md#kaggle-notebook).
 
 Provider quotas, accelerator availability, images, authentication policies, and
 billing remain external constraints. Future providers should be added as new

@@ -1,4 +1,10 @@
-# Historical backend report: Kaggle notebook
+# Historical backend investigations
+
+These reports explain why retained compatibility adapters are not current
+release-qualification surfaces. Their observations remain useful, but backend
+descriptors and stable user documentation define present behavior.
+
+## Kaggle notebook
 
 > **Status:** Deprecated and not recommended for Cloudmake's remote-workstation
 > workflow. The implementation remains available for compatibility and coarse
@@ -7,12 +13,12 @@
 > OCI materialization, and checkpoint publication; the measured ECE467
 > workspace was roughly 14.5 GB per cycle.
 
-This document records the managed-VM evidence behind Cloudmake 2.1's Kaggle
+This section records the managed-VM evidence behind Cloudmake 2.1's Kaggle
 profile. It is a bounded qualification of one provider surface, not a guarantee
 that Kaggle scheduling, internet access, accelerators, or base images remain
 unchanged.
 
-## Backend contract
+### Backend contract
 
 Kaggle declares:
 
@@ -50,7 +56,7 @@ travels between Kaggle jobs inside the provider and never through the laptop.
 Kaggle credentials remain with the official CLI and are absent from generated
 notebooks, checkpoint payloads, and receipts.
 
-## Observed managed VM
+### Observed managed VM
 
 Live probes on 2026-09-08 used Kaggle CLI 2.2.4 and private notebook versions.
 The observed CPU execution VM had:
@@ -81,7 +87,7 @@ views, and explicitly requested CDI bindings. Empty capability sets,
 `noNewPrivileges`, the unprivileged identity, and bounded mounts remain in
 force. This profile is for trusted automated computational images.
 
-## CDI boundary
+### CDI boundary
 
 The qualified Kaggle CDI surface is deliberately small:
 
@@ -102,7 +108,7 @@ PyTorch build. Cloudmake therefore correctly treats requested metadata as
 intent, not proof. A completed GPU CDI acceptance remains required before the
 profile can claim a specific current Kaggle accelerator image as live-verified.
 
-## Live evidence and provider limitations
+### Live evidence and provider limitations
 
 A two-job private-kernel spike passed provider-side checkpoint chaining. The
 subsequent end-to-end Cloudmake gate also passed: a native `provision` target
@@ -194,3 +200,39 @@ fresh-VM restore, source reconciliation, target-at-most-once behavior, failed
 head publication, credential non-disclosure, OCI preflight, PRoot CDI
 translation, hard links, and multi-gigabyte streaming digests. Live gates are
 kept separate because provider capacity and networking are not deterministic.
+
+## Paid Colab SSH
+
+> **Status:** Deprecated. The adapter remains available for CLI compatibility,
+> but it is not a Cloudmake release-qualification surface and is scheduled for
+> removal at the next major compatibility boundary.
+
+The `colab-ssh` backend provides SSH and rsync through the Colab CLI's
+WebSocket proxy. It is a managed Colab runtime, not a Google Compute Engine VM:
+Colab still owns its lifecycle, restrictions, capacity, and entitlement.
+
+Cloudmake retired this path because it duplicates two clearer supported models:
+
+- `colab` uses the native notebook/runtime API for restricted managed Colab;
+- `ssh` uses an already provisioned conventional VM, including a GCP VM.
+
+Unlike native Colab, the SSH adapter has no qualified cross-VM persistence
+service. Unlike a future full GCP backend, it does not manage Compute Engine
+lifecycle, persistent disks or object storage, IAM, quotas, or billing. No
+successful paid SSH release gate was retained.
+
+### Compatibility use
+
+Existing invocations continue to work during the 2.x line:
+
+```sh
+COLAB_IDENTITY=/path/to/id_ed25519 cloudmake -b colab-ssh TARGET
+cloudmake -b colab-ssh --stop
+```
+
+Prerequisites are the official Colab CLI, a paid Colab plan with the required
+entitlement or balance, OpenSSH, rsync, and an Ed25519 or ECDSA private key.
+Cloudmake's doctor can check the installed tools, key, and local Colab login,
+but provider entitlement can only be established by attempting the connection.
+
+New projects should choose native `colab`, `ssh`, or `codespaces` instead.

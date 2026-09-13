@@ -55,7 +55,7 @@ contains an ECE467-specific workaround. Override `KAGGLE_ECE467_IMAGE` only
 with another digest-pinned linux/amd64 image containing `make`, Python, a C++
 compiler, complete LibTorch CUDA headers/libraries, the CUDA development
 toolchain, and an equivalent link-time driver contract. See
-the [historical backend report](../../../design/history/kaggle-notebook.md) for
+the [historical backend report](../../../design/history.md#kaggle-notebook) for
 the live evidence and limitations.
 
 The harness leaves private kernel/checkpoint evidence intact on failure. Review

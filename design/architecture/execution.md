@@ -1,8 +1,9 @@
-# Execution environments and OCI runner
+# Execution architecture
 
-This document defines the boundary between Cloudmake 2.0 persistent workspaces
-and the Cloudmake 2.1 OCI/CDI execution surface. It is normative for those
-releases; research experiments do not expand the supported interface.
+This document defines how Cloudmake composes persistent workspaces, OCI/CDI
+execution, and Dev Containers while keeping compute, mutable state, and bundle
+authority distinct. It is the maintainer architecture for the 2.x line;
+research experiments do not expand the stable user contract.
 
 ## Backend roles and orthogonal choices
 
@@ -226,7 +227,7 @@ Cloudmake adds the same small transport surface. The provider rebuild is image
 preparation, not target submission, and is skipped while the recorded digest
 and adapter revision match. Codespaces is qualified as a CPU backend and
 rejects CDI requests before rebuild. The complete boundary is documented in
-[Codespaces native OCI](../qualification/codespaces-native-oci.md).
+[Codespaces native OCI qualification](../qualification.md#codespaces-native-oci-qualification).
 
 Cloudmake installs `skopeo`, `umoci`, and `crun` as transient runner plumbing on
 a Colab VM when needed. It does not install the project's compiler or tool
@@ -315,7 +316,7 @@ Kaggle provided the deliberate counterpoint to Colab in Cloudmake's backend
 model, but is deprecated for remote-workstation use. The implementation remains
 available for compatibility and coarse batch experimentation; it does not gate
 the 2.1 release. The retained evidence is documented in the
-[historical backend report](../history/kaggle-notebook.md).
+[historical backend report](../history.md#kaggle-notebook).
 
 Colab can amortize source, image, and workspace preparation across targets in a
 reused session. Kaggle assigns fresh compute to every notebook version and

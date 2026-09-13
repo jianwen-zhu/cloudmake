@@ -172,8 +172,8 @@ of silently weakening the request. Unsupported or ambiguous device injection
 fails before Make.
 
 Maintainers can consult the full four-axis design model and backend matrix in
-[Execution environments and OCI runner](../../design/architecture/execution-environments.md). The live
+[Execution architecture](../../design/architecture/execution.md). The live
 evidence and exact managed-VM profile are recorded in
-[Colab OCI/CDI qualification](../../design/qualification/colab-oci-qualification.md). Kaggle's deprecated,
+[backend qualification record](../../design/qualification.md). Kaggle's deprecated,
 failed remote-workstation usability evaluation is retained as a
-[historical backend report](../../design/history/kaggle-notebook.md).
+[historical backend report](../../design/history.md#kaggle-notebook).

@@ -9,23 +9,20 @@ or preserve evidence that should not be mistaken for a current user contract.
 
 ## Architecture
 
-- [Stateful workspaces](architecture/stateful-workspaces.md)
-- [Execution environments](architecture/execution-environments.md)
-- [Colab session resilience](architecture/colab-session-resilience.md)
+- [Persistence](architecture/persistence.md)
+- [Execution](architecture/execution.md)
 
 ## Decisions
 
-- [Contract review follow-ups](decisions/contract-review-followups.md)
+- [Design decisions](decisions.md)
 
 ## Qualification evidence
 
-- [Colab OCI/CDI qualification](qualification/colab-oci-qualification.md)
-- [Codespaces native OCI qualification](qualification/codespaces-native-oci.md)
+- [Backend qualification records](qualification.md)
 
 ## Historical backend investigations
 
-- [Kaggle notebook](history/kaggle-notebook.md)
-- [Paid Colab SSH](history/colab-ssh.md)
+- [Historical backend investigations](history.md)
 
 ## Maintainer operations
 
