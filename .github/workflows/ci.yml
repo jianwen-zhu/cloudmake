@@ -35,8 +35,8 @@ jobs:
           python-version: "3.13"
       - name: Validate Python, shell, notebooks, and whitespace
         run: |
-          python -m py_compile bin/cloudmake tools/*.py tests/*.py tests/contract/*.py
-          sh -n tools/remote_lock.sh tests/real_projects/prepare.sh
-          python -m json.tool notebooks/colab.ipynb >/dev/null
-          python -m json.tool notebooks/kaggle.ipynb >/dev/null
+          python -m py_compile cmd/cloudmake core/*.py backend/*/*.py tests/*.py tests/contract/*.py
+          sh -n core/remote_lock.sh tests/real_projects/prepare.sh
+          python -m json.tool backend/colab-notebook/notebook.ipynb >/dev/null
+          python -m json.tool backend/kaggle-notebook/notebook.ipynb >/dev/null
           git diff --check

@@ -17,18 +17,18 @@ import pytest
 from conftest import PROJECT_ROOT, run_command, write_executable
 
 
-IDENTITY = PROJECT_ROOT / "tools" / "project_identity.py"
-LOCK = PROJECT_ROOT / "tools" / "with_lock.py"
-SAFE_EXTRACT = PROJECT_ROOT / "tools" / "safe_extract.py"
-REMOTE_LOCK = PROJECT_ROOT / "tools" / "remote_lock.sh"
-FINGERPRINT = PROJECT_ROOT / "tools" / "source_fingerprint.py"
-REMOTE_PREREQUISITES = PROJECT_ROOT / "tools" / "remote_prerequisites.py"
-NORMALIZE_STATUS = PROJECT_ROOT / "tools" / "normalize_status.py"
-REMOTE_MAKE_COMMAND = PROJECT_ROOT / "tools" / "remote_make_command.py"
-REMOTE_COLLECT_COMMAND = PROJECT_ROOT / "tools" / "remote_collect_command.py"
-VALIDATE_SSH_CONFIG = PROJECT_ROOT / "tools" / "validate_ssh_config.py"
-REWRITE_SSH_IDENTITY = PROJECT_ROOT / "tools" / "rewrite_ssh_identity.py"
-LIGHTNING_STATUS = PROJECT_ROOT / "tools" / "lightning_studio_status.py"
+IDENTITY = PROJECT_ROOT / "core" / "project_identity.py"
+LOCK = PROJECT_ROOT / "core" / "with_lock.py"
+SAFE_EXTRACT = PROJECT_ROOT / "core" / "safe_extract.py"
+REMOTE_LOCK = PROJECT_ROOT / "core" / "remote_lock.sh"
+FINGERPRINT = PROJECT_ROOT / "core" / "source_fingerprint.py"
+REMOTE_PREREQUISITES = PROJECT_ROOT / "core" / "remote_prerequisites.py"
+NORMALIZE_STATUS = PROJECT_ROOT / "core" / "normalize_status.py"
+REMOTE_MAKE_COMMAND = PROJECT_ROOT / "core" / "remote_make_command.py"
+REMOTE_COLLECT_COMMAND = PROJECT_ROOT / "core" / "remote_collect_command.py"
+VALIDATE_SSH_CONFIG = PROJECT_ROOT / "core" / "validate_ssh_config.py"
+REWRITE_SSH_IDENTITY = PROJECT_ROOT / "core" / "rewrite_ssh_identity.py"
+LIGHTNING_STATUS = PROJECT_ROOT / "backend" / "lightning-studio-ssh" / "status.py"
 
 
 def ensure_identity(project: Path, state: Path, name: str = "sample") -> Path:

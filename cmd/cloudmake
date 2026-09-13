@@ -34,7 +34,7 @@ def locate_tool_root() -> Path:
 TOOL_ROOT = locate_tool_root()
 VERSION = (TOOL_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ENGINE = TOOL_ROOT / "Makefile"
-HOST_TEMPLATE_DIR = TOOL_ROOT / "host-templates"
+HOST_TEMPLATE_DIR = TOOL_ROOT / "backend" / "host-ssh"
 ALIASES = {
     "local": "local",
     "colab": "colab-notebook",
@@ -783,7 +783,7 @@ def collect_local_artifacts(
 
     command = [
         sys.executable,
-        os.fspath(TOOL_ROOT / "tools" / "safe_extract.py"),
+        os.fspath(TOOL_ROOT / "core" / "safe_extract.py"),
         "--archive",
         os.fspath(archive),
         "--destination",

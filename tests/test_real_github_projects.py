@@ -15,7 +15,7 @@ NVIDIA_OVERLAY = REAL_PROJECTS / "overlays" / "nvidia-cuda-cpp" / "Makefile"
 GPU_MODE_OVERLAY = (
     REAL_PROJECTS / "overlays" / "gpu-mode-vector-addition" / "Makefile"
 )
-LAUNCHER = PROJECT_ROOT / "bin" / "cloudmake"
+LAUNCHER = PROJECT_ROOT / "cmd" / "cloudmake"
 
 
 def install_fake_compiler(path: Path) -> Path:

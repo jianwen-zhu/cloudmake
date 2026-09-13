@@ -12,8 +12,8 @@ import pytest
 from conftest import PROJECT_ROOT
 
 
-COLAB_NOTEBOOK = PROJECT_ROOT / "notebooks" / "colab.ipynb"
-KAGGLE_NOTEBOOK = PROJECT_ROOT / "notebooks" / "kaggle.ipynb"
+COLAB_NOTEBOOK = PROJECT_ROOT / "backend" / "colab-notebook" / "notebook.ipynb"
+KAGGLE_NOTEBOOK = PROJECT_ROOT / "backend" / "kaggle-notebook" / "notebook.ipynb"
 
 
 def load_notebook(path: Path) -> dict:
@@ -35,15 +35,17 @@ def execute_code_cells(notebook: dict, replacements: dict[str, str]) -> dict:
 
 def copy_sample_project(destination: Path) -> None:
     (destination / "src").mkdir(parents=True)
-    shutil.copy2(PROJECT_ROOT / "Makefile.build", destination / "Makefile.build")
-    shutil.copy2(PROJECT_ROOT / "src" / "main.c", destination / "src" / "main.c")
+    sample = PROJECT_ROOT / "tests" / "fixtures" / "hello"
+    shutil.copy2(sample / "Makefile", destination / "Makefile.build")
+    shutil.copy2(sample / "src" / "main.c", destination / "src" / "main.c")
 
 
 def source_archive() -> bytes:
     memory = io.BytesIO()
     with tarfile.open(fileobj=memory, mode="w:gz") as archive:
-        archive.add(PROJECT_ROOT / "Makefile.build", arcname="Makefile.build")
-        archive.add(PROJECT_ROOT / "src", arcname="src")
+        sample = PROJECT_ROOT / "tests" / "fixtures" / "hello"
+        archive.add(sample / "Makefile", arcname="Makefile.build")
+        archive.add(sample / "src", arcname="src")
     return memory.getvalue()
 
 

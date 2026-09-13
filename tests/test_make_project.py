@@ -9,8 +9,9 @@ from conftest import PROJECT_ROOT, run_command
 def sample_project(tmp_path: Path) -> Path:
     project = tmp_path / "sample"
     (project / "src").mkdir(parents=True)
-    shutil.copy2(PROJECT_ROOT / "Makefile.build", project / "Makefile")
-    shutil.copy2(PROJECT_ROOT / "src" / "main.c", project / "src" / "main.c")
+    fixture = PROJECT_ROOT / "tests" / "fixtures" / "hello"
+    shutil.copy2(fixture / "Makefile", project / "Makefile")
+    shutil.copy2(fixture / "src" / "main.c", project / "src" / "main.c")
     return project
 
 
@@ -65,37 +66,26 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
     launcher = destination / "usr" / "local" / "bin" / "cloudmake"
     runtime = destination / "usr" / "local" / "libexec" / "cloudmake"
     assert launcher.is_file()
-    for relative in (
-        "Makefile",
-        "VERSION",
-        "backends/local.mk",
-        "backends/colab-notebook.mk",
-        "backends/host-ssh.mk",
-        "backends/lightning-studio-ssh.mk",
-        "core/resilience.mk",
-        "host-templates/README.md",
-        "host-templates/generic.conf",
-        "host-templates/oci-always-free.conf",
-        "host-templates/gcp-e2-micro.conf",
-        "notebooks/colab.ipynb",
-        "tools/colab_allocate.py",
-        "tools/colab_control_state.py",
-        "tools/colab_lifecycle.py",
-        "tools/colab_prepare.py",
-        "tools/colab_prepare_receipt.py",
-        "tools/run_state.py",
-        "tools/source_fingerprint.py",
-        "tools/target_result.py",
-        "tools/lightning_studio_status.py",
-        "tools/lightning_ensure_studio.py",
-        "tools/validate_ssh_host.py",
-        "transports/ssh.mk",
-        "transports/local.mk",
-    ):
-        assert (runtime / relative).is_file()
+    runtime_suffixes = {".conf", ".ipynb", ".mk", ".py", ".sh"}
+    expected = {Path("Makefile"), Path("VERSION")}
+    expected.update(
+        path.relative_to(PROJECT_ROOT)
+        for root in (PROJECT_ROOT / "core", PROJECT_ROOT / "backend")
+        for path in root.rglob("*")
+        if path.is_file()
+        and (path.suffix in runtime_suffixes or path.name == "README.md")
+    )
+    installed = {
+        path.relative_to(runtime) for path in runtime.rglob("*") if path.is_file()
+    }
+    assert installed == expected
 
     version = run_command([launcher, "--version"], cwd=tmp_path)
     assert version.stdout.strip() == f"cloudmake {(PROJECT_ROOT / 'VERSION').read_text().strip()}"
+
+    backends = run_command([launcher, "--backends"], cwd=tmp_path)
+    assert "colab-notebook" in backends.stdout
+    assert "host-ssh" in backends.stdout
 
     template = run_command(
         [launcher, "--host-template", "generic"], cwd=tmp_path
@@ -106,3 +96,29 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
     project = sample_project(tmp_path)
     dry_run = run_command([launcher, "-C", project, "--sync-dry-run"], cwd=tmp_path)
     assert "Makefile" in dry_run.stdout
+
+
+def test_source_layout_uses_ownership_roots() -> None:
+    for legacy in (
+        "bin",
+        "backends",
+        "host-templates",
+        "notebooks",
+        "tools",
+        "transports",
+    ):
+        assert not (PROJECT_ROOT / legacy).exists()
+
+    assert (PROJECT_ROOT / "cmd" / "cloudmake").is_file()
+    assert (PROJECT_ROOT / "core" / "ssh.mk").is_file()
+    assert (PROJECT_ROOT / "tests" / "fixtures" / "hello" / "Makefile").is_file()
+    for backend in (
+        "codespaces-ssh",
+        "colab-notebook",
+        "colab-ssh",
+        "host-ssh",
+        "kaggle-notebook",
+        "lightning-studio-ssh",
+        "local",
+    ):
+        assert (PROJECT_ROOT / "backend" / backend / "backend.mk").is_file()

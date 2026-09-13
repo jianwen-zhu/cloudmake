@@ -7,7 +7,7 @@ from pathlib import Path
 from conftest import PROJECT_ROOT, run_command, write_executable
 
 
-SCRIPT = PROJECT_ROOT / "tools" / "kaggle_wait.py"
+SCRIPT = PROJECT_ROOT / "backend" / "kaggle-notebook" / "wait.py"
 
 
 def fake_status_client(path: Path, statuses: list[str], returncodes: list[int] | None = None) -> Path:

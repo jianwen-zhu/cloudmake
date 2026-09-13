@@ -11,7 +11,7 @@ import pytest
 from conftest import PROJECT_ROOT, run_command, write_executable
 
 
-LAUNCHER = PROJECT_ROOT / "bin" / "cloudmake"
+LAUNCHER = PROJECT_ROOT / "cmd" / "cloudmake"
 
 
 def engine_dispatch(target: str) -> list[str]:
@@ -179,14 +179,14 @@ elif command == "exec":
         (remote / "readiness-failed-once").write_text("failed", encoding="utf-8")
         print("Connection was lost.")
         raise SystemExit(1)
-    if script.name == "colab_control_state.py":
+    if script.name == "control_state.py":
         owner = "present" if (remote / ".cloudmake-owner.json").is_file() else "absent"
         fingerprint = "present" if (remote / "source.sha256").is_file() else "absent"
         print(f"[cloudmake] control-state owner={owner} fingerprint={fingerprint}")
-    elif script.name == "colab_sync.py":
+    elif script.name == "sync.py":
         shutil.copyfile(remote / "cloud-build-source.sha256", remote / "source.sha256")
         shutil.copyfile(remote / "cloud-build-owner.json", remote / ".cloudmake-owner.json")
-    elif script.name == "colab_prepare.py":
+    elif script.name == "prepare.py":
         if os.environ.get("FAKE_COLAB_PREP_INSTALL_FAIL"):
             print("Connection was lost while installing preparation receipt.")
             raise SystemExit(1)
@@ -734,7 +734,7 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     assert "Source unchanged" not in first.stdout
     first_calls = calls(log, "colab")
     assert any(call[1] == "new" for call in first_calls)
-    assert any(call[1:3] == ["exec", "-s"] and call[-1].endswith("colab_sync.py") for call in first_calls)
+    assert any(call[1:3] == ["exec", "-s"] and call[-1].endswith("sync.py") for call in first_calls)
     notebook_exec = next(
         call
         for call in first_calls
@@ -746,7 +746,7 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
         call[call.index("--timeout") + 1] == "3600"
         for call in first_calls
         if call[1] == "exec"
-        and not call[-1].endswith(("remote_prerequisites.py", "colab_control_state.py"))
+        and not call[-1].endswith(("remote_prerequisites.py", "control_state.py"))
     )
     readiness_call = next(
         call

@@ -10,7 +10,7 @@ import pytest
 from conftest import PROJECT_ROOT, run_command, write_executable
 
 
-LAUNCHER = PROJECT_ROOT / "bin" / "cloudmake"
+LAUNCHER = PROJECT_ROOT / "cmd" / "cloudmake"
 
 pytestmark = pytest.mark.contract
 

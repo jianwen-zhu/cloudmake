@@ -43,7 +43,7 @@ status: doctor
 	@set -e; temporary='$(CLOUDMAKE_STATE_ROOT)/status/$(BACKEND)-$$$$.tmp'; \
 		if $(KAGGLE_BIN) kernels status '$(KAGGLE_KERNEL_REF)' > "$$temporary" 2>&1; then \
 			cat "$$temporary"; \
-			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
+			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
 			rm -f "$$temporary"; \
 		else code=$$?; cat "$$temporary"; rm -f "$$temporary"; exit $$code; fi
 
@@ -77,7 +77,7 @@ _kaggle-start: ensure-owner
 
 _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 	@mkdir -p '$(CLOUDMAKE_MANIFEST_DIR)'
-	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
+	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/source_fingerprint.py' \
 		--root '$(PROJECT_DIR)' \
 		--manifest '$(CLOUDMAKE_CURRENT_MANIFEST)' \
 		$(CLOUDMAKE_SECRET_OPTION) \
@@ -90,7 +90,7 @@ _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 		echo '[kaggle] Source unchanged; reusing cached source archive.'; \
 		mv '$(CLOUDMAKE_CURRENT_MANIFEST)' '$(CLOUDMAKE_MANIFEST)'; \
 	else \
-		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/source_fingerprint.py' \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/source_fingerprint.py' \
 			--root '$(PROJECT_DIR)' \
 			--archive '$(KAGGLE_ARCHIVE)' \
 			$(CLOUDMAKE_SECRET_OPTION) \
@@ -102,7 +102,7 @@ _kaggle-sync: ensure-owner | $(KAGGLE_STATE_DIR)
 
 _kaggle-execute: _kaggle-start _kaggle-sync | $(KAGGLE_KERNEL_DIR) $(KAGGLE_OUTPUT_DIR)
 	@CLOUDMAKE_RESOURCE_STATE=new-batch; $(CLOUDMAKE_PRINT_CONTEXT)
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_prepare.py' \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/prepare.py' \
 		--template '$(KAGGLE_NOTEBOOK)' \
 		--archive '$(KAGGLE_ARCHIVE)' \
 		--owner '$(CLOUDMAKE_OWNER_FILE)' \
@@ -122,7 +122,7 @@ _kaggle-execute: _kaggle-start _kaggle-sync | $(KAGGLE_KERNEL_DIR) $(KAGGLE_OUTP
 	$(KAGGLE_BIN) kernels push -p '$(KAGGLE_KERNEL_DIR)' \
 		--timeout '$(KAGGLE_TIMEOUT)' $(KAGGLE_ACCELERATOR_OPTION)
 	@set +e; \
-	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/kaggle_wait.py' \
+	$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/kaggle-notebook/wait.py' \
 		--kaggle '$(KAGGLE_BIN)' \
 		--kernel '$(KAGGLE_KERNEL_REF)' \
 		--timeout '$(KAGGLE_TIMEOUT)' \

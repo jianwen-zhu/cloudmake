@@ -17,7 +17,7 @@ BACKEND_REQUIRED_COMMANDS := $(SSH_BIN) $(RSYNC_BIN) $(PYTHON_BIN)
 BACKEND_REQUIRED_VARIABLES := SSH_HOST
 BACKEND_REQUIRES_PYTHON := yes
 BACKEND_INSTALL_HINT := Install OpenSSH and rsync; configure a Host alias in ~/.ssh/config; then verify: ssh HOST_ALIAS true
-BACKEND_VALIDATE := $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/tools/validate_ssh_host.py'
+BACKEND_VALIDATE := $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/validate_ssh_host.py'
 BACKEND_DOCTOR_PROBE := $(SSH_BIN) $(SSH_OPTIONS) -o BatchMode=yes '$(SSH_HOST)' true
 BACKEND_VERSION_COMMAND := $(SSH_BIN) -V
 BACKEND_TESTED_CLIENT := OpenSSH-compatible protocol 2 client

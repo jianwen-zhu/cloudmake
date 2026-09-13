@@ -10,7 +10,7 @@ from pathlib import Path
 from conftest import PROJECT_ROOT, write_executable
 
 
-ALLOCATE = PROJECT_ROOT / "tools" / "colab_allocate.py"
+ALLOCATE = PROJECT_ROOT / "backend" / "colab-notebook" / "allocate.py"
 
 
 def test_interrupt_stops_capacity_wait_without_provider_cleanup(
