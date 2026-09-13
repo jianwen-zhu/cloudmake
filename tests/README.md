@@ -4,6 +4,20 @@ The default suite is deliberately offline. Provider integration tests put fake
 `colab`, `kaggle`, `gh`, `gcloud`, `lightning`, `ssh`, and `rsync` executables at the front
 of `PATH`; they never allocate cloud compute or use account credentials.
 
+The directory layout is part of the test contract:
+
+| Directory | Stable responsibility |
+| --- | --- |
+| `contract/` | Public CLI, distribution, security, and acceptance-harness invariants. |
+| `unit/` | Isolated core, checkpoint, execution, and provider-helper behavior. |
+| `integration/` | Offline orchestration across the launcher, engine, and fake providers. |
+| `compatibility/` | Opt-in pinned upstream projects and Dev Container configurations. |
+| `acceptance/` | Explicit live-provider and real-workload release gates. |
+| `fixtures/` | Small repository-owned inputs shared by the layers above. |
+
+Release branches may contain different features, but new tests should retain
+these meanings rather than creating version-named directories.
+
 Run everything that is implemented today:
 
 ```sh
@@ -14,16 +28,14 @@ python3 -m pytest
 If pytest is installed by a separate environment manager, invoking its `pytest`
 executable directly is equivalent.
 
-Run one layer:
+Run one stable layer or subsystem:
 
 ```sh
-python3 -m pytest tests/test_source_fingerprint.py
-python3 -m pytest tests/test_resilience.py
-python3 -m pytest tests/test_notebooks.py
-python3 -m pytest tests/test_colab_allocate.py
-python3 -m pytest tests/test_target_result.py
-python3 -m pytest tests/test_vm_capabilities.py
-python3 -m pytest tests/test_gcp_lifecycle.py tests/test_gcp_ssh.py tests/test_gcp_cli.py
+python3 -m pytest tests/contract
+python3 -m pytest tests/unit/core
+python3 -m pytest tests/unit/providers/colab
+python3 -m pytest tests/unit/providers/gcp tests/integration/providers/gcp
+python3 -m pytest tests/integration
 python3 -m pytest -m integration
 ```
 
@@ -40,10 +52,10 @@ pinned upstream revisions, apply the overlays, and exercise their targets:
 
 ```sh
 CLOUDMAKE_TEST_REAL_GITHUB=1 python3 -m pytest \
-  tests/test_real_github_projects.py -m real_github
+  tests/compatibility/test_projects.py -m real_github
 ```
 
-This invokes `tests/real_projects/prepare.sh`, which prints the two prepared
+This invokes `tests/compatibility/projects/prepare.sh`, which prints the two prepared
 project directories. The clones are revision-pinned so an upstream change cannot
 silently alter a regression run.
 
@@ -57,7 +69,7 @@ Rust and Ubuntu workstations through the local Docker adapter:
 
 ```sh
 CLOUDMAKE_TEST_REAL_DEVCONTAINERS=1 python3 -m pytest \
-  tests/test_real_devcontainers.py -m real_github
+  tests/compatibility/test_devcontainers.py -m real_github
 ```
 
 This is an opt-in network and OCI-pull test. Rejection is part of the gate:
@@ -73,7 +85,7 @@ session in a `finally` block:
 
 ```sh
 CLOUDMAKE_TEST_LIVE_COLAB=1 python3 -m pytest \
-  tests/test_real_github_projects.py -m live_cloud
+  tests/compatibility/test_projects.py -m live_cloud
 ```
 
 Do not copy Colab configuration or tokens into GitHub Actions. The repository
@@ -85,7 +97,7 @@ stops the Studio without deleting its persistent filesystem:
 export LIGHTNING_TEAMSPACE=OWNER/TEAMSPACE
 export LIGHTNING_STUDIO=cloudmake-dev
 CLOUDMAKE_TEST_LIVE_LIGHTNING=1 python3 -m pytest \
-  tests/test_real_github_projects.py -m live_cloud
+  tests/compatibility/test_projects.py -m live_cloud
 ```
 
 Do not copy Lightning configuration, login tokens, or SSH keys into GitHub

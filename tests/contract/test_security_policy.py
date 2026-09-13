@@ -1,8 +1,6 @@
 import re
-from pathlib import Path
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+from conftest import PROJECT_ROOT
 
 
 def test_github_workflows_never_reference_hosted_secrets() -> None:

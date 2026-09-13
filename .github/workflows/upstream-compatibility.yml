@@ -23,4 +23,4 @@ jobs:
       - name: Clone and exercise pinned NVIDIA and GPU MODE projects
         env:
           CLOUDMAKE_TEST_REAL_GITHUB: "1"
-        run: python -m pytest tests/test_real_github_projects.py -m real_github
+        run: python -m pytest tests/compatibility/test_projects.py -m real_github

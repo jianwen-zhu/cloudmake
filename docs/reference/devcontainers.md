@@ -250,7 +250,7 @@ a collection of curated trivial images. Run it explicitly with:
 
 ```sh
 CLOUDMAKE_TEST_REAL_DEVCONTAINERS=1 python3 -m pytest \
-  tests/test_real_devcontainers.py -m real_github
+  tests/compatibility/test_devcontainers.py -m real_github
 ```
 
 The default suite validates the harness and pins offline; it never downloads

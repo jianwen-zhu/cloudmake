@@ -9,7 +9,7 @@ import pytest
 from conftest import PROJECT_ROOT, run_command, write_executable
 
 
-REAL_PROJECTS = PROJECT_ROOT / "tests" / "real_projects"
+REAL_PROJECTS = PROJECT_ROOT / "tests" / "compatibility" / "projects"
 PREPARE = REAL_PROJECTS / "prepare.sh"
 NVIDIA_OVERLAY = REAL_PROJECTS / "overlays" / "nvidia-cuda-cpp" / "Makefile"
 GPU_MODE_OVERLAY = (
