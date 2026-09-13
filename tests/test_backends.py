@@ -91,7 +91,7 @@ def test_api1_backend_lifecycle_remains_a_compatible_session_reuse_input(
     assert "session-reuse=no" in result.stdout
     assert "lifecycle-control=unknown" in result.stdout
     assert "workspace-durability=unknown" in result.stdout
-    assert "target-replay=none" in result.stdout
+    assert "target_replay=none" in result.stdout
     assert "oci-native=no" in result.stdout
     assert "internet-inbound=unknown" in result.stdout
     assert "internet-outbound=unknown" in result.stdout
@@ -3392,7 +3392,7 @@ def test_backend_contract_declares_session_reuse_and_capabilities(
     assert f"session-reuse={session_reuse}" in result.stdout
     assert f"lifecycle-control={lifecycle_control}" in result.stdout
     assert f"workspace-durability={workspace_durability}" in result.stdout
-    assert "target-replay=none" in result.stdout
+    assert "target_replay=none" in result.stdout
     assert capability in result.stdout
     if persistence_capability is None:
         assert "native-persistence" not in result.stdout
@@ -3914,6 +3914,42 @@ def test_doctor_performs_read_only_provider_probe(
     assert '"push"' not in serialized
     assert '"stop"' not in serialized
     assert '"ssh", "--config"' not in serialized
+
+
+@pytest.mark.integration
+def test_colab_doctor_rejects_incompatible_kernel_client_before_access_probe(
+    prototype: Path, fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    package_root = tmp_path / "broken-colab-package"
+    (package_root / "colab_cli").mkdir(parents=True)
+    (package_root / "colab_cli" / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "colab_cli" / "runtime.py").write_text(
+        "import jupyter_kernel_client\n"
+        "class ColabRuntime:\n"
+        "    def __init__(self, *_args):\n"
+        "        pass\n"
+        "    @property\n"
+        "    def kernel_client(self):\n"
+        "        return jupyter_kernel_client.KernelClient()\n",
+        encoding="utf-8",
+    )
+    (package_root / "jupyter_kernel_client.py").write_text("", encoding="utf-8")
+    env = fake_environment(fake_bin, tmp_path)
+    env["PYTHONPATH"] = str(package_root)
+
+    result = run_command(
+        ["make", "BACKEND=colab-notebook", "doctor"],
+        cwd=prototype,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "Incompatible Colab CLI execution environment" in result.stdout
+    assert "does not provide the API required by colab" in result.stdout
+    provider_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert provider_calls == [["colab", "version"]]
 
 
 @pytest.mark.integration

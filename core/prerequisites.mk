@@ -7,6 +7,7 @@ BACKEND_REQUIRED_VARIABLES ?=
 BACKEND_INSTALL_HINT ?= See the backend prerequisites in README.md.
 BACKEND_REQUIRES_PYTHON ?= no
 BACKEND_VALIDATE ?= :
+BACKEND_DOCTOR_COMPATIBILITY ?= :
 BACKEND_DOCTOR_PROBE ?= :
 BACKEND_VERSION_COMMAND ?= :
 BACKEND_TESTED_CLIENT ?= not recorded
@@ -51,6 +52,7 @@ doctor: prerequisites
 	@echo '[doctor] Installed client:'
 	@$(BACKEND_VERSION_COMMAND) 2>&1 | sed -n '1p'
 	@echo '[doctor] Tested client line: $(BACKEND_TESTED_CLIENT)'
+	@$(BACKEND_DOCTOR_COMPATIBILITY)
 	@echo '[doctor] Probing backend $(BACKEND) without allocating compute...'
 	@if ! { $(BACKEND_DOCTOR_PROBE); }; then \
 		echo '[doctor] Backend $(BACKEND) is installed but its authentication or access probe failed.' >&2; \

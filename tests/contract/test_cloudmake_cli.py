@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -205,6 +206,7 @@ def test_invalid_target_semantic_options_fail_before_engine_use(
         ("colab-ssh", ()),
         ("ssh", ("--host", "lab-gpu")),
         ("lightning", ()),
+        ("gcp", ()),
     ],
 )
 def test_backends_without_fencing_reject_replay_before_provider_contact(
@@ -215,6 +217,14 @@ def test_backends_without_fencing_reject_replay_before_provider_contact(
 ) -> None:
     project = make_project(tmp_path / "project")
     environment, log = contract_environment(tmp_path, fake_bin)
+    if backend == "gcp":
+        environment.update(
+            {
+                "GCP_PROJECT": "test-project",
+                "GCP_ZONE": "us-central1-a",
+                "GCP_INSTANCE": "test-instance",
+            }
+        )
 
     result = invoke(
         project,
@@ -230,6 +240,68 @@ def test_backends_without_fencing_reject_replay_before_provider_contact(
 
     assert result.returncode == 2
     assert "cannot prove fenced, non-overlapping target attempts" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_launcher_defaults_legacy_api_1_replay_declaration_to_none(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    runtime = tmp_path / "legacy-runtime"
+    shutil.copytree(PROJECT_ROOT, runtime)
+    descriptor = runtime / "backends" / "local.mk"
+    descriptor.write_text(
+        descriptor.read_text(encoding="utf-8").replace(
+            "BACKEND_TARGET_REPLAY := none\n", ""
+        ),
+        encoding="utf-8",
+    )
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = run_command(
+        [
+            runtime / "bin" / "cloudmake",
+            "-b",
+            "local",
+            "--idempotent",
+            "--replay-for=30s",
+            "build",
+        ],
+        cwd=project,
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "declares target_replay=none" in result.stdout
+    assert engine_calls(log) == []
+
+
+def test_launcher_rejects_unknown_api_1_replay_declaration_before_engine_use(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    runtime = tmp_path / "invalid-runtime"
+    shutil.copytree(PROJECT_ROOT, runtime)
+    descriptor = runtime / "backends" / "local.mk"
+    descriptor.write_text(
+        descriptor.read_text(encoding="utf-8").replace(
+            "BACKEND_TARGET_REPLAY := none",
+            "BACKEND_TARGET_REPLAY := overlapping",
+        ),
+        encoding="utf-8",
+    )
+    project = make_project(tmp_path / "project")
+    environment, log = contract_environment(tmp_path, fake_bin)
+
+    result = run_command(
+        [runtime / "bin" / "cloudmake", "-b", "local", "build"],
+        cwd=project,
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "invalid target replay declaration" in result.stdout
     assert engine_calls(log) == []
 
 
@@ -1758,6 +1830,30 @@ def test_idempotency_assertion_is_invocation_only_and_never_replays_failure(
     assert record["attempts"][0]["outcome"] == "target_failed"
     assert record["attempts"][0]["exit_code"] == 7
     assert record["replay_safe"] is False
+
+
+def test_project_configuration_cannot_self_declare_target_idempotency(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    project = make_project(tmp_path / "project")
+    (project / ".cloudmake.json").write_text(
+        json.dumps(
+            {
+                "backend": "local",
+                "idempotent": True,
+                "delivery_policy": "bounded-replay",
+            }
+        ),
+        encoding="utf-8",
+    )
+    environment, _ = contract_environment(tmp_path, fake_bin)
+
+    invoke(project, environment, "build")
+
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    record = json.loads(latest.read_text(encoding="utf-8"))
+    assert record["target_semantic"]["idempotency"] == "unknown"
+    assert record["delivery_policy"] == {"mode": "at-most-once", "max_attempts": 1}
 
 
 def test_local_oci_runner_preflights_then_submits_target_once(

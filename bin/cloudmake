@@ -112,6 +112,9 @@ ACTION_OPTIONS = {
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.DOTALL)
 ACCELERATOR = re.compile(r"^[A-Za-z0-9._-]*$")
 DURATION = re.compile(r"^([1-9][0-9]*)([smh])$")
+BACKEND_TARGET_REPLAY_DECLARATION = re.compile(
+    r"^\s*BACKEND_TARGET_REPLAY\s*:?=\s*(none|fenced)\s*(?:#.*)?$"
+)
 COLAB_SESSION_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 SSH_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 WORKSPACE_ID = re.compile(r"^[0-9a-f]{24}$")
@@ -814,12 +817,26 @@ def backend_oci_native(backend: str) -> bool:
 
 
 def backend_target_replay(backend: str) -> str:
-    value = optional_backend_declaration(backend, "BACKEND_TARGET_REPLAY", "none")
-    if value not in {"none", "fenced"}:
+    """Read the static replay declaration without contacting a provider."""
+    descriptor = TOOL_ROOT / "backends" / f"{backend}.mk"
+    declarations = [
+        line
+        for line in descriptor.read_text(encoding="utf-8").splitlines()
+        if re.match(r"^\s*BACKEND_TARGET_REPLAY\b", line)
+    ]
+    if not declarations:
+        return "none"
+    if len(declarations) != 1:
         raise UsageError(
-            f"backend {backend!r} has invalid target-replay capability {value!r}"
+            f"backend {backend!r} must declare BACKEND_TARGET_REPLAY exactly once"
         )
-    return value
+    match = BACKEND_TARGET_REPLAY_DECLARATION.fullmatch(declarations[0])
+    if match is None:
+        raise UsageError(
+            f"backend {backend!r} has invalid target replay declaration "
+            f"{declarations[0].strip()!r}; expected 'none' or 'fenced'"
+        )
+    return match.group(1)
 
 
 def backend_devcontainer_capabilities(backend: str, kind: str) -> set[str]:
@@ -2548,6 +2565,7 @@ def run(arguments: list[str]) -> int:
         checkpoint,
         workspace_id,
     ) = resolve_preferences(project, options, config_home, key)
+    replay_capability = backend_target_replay(backend)
     workstation_option = (
         options["image"] is not None
         or options["devcontainer"] is not None
@@ -2607,14 +2625,14 @@ def run(arguments: list[str]) -> int:
             f"backend {backend!r} does not classify retryable allocation capacity"
         )
     if replay_seconds is not None:
-        replay_capability = backend_target_replay(backend)
         if replay_capability == "fenced":
             raise UsageError(
                 f"backend {backend!r} declares fenced target replay, but this "
                 "release has no bounded replay dispatcher"
             )
         raise UsageError(
-            f"backend {backend!r} cannot prove fenced, non-overlapping target attempts; "
+            f"backend {backend!r} declares target_replay=none and cannot prove "
+            "fenced, non-overlapping target attempts; "
             "bounded replay is unsupported"
         )
     if retry_seconds is not None and action is None and not positional:

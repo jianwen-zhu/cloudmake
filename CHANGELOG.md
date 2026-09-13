@@ -27,6 +27,9 @@ before upgrading. No published tag is rewritten by this decision.
   because none yet proves non-overlapping attempts across every ambiguous
   boundary; provenance nevertheless records target semantics, delivery policy,
   ordered attempt evidence, and the derived `replay_safe` decision.
+- Preserve the v1.1 Colab doctor guard that tests the CLI's actual Python
+  execution dependency before its read-only account probe, and document that
+  live-session reuse requires the official client host to stay awake and online.
 - Replace global Dev Container field rejection with capability negotiation:
   the parser emits a closed required-behavior set and each backend declares
   separate adapter and Dev Container implementation capabilities. One

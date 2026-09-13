@@ -258,7 +258,7 @@ backend-info: backend-contract
 	@echo 'session-reuse=$(BACKEND_SESSION_REUSE)'
 	@echo 'lifecycle-control=$(BACKEND_LIFECYCLE_CONTROL)'
 	@echo 'workspace-durability=$(BACKEND_WORKSPACE_DURABILITY)'
-	@echo 'target-replay=$(BACKEND_TARGET_REPLAY)'
+	@echo 'target_replay=$(BACKEND_TARGET_REPLAY)'
 	@echo 'oci-native=$(BACKEND_OCI_NATIVE)'
 	@echo 'transport=$(BACKEND_TRANSPORT)'
 	@echo 'capabilities=$(BACKEND_CAPABILITIES)'

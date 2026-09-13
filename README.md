@@ -793,6 +793,14 @@ Cloudmake uses `colab new`, `sessions`, `upload`, `download`, `exec`, `url`, and
 `stop`. The source is fingerprinted before upload. An unchanged tree reuses the
 remote source and persistent build directory in the named session.
 
+The official CLI keeps a live runtime assigned through a daemon on the client
+computer. That computer must remain awake and online between `--start` and the
+last command that expects reuse; host sleep suspends the daemon and Colab may
+reclaim the runtime. Cloudmake reports the resulting fresh runtime honestly but
+does not replace the provider's keep-alive mechanism. For a bounded unattended
+run on macOS, use an explicit `caffeinate` interval and stop the session when the
+run completes.
+
 For a normal nonzero project Make result, the notebook preserves the complete
 Make stdout/stderr and writes a small result receipt instead of raising a Python
 `CalledProcessError`. The local command then prints a concise summary such as

@@ -78,7 +78,8 @@ make BACKEND=colab-notebook backend-info
 the backward-compatible API-1 default and preserves at-most-once delivery. A
 future `fenced` backend must prove that an ambiguous prior attempt cannot
 overlap a new attempt; the declaration alone never authorizes replay in a
-launcher that lacks the bounded dispatcher.
+launcher that lacks the bounded dispatcher. `backend-info` reports the resolved
+contract with the v1 vocabulary `target_replay=none`.
 
 Descriptor consistency is also part of the contract. A backend advertising
 `devcontainer` must declare at least one nonempty adapter or native semantic

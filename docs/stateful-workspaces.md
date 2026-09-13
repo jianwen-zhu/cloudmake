@@ -370,6 +370,12 @@ attached persistent disk. `colab stop` releases the assignment, and
 assigned VM after an idle timeout or its maximum lifetime. The provider exposes
 no stopped-but-retained VM state that Cloudmake can later wake.
 
+The official Colab CLI also maintains assignment activity through a daemon on
+the client computer. Reusing a live assignment therefore requires that computer
+to remain awake and online. If host sleep suspends the daemon and Colab reclaims
+the VM, Cloudmake must classify the next runtime as fresh and restore from the
+managed checkpoint; it cannot substitute for the provider's keep-alive path.
+
 This differs materially from Codespaces. A Codespace is a provider resource
 whose compute may stop while
 [its workspace remains retained](https://docs.github.com/en/codespaces/about-codespaces/understanding-the-codespace-lifecycle)
