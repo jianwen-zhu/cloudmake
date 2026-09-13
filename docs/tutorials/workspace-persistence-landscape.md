@@ -1,6 +1,6 @@
 # Keeping work across disposable machines
 
-Day 2 of the [Remote workstation tutorials](tutorials.md). This tutorial can be
+Day 2 of the [Remote workstation tutorials](../README.md). This tutorial can be
 read independently.
 
 ## The machine vanished; the work should not
@@ -308,5 +308,8 @@ The result is a practical compromise: disposable compute can feel like a
 reusable workstation without making one remote filesystem irreplaceable. Day 3
 continues the remote-workstation story from this recovered execution workspace.
 
-The normative behavior is specified in [Stateful workspaces](stateful-workspaces.md).
-Credential handling is specified in the [Cloudmake security model](security.md).
+The released operator contract is defined by this tutorial, the CLI help, and
+[Resilience and recovery](../reference/resilience.md). Credential handling is
+specified in the [Cloudmake security model](../reference/security.md).
+Architecture rationale and qualification evidence are kept separately in the
+maintainer design workspace.

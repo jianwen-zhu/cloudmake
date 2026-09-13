@@ -2,7 +2,7 @@
 
 For a conceptual introduction to session reuse, native persistence, managed
 checkpoints, incremental transfer, and safe publication, read
-[Workspace persistence and checkpointing](workspace-persistence-landscape.md).
+[Workspace persistence and checkpointing](../../docs/tutorials/workspace-persistence-landscape.md).
 
 This document defines the managed checkpoint persistence introduced in
 Cloudmake 2.0 and retained by the 2.x line. The high-level `--persist` option
@@ -406,7 +406,7 @@ provisioned Compute Engine VM owns its Persistent Disk, so the backend's
 persistence operation is native and checkpoint transfer is a no-op. This keeps
 the Make invariant intact: durable state accelerates work, while source and the
 project's targets must still be sufficient to rebuild from scratch. See the
-[GCP backend design](gcp-backend.md).
+[GCP backend design](../../docs/guides/gcp-backend.md).
 
 The feature branch now implements the local credential-store and
 encrypted-envelope path as well as the proven storage lifecycle. Focused
@@ -415,7 +415,7 @@ credential storage, transient cleanup, Drive unmount verification, actual VM
 capacity checks, and failure ordering. The full acceptance gate below has also
 passed. Release review must preserve these invariants rather than weakening
 credential custody or checkpoint integrity. See the dedicated checkpoint
-section in the [security model](security.md).
+section in the [security model](../../docs/reference/security.md).
 
 ## Failure and cancellation semantics
 

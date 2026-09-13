@@ -124,8 +124,9 @@ validator never follows a restored control-record link.
 Source reconciliation preserves generated link objects without resolving them;
 local source still wins every conflict. Artifact collection resolves its
 requested directory and refuses it if a generated link escapes the project.
-The reasoning and execution boundaries are documented in
-[Execution environments and OCI runner](execution-environments.md).
+The resulting execution boundary is part of the stable
+[OCI/CDI runner contract](oci-runner.md); its architecture rationale is retained
+separately in the maintainer design workspace.
 
 ## OCI runner credential and isolation boundary
 
@@ -385,7 +386,7 @@ stable between sessions.
 
 ## Reporting a security issue
 
-Follow the private reporting process in [`SECURITY.md`](../SECURITY.md). Do not
+Follow the private reporting process in [`SECURITY.md`](../../SECURITY.md). Do not
 include live credentials, private source, or provider tokens in a public issue or
 test fixture. A useful report includes the backend, lifecycle step, sanitized
 provider response, expected boundary, and a minimal reproduction using dummy

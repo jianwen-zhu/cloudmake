@@ -160,4 +160,4 @@ The 2.4 release requires:
 The CPU and GPU gates may use different machine profiles, but they qualify one
 backend and one user-facing Make workflow. The local-only harness and its
 billing-safe cleanup contract are documented in
-[`tests/acceptance/gcp-workstation`](../tests/acceptance/gcp-workstation/README.md).
+[`tests/acceptance/gcp-workstation`](../../tests/acceptance/gcp-workstation/README.md).

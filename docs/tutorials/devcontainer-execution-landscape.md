@@ -1,6 +1,6 @@
 # Carrying one development workstation across unequal machines
 
-Day 3 of the [Remote workstation tutorials](tutorials.md). This tutorial can be
+Day 3 of the [Remote workstation tutorials](../README.md). This tutorial can be
 read independently.
 
 ## From dependency hell to a workstation contract
@@ -311,7 +311,7 @@ untrusted image safe. Its promise is narrower and more useful:
 Day 4 adds the identity, credential-custody, and trust model.
 
 The normative behavior is specified in the
-[Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md). Supported
+[Dev Container workstation contract](../reference/devcontainer-contract.md). Supported
 fields and commands are documented in
-[Portable Dev Container workstations](devcontainers.md). Runtime details are in
-the [OCI/CDI runner reference](oci-runner.md).
+[Portable Dev Container workstations](../reference/devcontainers.md). Runtime details are in
+the [OCI/CDI runner reference](../reference/oci-runner.md).

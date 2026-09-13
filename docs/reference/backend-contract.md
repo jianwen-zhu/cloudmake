@@ -184,8 +184,9 @@ evidence.
 The legacy transport capability named `environment-profile` supplies evidence
 for qualification; it is not a workstation contract. It means the backend can
 observe the selected execution VM and report the machine,
-privilege, filesystem, isolation, device, and accelerator evidence defined in
-[Execution environments and OCI runner](execution-environments.md).
+privilege, filesystem, isolation, device, and accelerator evidence defined by
+the backend profile. The broader execution-environment taxonomy and its design
+rationale are retained in the maintainer design workspace.
 It does not imply support for a particular application format or runner.
 Observed properties are not provider guarantees and must not be cached as if
 they were promises for a replacement VM.
@@ -271,7 +272,7 @@ and dynamic qualification verifies the actual instance. These declarations are
 orthogonal to transport, persistence, `oci-native`, and the runtime candidate
 list. The normative vocabulary, immutable image-resolution rules, credential
 boundary, and lifecycle receipt requirements are defined in the
-[Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
+[Dev Container workstation contract](devcontainer-contract.md).
 
 `checkpoint-persistence` means Cloudmake transfers a managed workspace through
 an independent durable checkpoint store. `native-persistence` means the
@@ -395,8 +396,8 @@ Every remote transport must:
 Reusable transports must also distinguish synchronized source paths from
 project-generated paths. Local source additions and modifications win, and
 previously synchronized paths deleted locally are removed; a broad mirror
-deletion must not erase generated workspace state. The cross-session extension
-of this rule is specified in [Stateful workspaces](stateful-workspaces.md).
+deletion must not erase generated workspace state. Managed checkpoints preserve
+the same source-authority rule across replacement sessions.
 
 Before target submission, a session transport may retry only non-mutating
 readiness probes and must bound the wait by a deadline. It may automatically

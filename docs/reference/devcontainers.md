@@ -2,15 +2,14 @@
 
 For a conceptual introduction to application bundles, OCI image/runtime
 layers, CDI devices, Dev Container implementations, and the portable adapter,
-read the [Dev Container execution landscape](devcontainer-execution-landscape.md).
+read the [Dev Container execution landscape](../tutorials/devcontainer-execution-landscape.md).
 
 Cloudmake 2.4 retains one stable meaning for its adapter-supported fields and
 adds capability negotiation across backends. Stable meaning does not imply
 universal availability: each backend must qualify every behavior requested by
-the selected configuration. The accepted
-design, immutable tag-resolution rules, credential boundary, lifecycle
-semantics, and rollout gates are specified in the
-[Cloudmake 2.4 Dev Container contract](devcontainer-v2.4-contract.md).
+the selected configuration. Immutable tag-resolution rules, the credential
+boundary, lifecycle semantics, and rollout gates are specified in the
+[Dev Container workstation contract](devcontainer-contract.md).
 
 Cloudmake 2.4 accepts the standard
 [Dev Container specification](https://containers.dev/implementors/spec/) as a
@@ -220,7 +219,7 @@ trusted-image boundary.
 Workspace persistence is independent of Dev Container execution. This contract
 does not define checkpointing. Source plus the project Makefile remain the
 rebuild authority; persistence behavior is documented separately in
-[Workspace persistence and checkpointing](workspace-persistence-landscape.md).
+[Workspace persistence and checkpointing](../tutorials/workspace-persistence-landscape.md).
 
 Workstation validation applies only at a workload boundary: `--start`, target
 execution, collection, and the selected-workstation portion of `--doctor`.

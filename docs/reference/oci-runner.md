@@ -171,9 +171,9 @@ resolves the strict JSON subset it supports and rejects unknown edits instead
 of silently weakening the request. Unsupported or ambiguous device injection
 fails before Make.
 
-For the full four-axis model and backend matrix, see
-[Execution environments and OCI runner](execution-environments.md). The live
+Maintainers can consult the full four-axis design model and backend matrix in
+[Execution environments and OCI runner](../../design/architecture/execution-environments.md). The live
 evidence and exact managed-VM profile are recorded in
-[Colab OCI/CDI qualification](colab-oci-qualification.md). Kaggle's deprecated,
+[Colab OCI/CDI qualification](../../design/qualification/colab-oci-qualification.md). Kaggle's deprecated,
 failed remote-workstation usability evaluation is retained as a
-[historical backend report](historical/kaggle-notebook.md).
+[historical backend report](../../design/history/kaggle-notebook.md).

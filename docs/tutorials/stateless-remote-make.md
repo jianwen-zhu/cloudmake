@@ -1,6 +1,6 @@
 # Stateless remote Make
 
-Day 1 of the [Remote workstation tutorials](tutorials.md). This tutorial can be
+Day 1 of the [Remote workstation tutorials](../README.md). This tutorial can be
 read independently.
 
 ## Why remote Make exists
@@ -39,8 +39,8 @@ survives replacement of that session. Source and Make must be sufficient to
 start again.
 
 The normative project interface is in the
-[Project contract](project-contract.md). Backend implementers should use the
-separate [Backend contract](backend-contract.md).
+[Project contract](../reference/project-contract.md). Backend implementers should use the
+separate [Backend contract](../reference/backend-contract.md).
 
 ## One command, unlike platforms
 
@@ -293,7 +293,7 @@ impose a common output layout on every Make project. Cloudmake never moves,
 deletes, overwrites, symlinks, or dual-writes root `artifacts/`.
 
 Before adopting this contract, follow the
-[artifact collection migration preflight](artifact-collection-migration.md).
+[artifact collection migration preflight](../guides/artifact-collection-migration.md).
 
 ## What stateless execution can reuse
 
