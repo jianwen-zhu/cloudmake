@@ -62,8 +62,8 @@ will not replay the target automatically.
 
 ## Collection namespace migration
 
-Status: implemented in the universal candidate; branch-specific adoption and
-release migration remain open.
+Status: implemented. The UofT v1.1.0 teaching release completed the stateless
+migration; v2.4 carries the same public namespace and rollback boundary.
 
 New development releases use `.cloudmake/artifacts/` as the canonical local
 destination of `--collect`. Cloudmake owns the root `.cloudmake/` namespace and
@@ -71,11 +71,12 @@ excludes it from synchronized project source. It must not delete, move,
 overwrite, symlink, or dual-write the former project-root `artifacts/`
 directory; that name returns to ordinary project ownership.
 
-Published tags remain immutable. The UofT teaching line stays pinned to v1.0.1
-until a deliberate course migration window. Before upgrading, each course must
-add `.cloudmake/artifacts/` to both `.gitignore` and `.cloudmakeignore` while
-retaining its legacy `artifacts/` exclusion. This protects privacy when rolling
-back to v1.0.1, which does not automatically exclude `.cloudmake/`.
+Published tags remain immutable. The UofT teaching line migrated in v1.1.0 only
+after each course added `.cloudmake/artifacts/` to both `.gitignore` and
+`.cloudmakeignore` while retaining its legacy `artifacts/` exclusion. The same
+ordering applies to any project upgrading from an older release: install the
+ignore rules before changing the Cloudmake version so rollback cannot upload
+collected output as source.
 
 Acceptance requirements:
 
@@ -89,9 +90,9 @@ Acceptance requirements:
    scripts consistently name the new destination.
 5. Release notes call out both the destination change and the newly reserved
    `.cloudmake/` namespace. No release describes this as a transparent patch.
-6. UofT migration separately updates course documentation, ignore rules,
-   version/commit/archive pins, retained evidence, and rollback instructions
-   before advancing the `uoft` branch.
+6. Branch-specific migrations update project documentation, ignore rules,
+   version/commit/archive pins, retained evidence, and rollback instructions as
+   one coordinated adoption change.
 
 ## Managed-checkpoint model consolidation
 
