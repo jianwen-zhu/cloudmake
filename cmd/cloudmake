@@ -335,13 +335,24 @@ def allocation_receipt(path: Path) -> dict[str, Any] | None:
     classification = payload.get("classification")
     if isinstance(classification, str) and classification:
         receipt["classification"] = classification
+    retry_after_seconds = payload.get("retry_after_seconds")
+    if (
+        not isinstance(retry_after_seconds, bool)
+        and isinstance(retry_after_seconds, int)
+        and retry_after_seconds >= 0
+    ):
+        receipt["retry_after_seconds"] = retry_after_seconds
     return receipt
 
 
 def allocation_exit_code(receipt: dict[str, Any] | None, default: int) -> int:
     if receipt is None:
         return default
-    if receipt.get("outcome") == "capacity-timeout":
+    if receipt.get("outcome") in {
+        "capacity-timeout",
+        "allocation-ambiguous",
+        "allocation-deferred",
+    }:
         return EX_TEMPFAIL
     if receipt.get("outcome") == "interrupted":
         return 130

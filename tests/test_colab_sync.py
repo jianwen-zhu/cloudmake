@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import tarfile
 from pathlib import Path
 
@@ -12,7 +13,7 @@ SCRIPT = PROJECT_ROOT / "backend" / "colab-notebook" / "sync.py"
 
 def transformed_script(tmp_path: Path) -> Path:
     root = tmp_path / "remote" / "workspace"
-    archive = tmp_path / "incoming" / "source.tar.gz"
+    incoming = tmp_path / "incoming"
     fingerprint = tmp_path / "incoming" / "source.sha256"
     owner = tmp_path / "incoming" / "owner.json"
     source = SCRIPT.read_text(encoding="utf-8")
@@ -20,8 +21,11 @@ def transformed_script(tmp_path: Path) -> Path:
         'ROOT = Path("/content/.cloud-build/workspace")', f"ROOT = Path({str(root)!r})"
     )
     source = source.replace(
-        'ARCHIVE = Path("/content/cloud-build-source.tar.gz")',
-        f"ARCHIVE = Path({str(archive)!r})",
+        'INCOMING = Path("/content")', f"INCOMING = Path({str(incoming)!r})"
+    )
+    source = source.replace(
+        'ARCHIVE_DIGEST = Path("/content/cloud-build-source.archive.sha256")',
+        f"ARCHIVE_DIGEST = Path({str(incoming / 'source.archive.sha256')!r})",
     )
     source = source.replace(
         'INCOMING_FINGERPRINT = Path("/content/cloud-build-source.sha256")',
@@ -44,6 +48,10 @@ def write_archive(path: Path, members: dict[str, bytes]) -> None:
             info.size = len(payload)
             info.mode = 0o644
             archive.addfile(info, io.BytesIO(payload))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    digest_path = path.parent / "source.archive.sha256"
+    digest_path.write_text(digest + "\n", encoding="utf-8")
+    path.rename(path.parent / f"cloud-build-source-{digest}.tar.gz")
 
 
 def write_symlink_archive(path: Path, name: str, target: str) -> None:
@@ -53,6 +61,9 @@ def write_symlink_archive(path: Path, name: str, target: str) -> None:
         info.type = tarfile.SYMTYPE
         info.linkname = target
         archive.addfile(info)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (path.parent / "source.archive.sha256").write_text(digest + "\n", encoding="utf-8")
+    path.rename(path.parent / f"cloud-build-source-{digest}.tar.gz")
 
 
 def test_sync_atomically_replaces_source_and_fingerprint(tmp_path: Path) -> None:
@@ -84,6 +95,22 @@ def test_sync_atomically_replaces_source_and_fingerprint(tmp_path: Path) -> None
     )
     assert not (root / "src.new").exists()
     assert not (root / "src.old").exists()
+
+
+def test_sync_rejects_archive_whose_bytes_do_not_match_digest(tmp_path: Path) -> None:
+    script = transformed_script(tmp_path)
+    incoming = tmp_path / "incoming"
+    write_archive(incoming / "source.tar.gz", {"Makefile": b"all:\n\t@true\n"})
+    digest = (incoming / "source.archive.sha256").read_text(encoding="utf-8").strip()
+    archive = incoming / f"cloud-build-source-{digest}.tar.gz"
+    archive.write_bytes(archive.read_bytes() + b"corrupt")
+    (incoming / "source.sha256").write_text("unused\n", encoding="utf-8")
+    (incoming / "owner.json").write_text("{}\n", encoding="utf-8")
+
+    result = run_command(["python3", script], cwd=tmp_path, check=False)
+
+    assert result.returncode != 0
+    assert "archive digest mismatch" in result.stdout
 
 
 def test_sync_rejects_parent_path_traversal(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 COLAB_STATE_DIR := $(CLOUDMAKE_STATE_ROOT)/colab-notebook/$(COLAB_SESSION)
 COLAB_ARCHIVE := $(COLAB_STATE_DIR)/source.tar.gz
+COLAB_ARCHIVE_DIGEST := $(COLAB_STATE_DIR)/source.archive.sha256
 COLAB_FINGERPRINT := $(COLAB_STATE_DIR)/source.sha256
 COLAB_REMOTE_FINGERPRINT_COPY := $(COLAB_STATE_DIR)/remote-source.sha256
 COLAB_REMOTE_OWNER_COPY := $(COLAB_STATE_DIR)/remote-owner.json
@@ -7,13 +8,14 @@ COLAB_CONTROL_STATE_COPY := $(COLAB_STATE_DIR)/remote-control-state.txt
 COLAB_TARGET_FILE := $(COLAB_STATE_DIR)/target
 COLAB_TARGET_RESULT := $(COLAB_STATE_DIR)/target-result.json
 COLAB_RESOURCE_STATE := $(COLAB_STATE_DIR)/resource-state
+COLAB_ALLOCATION_PENDING := $(COLAB_STATE_DIR)/allocation-pending.json
 COLAB_ARTIFACT_ARCHIVE := $(COLAB_STATE_DIR)/artifacts.tar.gz
 COLAB_RUN_NOTEBOOK := $(COLAB_STATE_DIR)/runner.ipynb
 CLOUDMAKE_ALLOCATION_RESULT ?= $(COLAB_STATE_DIR)/allocation-result.json
 CLOUDMAKE_RETRY_FOR_SECONDS ?= 0
 
 COLAB_REMOTE_ROOT := /content/.cloud-build/workspace
-COLAB_REMOTE_ARCHIVE := /content/cloud-build-source.tar.gz
+COLAB_REMOTE_ARCHIVE_DIGEST := /content/cloud-build-source.archive.sha256
 COLAB_REMOTE_FINGERPRINT_INCOMING := /content/cloud-build-source.sha256
 COLAB_REMOTE_FINGERPRINT := $(COLAB_REMOTE_ROOT)/source.sha256
 COLAB_REMOTE_OWNER_INCOMING := /content/cloud-build-owner.json
@@ -32,9 +34,12 @@ COLAB_PREPARED_RECEIPT := $(COLAB_STATE_DIR)/prepared
 COLAB_PREPARE_TARGET_FILE := $(COLAB_STATE_DIR)/prepare-target
 
 COLAB_ACCELERATOR := $(if $(strip $(COLAB_GPU)),--gpu $(COLAB_GPU),)
+COLAB_DEADLINE := $(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/client_deadline.py'
+COLAB_CONTROL_CLIENT := $(COLAB_DEADLINE) --timeout '$(COLAB_CONTROL_COMMAND_TIMEOUT)' -- '$(COLAB_BIN)'
+COLAB_SETUP_CLIENT := $(COLAB_DEADLINE) --timeout '$(COLAB_SETUP_COMMAND_TIMEOUT)' -- '$(COLAB_BIN)'
 
 .PHONY: help start status stop sync collect dispatch fetch shell open \
-	_colab-start _colab-sync _colab-prepare _colab-execute _colab-collect _colab-fetch \
+	_colab-target-preflight _colab-start _colab-sync _colab-prepare _colab-execute _colab-collect _colab-fetch \
 	_colab-fetch-ready _colab-open _colab-stop
 
 help:
@@ -62,23 +67,31 @@ start: doctor
 status: doctor
 	@mkdir -p '$(CLOUDMAKE_STATE_ROOT)/status'
 	@set -e; temporary='$(CLOUDMAKE_STATE_ROOT)/status/$(BACKEND)-$$$$.tmp'; \
-		if $(COLAB_BIN) status -s '$(COLAB_SESSION)' > "$$temporary" 2>&1; then \
+		if $(COLAB_CONTROL_CLIENT) status -s '$(COLAB_SESSION)' > "$$temporary" 2>&1; then \
 			cat "$$temporary"; \
 			$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/core/normalize_status.py' --backend '$(BACKEND)' < "$$temporary"; \
 			rm -f "$$temporary"; \
 		else code=$$?; cat "$$temporary"; rm -f "$$temporary"; exit $$code; fi
 
-stop: doctor
+stop: prerequisites
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-stop
 
 sync: doctor
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-sync
 
-dispatch: doctor
+_colab-target-preflight:
+	@set -e; \
+	if $(MAKE) --no-print-directory doctor; then exit 0; else code=$$?; fi; \
+	$(CLOUDMAKE_RECORD_STATE) --phase preflight --provider-state unknown \
+		--runtime-state unknown --session-created false --target-submission not_submitted \
+		--retry-safe true --failure-code preflight_failed; \
+	exit $$code
+
+dispatch: _colab-target-preflight
 	@if test -z '$(REMOTE_TARGET_B64)'; then echo 'REMOTE_TARGET_B64 is required for dispatch' >&2; exit 2; fi
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-execute
 
-collect: doctor
+collect: _colab-target-preflight
 	@if test -z '$(REMOTE_TARGET)' && test -z '$(REMOTE_TARGET_B64)'; then echo 'REMOTE_TARGET or REMOTE_TARGET_B64 is required for collect' >&2; exit 2; fi
 	@if test -z '$(REMOTE_COLLECT_DIR_B64)'; then echo 'REMOTE_COLLECT_DIR_B64 is required for collect' >&2; exit 2; fi
 	@$(CLOUDMAKE_WITH_LOCK) $(MAKE) --no-print-directory _colab-collect
@@ -105,7 +118,9 @@ _colab-start: ensure-owner | $(COLAB_STATE_DIR)
 		--client '$(COLAB_BIN)' --session '$(COLAB_SESSION)' \
 		$(if $(strip $(COLAB_GPU)),--gpu '$(COLAB_GPU)') \
 		--retry-seconds '$(CLOUDMAKE_RETRY_FOR_SECONDS)' \
+		--command-timeout '$(COLAB_ALLOCATION_COMMAND_TIMEOUT)' \
 		--resource-state '$(COLAB_RESOURCE_STATE)' \
+		--pending-state '$(COLAB_ALLOCATION_PENDING)' \
 		--result '$(CLOUDMAKE_ALLOCATION_RESULT)' \
 		--state-file '$(CLOUDMAKE_OPERATION_STATE)'
 	@$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/lifecycle.py' \
@@ -126,14 +141,16 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 	$(CLOUDMAKE_RECORD_STATE) --phase ownership --provider-state ready \
 		--target-submission not_submitted --retry-safe true; \
 	rm -f '$(COLAB_CONTROL_STATE_COPY)' '$(COLAB_CONTROL_STATE_COPY).tmp'; \
-	if ! $(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_READY_PROBE_TIMEOUT)' \
+	code=0; $(COLAB_CONTROL_CLIENT) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_READY_PROBE_TIMEOUT)' \
 		-f '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/control_state.py' \
-		> '$(COLAB_CONTROL_STATE_COPY).tmp' 2>&1; then \
+		> '$(COLAB_CONTROL_STATE_COPY).tmp' 2>&1 || code=$$?; \
+	if test "$$code" -ne 0; then \
 		cat '$(COLAB_CONTROL_STATE_COPY).tmp' >&2; \
 		rm -f '$(COLAB_CONTROL_STATE_COPY).tmp'; \
+		failure=control_state_unreachable; test "$$code" -ne 124 || failure=control_state_timeout; \
 		$(CLOUDMAKE_RECORD_STATE) --phase ownership --provider-state unknown \
 			--runtime-state unreachable --target-submission not_submitted \
-			--retry-safe true --failure-code control_state_unreachable; \
+			--retry-safe true --failure-code "$$failure"; \
 		echo '[colab] Remote ownership state could not be verified; synchronization was refused and the target was not submitted.' >&2; \
 		echo '[colab] Retrying is safe. Next: cloudmake -b colab --status' >&2; \
 		exit 74; \
@@ -149,13 +166,15 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 		exit 74; \
 	fi; \
 	if test "$$owner_state" = present; then \
-		if ! $(COLAB_BIN) download -s '$(COLAB_SESSION)' \
-			'$(COLAB_REMOTE_OWNER)' '$(COLAB_REMOTE_OWNER_COPY).tmp' >/dev/null 2>&1 || \
-			test ! -s '$(COLAB_REMOTE_OWNER_COPY).tmp'; then \
+		code=0; $(COLAB_CONTROL_CLIENT) download -s '$(COLAB_SESSION)' \
+			'$(COLAB_REMOTE_OWNER)' '$(COLAB_REMOTE_OWNER_COPY).tmp' >/dev/null 2>&1 || code=$$?; \
+		if test "$$code" -ne 0 || test ! -s '$(COLAB_REMOTE_OWNER_COPY).tmp'; then \
 			rm -f '$(COLAB_REMOTE_OWNER_COPY).tmp'; \
+			failure=owner_record_unreadable; \
+			if test "$$code" -eq 124; then failure=owner_record_timeout; echo '[colab] Owner record download timed out.' >&2; fi; \
 			$(CLOUDMAKE_RECORD_STATE) --phase ownership --provider-state unknown \
 				--runtime-state unreachable --target-submission not_submitted \
-				--retry-safe true --failure-code owner_record_unreadable; \
+				--retry-safe true --failure-code "$$failure"; \
 			echo '[colab] The remote owner exists but could not be read; synchronization was refused and the target was not submitted.' >&2; \
 			echo '[colab] Retrying is safe. Next: cloudmake -b colab --status' >&2; \
 			exit 74; \
@@ -200,16 +219,22 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 			--retry-safe true --failure-code control_state_invalid; exit 74; \
 	fi; \
 	if test ! -f '$(COLAB_RESET_MARKER)' && test "$$fingerprint_state" = present; then \
-		if ! $(COLAB_BIN) download -s '$(COLAB_SESSION)' \
-			'$(COLAB_REMOTE_FINGERPRINT)' '$(COLAB_REMOTE_FINGERPRINT_COPY)' \
-			>/dev/null 2>&1; then \
+		rm -f '$(COLAB_REMOTE_FINGERPRINT_COPY).tmp'; \
+		code=0; $(COLAB_CONTROL_CLIENT) download -s '$(COLAB_SESSION)' \
+			'$(COLAB_REMOTE_FINGERPRINT)' '$(COLAB_REMOTE_FINGERPRINT_COPY).tmp' \
+			>/dev/null 2>&1 || code=$$?; \
+		if test "$$code" -ne 0 || test ! -s '$(COLAB_REMOTE_FINGERPRINT_COPY).tmp'; then \
+			rm -f '$(COLAB_REMOTE_FINGERPRINT_COPY).tmp'; \
+			failure=fingerprint_unreadable; \
+			if test "$$code" -eq 124; then failure=fingerprint_timeout; echo '[colab] Source fingerprint download timed out.' >&2; fi; \
 			$(CLOUDMAKE_RECORD_STATE) --phase synchronization --provider-state unknown \
 				--runtime-state unreachable --target-submission not_submitted \
-				--retry-safe true --failure-code fingerprint_unreadable; \
+				--retry-safe true --failure-code "$$failure"; \
 			echo '[colab] The remote fingerprint exists but could not be read; synchronization was refused and the target was not submitted.' >&2; \
 			echo '[colab] Retrying is safe. Next: cloudmake -b colab --status' >&2; \
 			exit 74; \
 		fi; \
+		mv '$(COLAB_REMOTE_FINGERPRINT_COPY).tmp' '$(COLAB_REMOTE_FINGERPRINT_COPY)'; \
 		remote_fingerprint=1; \
 	fi; \
 	if test "$$remote_fingerprint" = 1 && \
@@ -229,14 +254,41 @@ _colab-sync: _colab-start | $(COLAB_STATE_DIR)
 			--archive '$(COLAB_ARCHIVE)' \
 			$(CLOUDMAKE_SECRET_OPTION) \
 			--warn-mb '$(SOURCE_WARN_MB)' --max-mb '$(SOURCE_MAX_MB)' >/dev/null; \
-		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
-			'$(COLAB_ARCHIVE)' '$(COLAB_REMOTE_ARCHIVE)'; \
-		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
-			'$(COLAB_FINGERPRINT)' '$(COLAB_REMOTE_FINGERPRINT_INCOMING)'; \
-		$(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
-			'$(CLOUDMAKE_OWNER_FILE)' '$(COLAB_REMOTE_OWNER_INCOMING)'; \
-		$(COLAB_BIN) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
-			-f '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/sync.py'; \
+		$(PYTHON_BIN) '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/file_sha256.py' \
+			'$(COLAB_ARCHIVE)' > '$(COLAB_ARCHIVE_DIGEST).tmp'; \
+		mv '$(COLAB_ARCHIVE_DIGEST).tmp' '$(COLAB_ARCHIVE_DIGEST)'; \
+		archive_digest="$$(cat '$(COLAB_ARCHIVE_DIGEST)')"; \
+		remote_archive="/content/cloud-build-source-$$archive_digest.tar.gz"; \
+		code=0; \
+		{ $(COLAB_SETUP_CLIENT) upload -s '$(COLAB_SESSION)' \
+			'$(COLAB_ARCHIVE)' "$$remote_archive" && \
+		$(COLAB_SETUP_CLIENT) upload -s '$(COLAB_SESSION)' \
+			'$(COLAB_ARCHIVE_DIGEST)' '$(COLAB_REMOTE_ARCHIVE_DIGEST)' && \
+		$(COLAB_SETUP_CLIENT) upload -s '$(COLAB_SESSION)' \
+			'$(COLAB_FINGERPRINT)' '$(COLAB_REMOTE_FINGERPRINT_INCOMING)' && \
+		$(COLAB_SETUP_CLIENT) upload -s '$(COLAB_SESSION)' \
+			'$(CLOUDMAKE_OWNER_FILE)' '$(COLAB_REMOTE_OWNER_INCOMING)'; } || code=$$?; \
+		if test "$$code" -ne 0; then \
+			failure=source_upload_failed; safe=true; \
+			if test "$$code" -eq 124; then failure=source_upload_timeout; safe=false; fi; \
+			$(CLOUDMAKE_RECORD_STATE) --phase synchronization --provider-state unknown \
+				--target-submission not_submitted --retry-safe "$$safe" --failure-code "$$failure"; \
+			echo '[colab] Source upload did not complete; the target was not submitted.' >&2; \
+			test "$$safe" = true || echo '[colab] Check the session before retrying: cloudmake -b colab --status' >&2; \
+			exit 74; \
+		fi; \
+		code=0; $(COLAB_SETUP_CLIENT) exec -s '$(COLAB_SESSION)' --timeout '$(COLAB_TIMEOUT)' \
+			-f '$(CLOUDMAKE_TOOL_ROOT)/backend/colab-notebook/sync.py' || code=$$?; \
+		if test "$$code" -ne 0; then \
+			failure=source_upload_unverified; safe=true; \
+			if test "$$code" -eq 124; then failure=source_sync_timeout; safe=false; fi; \
+			$(CLOUDMAKE_RECORD_STATE) --phase synchronization --provider-state unknown \
+				--runtime-state unreachable --target-submission not_submitted \
+				--retry-safe "$$safe" --failure-code "$$failure"; \
+			echo '[colab] Uploaded source could not be verified; synchronization was refused and the target was not submitted.' >&2; \
+			test "$$safe" = true || echo '[colab] Check the session before retrying: cloudmake -b colab --status' >&2; \
+			exit 74; \
+		fi; \
 		mv '$(CLOUDMAKE_CURRENT_MANIFEST)' '$(CLOUDMAKE_MANIFEST)'; \
 	fi
 
@@ -325,13 +377,17 @@ _colab-execute: _colab-prepare | $(COLAB_STATE_DIR)
 	@mv '$(COLAB_RUN_NOTEBOOK).tmp' '$(COLAB_RUN_NOTEBOOK)'
 	@$(CLOUDMAKE_RECORD_STATE) --phase target_submission --provider-state ready \
 		--target-submission not_submitted --retry-safe true
-	@set +e; $(COLAB_BIN) upload -s '$(COLAB_SESSION)' \
+	@set +e; $(COLAB_CONTROL_CLIENT) upload -s '$(COLAB_SESSION)' \
 		'$(COLAB_TARGET_FILE)' '$(COLAB_REMOTE_TARGET)'; code=$$?; \
 	if test $$code -ne 0; then \
+		failure=target_request_upload_failed; safe=true; \
+		if test "$$code" -eq 124; then failure=target_request_upload_timeout; safe=false; fi; \
 		$(CLOUDMAKE_RECORD_STATE) --phase target_submission --provider-state unknown \
-			--target-submission not_submitted --retry-safe true \
-			--failure-code target_request_upload_failed; \
-		echo '[colab] Target request upload failed before submission; retrying the command is safe.' >&2; \
+			--target-submission not_submitted --retry-safe "$$safe" --failure-code "$$failure"; \
+		echo '[colab] Target request upload failed before submission.' >&2; \
+		if test "$$safe" = true; then \
+			echo '[colab] Retrying the command is safe.' >&2; \
+		else echo '[colab] Check the session before retrying: cloudmake -b colab --status' >&2; fi; \
 	fi; exit $$code
 	@$(CLOUDMAKE_RECORD_STATE) --phase target_execution --provider-state running \
 		--target-submission ambiguous --retry-safe false
@@ -398,4 +454,4 @@ _colab-open: _colab-start
 	$(COLAB_BIN) url -s '$(COLAB_SESSION)' --open
 
 _colab-stop: ensure-owner
-	$(COLAB_BIN) stop -s '$(COLAB_SESSION)'
+	$(COLAB_BIN) stop -s '$(COLAB_SESSION)' </dev/null

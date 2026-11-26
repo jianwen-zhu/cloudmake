@@ -5,6 +5,18 @@ once a version is published as a GitHub release.
 
 ## Unreleased
 
+## 1.1.2
+
+- Add host-side deadlines for Colab ownership checks, metadata reads and source
+  setup so a hung client releases the session lock before target submission.
+- Retry transient read-only authentication and access checks. Let explicit
+  cleanup reach the selected session without another discovery probe.
+- Record failed Colab target preflight as `not_submitted` and preserve
+  at-most-once target delivery.
+- Reconcile unresolved Colab allocations across invocations, reusing late
+  named sessions and bounding replacement attempts.
+- Verify uploaded Colab source against its archive digest before extraction.
+
 ## 1.1.1 - 2026-09-12
 
 - Reorganize the stateless source tree by ownership under `cmd/`, `core/`, and

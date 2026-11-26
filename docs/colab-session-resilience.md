@@ -1,6 +1,6 @@
-# Colab session resilience design (v1.0.1)
+# Colab session resilience design
 
-This design applies specifically to the stateless v1.0.1 Colab notebook backend.
+This design applies specifically to the stateless UofT Colab notebook backend.
 It improves the safety of reusable live sessions without introducing durable
 workspaces, checkpoints, or cross-VM restoration.
 
@@ -32,10 +32,30 @@ session lookup -> create or reuse -> bounded readiness polling
                -> optional idempotent preparation -> target submission
 ```
 
-Only session lookup, creation, and the remote prerequisite probe occur during
-readiness. The project target cannot run in that loop. The deadline uses a
-monotonic clock, each probe has its own timeout, and polling delay is modest and
-configurable.
+Only session lookup, creation, reconciliation, and the remote prerequisite
+probe occur during readiness. The project target cannot run in that loop. The
+deadline uses a monotonic clock, each provider CLI call and probe has its own
+timeout, and polling delay is modest and configurable.
+
+A previously selected session that is missing from one provider listing is
+rechecked before replacement. An unnamed (`[?]`) listing is never treated as
+absence. Once `colab new` has been submitted, a command timeout is saved in a
+per-session recovery record and reconciled with bounded polling. A confirmed
+named session is adopted. An unnamed, empty, or discovery-error result at the
+deadline returns `allocation-deferred`, an exact retry command, and a minimum
+delay; retrying is safe because the next invocation resumes reconciliation and
+does not immediately create another runtime.
+
+Empty discovery alone is not authoritative failure. Replacement requires the
+grace period to expire, successful empty observations in at least two recovery
+runs, and the configured observation threshold. Cloudmake then issues at most
+one replacement per recovery cooldown and discloses that Colab's missing
+allocation idempotency key leaves a duplicate-runtime risk. If that request is
+also unresolved, later invocations continue reconciliation and must wait through
+the cooldown before another bounded replacement window. Cloudmake adopts a late
+named session but never stops an unnamed session. Project target submission is
+not part of this recovery loop. Positively classified capacity responses remain
+separate and are reconciled before the capacity retry loop continues.
 
 Positive creation evidence is a successful `colab new` performed by the current
 invocation. If that new session never becomes ready, it can be stopped safely.
@@ -63,8 +83,12 @@ that kernel-only argument without interpreting it. Its local `--parse` and
 arguments.
 
 Fresh/reset state invalidates the cached remote fingerprint and forces the
-full-archive synchronization path. That synchronization replaces the remote
-source snapshot. It does not preserve generated files across a replacement VM.
+full-archive synchronization path. The local archive is hashed and uploaded to
+a content-addressed remote name. The runtime verifies the same SHA-256 digest
+before extraction, so a false upload acknowledgement or stale fixed-path file
+cannot install old source under a new source receipt. That synchronization
+replaces the remote source snapshot. It does not preserve generated files
+across a replacement VM.
 
 `COLAB_SESSION_PREPARE_TARGET` optionally names a project-defined, idempotent
 Make target. Cloudmake runs it after fresh/reset synchronization, records a
@@ -87,11 +111,15 @@ provenance includes:
 - submission state: `not_submitted`, `submitted`, or `ambiguous`;
 - retry safety and a machine-readable failure code.
 
-Before execution submission, failures are retry-safe. Immediately before the
-runner notebook crosses the provider execution boundary, submission becomes
-`ambiguous` and retry safety becomes false. A connection loss after that point
-never triggers an automatic target replay. A confirmed target-result receipt
-records success or the project's actual Make exit status.
+Before execution submission, ordinary preparation and synchronization failures
+are retry-safe. Allocation submission is an earlier external side-effect
+boundary: if its result cannot yet be reconciled, the project target remains
+`not_submitted` and the saved recovery state makes the printed retry command
+safe—it reconciles before any bounded replacement. Immediately before the
+runner notebook crosses the provider execution boundary, target submission
+becomes `ambiguous` and retry safety becomes false. A connection loss after
+that point never triggers an automatic target replay. A confirmed target-result
+receipt records success or the project's actual Make exit status.
 
 All regression coverage uses the fake Colab client. Live provider execution is
 an explicit acceptance activity and is not required by the offline suite.

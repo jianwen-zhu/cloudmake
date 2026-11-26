@@ -24,6 +24,13 @@ def fake_environment(fake_bin: Path, tmp_path: Path) -> dict[str, str]:
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "FAKE_LOG": str(tmp_path / "provider.jsonl"),
         "FAKE_REMOTE": str(tmp_path / "remote"),
+        "CLOUDMAKE_COLAB_SESSION_RECHECK_SECONDS": "0.01",
+        "CLOUDMAKE_COLAB_ALLOCATION_RECONCILE_SECONDS": "0.1",
+        "CLOUDMAKE_COLAB_ALLOCATION_RESUME_SECONDS": "0.1",
+        "CLOUDMAKE_COLAB_ALLOCATION_REPLACE_AFTER_SECONDS": "0.2",
+        "CLOUDMAKE_COLAB_ALLOCATION_RECOVERY_RETRY_SECONDS": "1",
+        "CLOUDMAKE_COLAB_ALLOCATION_REPLACEMENT_COOLDOWN_SECONDS": "1",
+        "CLOUDMAKE_COLAB_ALLOCATION_MIN_EMPTY_OBSERVATIONS": "2",
     }
 
 
@@ -77,15 +84,32 @@ def calls(log: Path, program: str | None = None) -> list[list[str]]:
     return records
 
 
+def is_source_archive_upload(call: list[str]) -> bool:
+    return (
+        len(call) >= 2
+        and call[1] == "upload"
+        and call[-1].startswith("/content/cloud-build-source-")
+        and call[-1].endswith(".tar.gz")
+    )
+
+
+def source_archive(remote: Path) -> Path:
+    archives = list(remote.glob("cloud-build-source-*.tar.gz"))
+    assert len(archives) == 1
+    return archives[0]
+
+
 def install_fake_colab(fake_bin: Path) -> Path:
     return write_executable(
         fake_bin / "colab",
         r'''#!/usr/bin/env python3
 import json
+import hashlib
 import os
 import shutil
 import sys
 import tarfile
+import time
 import base64
 from pathlib import Path
 
@@ -107,8 +131,28 @@ if command == "version":
     print("fake colab 1.0")
 elif command == "sessions":
     if os.environ.get("FAKE_COLAB_AUTH_FAIL"):
-        print("Colab authentication expired")
+        print("ColabRequestError: Failed to issue request GET \nhttps://example.invalid/assignments: Unauthorized", file=sys.stderr)
         raise SystemExit(1)
+    failure = os.environ.get("FAKE_COLAB_ACCESS_PROBE_FAILURE")
+    if failure:
+        counter = remote / "access-probe-attempts"
+        attempt = int(counter.read_text()) + 1 if counter.exists() else 1
+        counter.write_text(str(attempt))
+        if (failure == "prompt-once" and attempt == 1) or failure == "prompt":
+            print("To authorize colab-cli, visit this URL in any browser:", file=sys.stderr)
+            print("https://example.invalid/oauth?state=private-test-marker", file=sys.stderr)
+            assert sys.stdin.read(1) == ""
+            raise SystemExit(1)
+        if failure == "tls":
+            print("SSLEOFError: UNEXPECTED_EOF_WHILE_READING private-test-marker", file=sys.stderr)
+            raise SystemExit(1)
+        if failure == "forbidden":
+            print("ColabRequestError: Failed to issue request GET https://example.invalid/assignments: Forbidden", file=sys.stderr)
+            raise SystemExit(1)
+        if failure == "adc-false-success":
+            print("No valid default credentials found. To authenticate, run:", file=sys.stderr)
+            print("[colab] No active sessions found on server.")
+            raise SystemExit(0)
     for session_marker in sorted(remote.glob("session-*")):
         print(f"[{session_marker.name.removeprefix('session-')}] running")
 elif command == "new":
@@ -122,6 +166,8 @@ elif command == "new":
     if os.environ.get("FAKE_COLAB_ALLOCATION_ERROR"):
         print(os.environ["FAKE_COLAB_ALLOCATION_ERROR"])
         raise SystemExit(2)
+    if os.environ.get("FAKE_COLAB_ALLOCATION_SLEEP"):
+        time.sleep(float(os.environ["FAKE_COLAB_ALLOCATION_SLEEP"]))
     marker.write_text("running", encoding="utf-8")
 elif command == "status":
     print("running" if marker.exists() else "not found")
@@ -129,16 +175,26 @@ elif command == "stop":
     marker.unlink(missing_ok=True)
 elif command == "upload":
     local, remote_name = arguments[-2:]
+    if os.environ.get("FAKE_COLAB_HANG") == "archive-upload" and remote_name.endswith(".tar.gz"):
+        time.sleep(60)
     if (
         os.environ.get("FAKE_COLAB_PREP_RECEIPT_UPLOAD_FAIL")
         and remote_name == "/content/cloud-build-prepared"
     ):
         print("Connection was lost while uploading preparation receipt.")
         raise SystemExit(1)
-    shutil.copyfile(local, remote / Path(remote_name).name)
+    if not (
+        os.environ.get("FAKE_COLAB_SOURCE_UPLOAD_FALSE_ACK")
+        and remote_name.startswith("/content/cloud-build-source-")
+        and remote_name.endswith(".tar.gz")
+    ):
+        shutil.copyfile(local, remote / Path(remote_name).name)
 elif command == "download":
     remote_name, local = arguments[-2:]
     source = remote / Path(remote_name).name
+    if os.environ.get("FAKE_COLAB_HANG") == "fingerprint-download" and remote_name.endswith("/source.sha256"):
+        Path(local).write_text("partial receipt", encoding="utf-8")
+        time.sleep(60)
     if (
         os.environ.get("FAKE_COLAB_OWNER_DOWNLOAD_CONNECTION_FAIL")
         and remote_name.endswith("/.cloudmake-owner.json")
@@ -159,6 +215,8 @@ elif command == "download":
     shutil.copyfile(source, local)
 elif command == "exec":
     script = Path(option("-f", ""))
+    if os.environ.get("FAKE_COLAB_HANG") == script.name:
+        time.sleep(60)
     if script.name == "remote_prerequisites.py":
         readiness_count = remote / "readiness-count"
         attempt = int(readiness_count.read_text(encoding="utf-8")) + 1 if readiness_count.exists() else 1
@@ -184,6 +242,11 @@ elif command == "exec":
         fingerprint = "present" if (remote / "source.sha256").is_file() else "absent"
         print(f"[cloudmake] control-state owner={owner} fingerprint={fingerprint}")
     elif script.name == "sync.py":
+        digest = (remote / "cloud-build-source.archive.sha256").read_text(encoding="utf-8").strip()
+        archive = remote / f"cloud-build-source-{digest}.tar.gz"
+        if not archive.is_file() or hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
+            print("incoming source archive digest mismatch")
+            raise SystemExit(1)
         shutil.copyfile(remote / "cloud-build-source.sha256", remote / "source.sha256")
         shutil.copyfile(remote / "cloud-build-owner.json", remote / ".cloudmake-owner.json")
     elif script.name == "prepare.py":
@@ -456,7 +519,7 @@ def test_launcher_runs_external_project_through_colab_native(
     )
 
     remote = Path(env["FAKE_REMOTE"])
-    with tarfile.open(remote / "cloud-build-source.tar.gz", "r:gz") as archive:
+    with tarfile.open(source_archive(remote), "r:gz") as archive:
         names = {name.removeprefix("./") for name in archive.getnames()}
     assert "Makefile" in names
     assert "source.txt" in names
@@ -768,7 +831,7 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
         if call[1] == "exec" and call[-1].endswith("remote_prerequisites.py")
     )
     assert readiness_call[readiness_call.index("--timeout") + 1] == "15"
-    assert any(call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz" for call in first_calls)
+    assert any(is_source_archive_upload(call) for call in first_calls)
     assert not any(call[1] == "ssh" for call in first_calls)
 
     log.write_text("", encoding="utf-8")
@@ -776,8 +839,35 @@ def test_colab_native_uploads_changed_source_and_skips_unchanged_archive(
     second_calls = calls(log, "colab")
     assert "Source unchanged; skipping archive upload" in second.stdout
     assert not any(call[1] == "new" for call in second_calls)
-    assert not any(call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz" for call in second_calls)
+    assert not any(is_source_archive_upload(call) for call in second_calls)
     assert any(call[1] == "upload" and call[-1] == "/content/cloud-build-target" for call in second_calls)
+
+
+@pytest.mark.integration
+def test_colab_false_upload_ack_is_caught_before_target_submission(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "false-upload-ack")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_SOURCE_UPLOAD_FALSE_ACK"] = "1"
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Uploaded source could not be verified" in result.stdout
+    assert not any(call[0] == "target" for call in calls(Path(env["FAKE_LOG"])))
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["phase"] == "synchronization"
+    assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
+    assert provenance["failure_code"] == "source_upload_unverified"
 
 
 @pytest.mark.integration
@@ -1002,6 +1092,43 @@ def test_colab_retry_does_not_repeat_non_capacity_allocation_error(
 
 
 @pytest.mark.integration
+def test_colab_timed_out_allocation_is_not_resubmitted(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "ambiguous-allocation")
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update(
+        {
+            "FAKE_COLAB_ALLOCATION_SLEEP": "1",
+            "COLAB_ALLOCATION_COMMAND_TIMEOUT": "0.1",
+        }
+    )
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "build"],
+        cwd=project,
+        env=env,
+        check=False,
+    )
+
+    colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
+    assert result.returncode == 75
+    assert "Try later" in result.stdout
+    assert "--retry-for=1s --start" in result.stdout
+    assert sum(call[1] == "new" for call in colab_calls) == 1
+    assert not any(call[1] == "exec" for call in colab_calls)
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    provenance = json.loads(latest.read_text(encoding="utf-8"))
+    assert provenance["allocation"]["outcome"] == "allocation-deferred"
+    assert provenance["allocation"]["classification"] == "submission-timeout"
+    assert provenance["phase"] == "allocation"
+    assert provenance["target_submission"] == "not_submitted"
+    assert provenance["retry_safe"] is True
+    assert provenance["failure_code"] == "allocation_reconciliation_deferred"
+
+
+@pytest.mark.integration
 def test_colab_retry_never_recreates_existing_session_after_readiness_ambiguity(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -1110,7 +1237,7 @@ def test_colab_native_archive_excludes_only_cloudmake_owned_root_paths(
 
     run_command(["make", "sync"], cwd=prototype, env=env)
 
-    archive_path = Path(env["FAKE_REMOTE"]) / "cloud-build-source.tar.gz"
+    archive_path = source_archive(Path(env["FAKE_REMOTE"]))
     with tarfile.open(archive_path, "r:gz") as archive:
         names = {name.removeprefix("./") for name in archive.getnames()}
     assert "kept.txt" in names
@@ -1175,7 +1302,7 @@ def test_colab_native_reconciles_a_disappeared_session(
 
     colab_calls = calls(Path(env["FAKE_LOG"]), "colab")
     assert any(call[1] == "new" for call in colab_calls)
-    assert any(call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz" for call in colab_calls)
+    assert any(is_source_archive_upload(call) for call in colab_calls)
 
 
 @pytest.mark.integration
@@ -1354,7 +1481,7 @@ def test_colab_detects_reset_control_state_and_forces_full_stateless_sync(
     all_calls = calls(Path(env["FAKE_LOG"]), "colab")
     assert not any(call[1] == "new" for call in all_calls)
     assert any(
-        call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz"
+        is_source_archive_upload(call)
         for call in all_calls
     )
 
@@ -1495,7 +1622,7 @@ def test_colab_native_refuses_foreign_workspace_without_explicit_adoption(
         for call in calls(Path(env["FAKE_LOG"]), "colab")
     )
     assert not any(
-        call[1] == "upload" and call[-1] == "/content/cloud-build-source.tar.gz"
+        is_source_archive_upload(call)
         for call in calls(Path(env["FAKE_LOG"]), "colab")
     )
 
@@ -1546,9 +1673,7 @@ def test_colab_owner_download_failure_never_overwrites_foreign_workspace(
         call[0] == "colab" and call[1] in {"new", "stop"} for call in all_calls
     )
     assert not any(
-        call[0] == "colab"
-        and call[1] == "upload"
-        and call[-1] == "/content/cloud-build-source.tar.gz"
+        call[0] == "colab" and is_source_archive_upload(call)
         for call in all_calls
     )
     assert not any(call[0] == "target" for call in all_calls)
@@ -1582,9 +1707,7 @@ def test_colab_fingerprint_download_failure_is_not_treated_as_reset(
     assert "fingerprint exists but could not be read" in result.stdout
     all_calls = calls(Path(env["FAKE_LOG"]))
     assert not any(
-        call[0] == "colab"
-        and call[1] == "upload"
-        and call[-1] == "/content/cloud-build-source.tar.gz"
+        call[0] == "colab" and is_source_archive_upload(call)
         for call in all_calls
     )
     assert not any(call[0] == "target" for call in all_calls)
@@ -1596,6 +1719,54 @@ def test_colab_fingerprint_download_failure_is_not_treated_as_reset(
     assert provenance["target_submission"] == "not_submitted"
     assert provenance["retry_safe"] is True
     assert provenance["failure_code"] == "fingerprint_unreadable"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("hang", "phase", "failure", "retry_safe"),
+    [
+        ("control_state.py", "ownership", "control_state_timeout", True),
+        ("fingerprint-download", "synchronization", "fingerprint_timeout", True),
+        ("archive-upload", "synchronization", "source_upload_timeout", False),
+        ("sync.py", "synchronization", "source_sync_timeout", False),
+    ],
+)
+def test_colab_setup_deadline_stops_before_submission_and_releases_lock(
+    fake_bin: Path, tmp_path: Path, hang: str, phase: str, failure: str, retry_safe: bool,
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "stalled-colab")
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update(
+        COLAB_SESSION="deadline-test",
+        COLAB_CONTROL_COMMAND_TIMEOUT="1",
+        COLAB_SETUP_COMMAND_TIMEOUT="1",
+    )
+    log = Path(env["FAKE_LOG"])
+    if hang == "fingerprint-download":
+        run_command([LAUNCHER, "-b", "colab", "build"], cwd=project, env=env)
+        log.unlink()
+    env["FAKE_COLAB_HANG"] = hang
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "test"],
+        cwd=project, env=env, check=False, timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "timed out" in result.stdout or "exceeded its 1s deadline" in result.stdout
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    record = json.loads(latest.read_text(encoding="utf-8"))
+    assert record["phase"] == phase
+    assert record["failure_code"] == failure
+    assert record["target_submission"] == "not_submitted"
+    assert record["retry_safe"] is retry_safe
+    assert record["attempts"][0]["outcome"] == "not_submitted"
+    assert record["replay_safe"] is False
+    assert not any(call[0] == "target" for call in calls(log))
+    assert not list((tmp_path / "state").rglob("remote-source.sha256.tmp"))
+    run_command([LAUNCHER, "-b", "colab", "--stop"], cwd=project, env=env, timeout=5)
+    assert not (Path(env["FAKE_REMOTE"]) / "session-deadline-test").exists()
 
 
 @pytest.mark.integration
@@ -2164,6 +2335,96 @@ def test_colab_doctor_rejects_incompatible_kernel_client_before_access_probe(
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize(
+    ("failure", "expected", "attempts", "exit_code"),
+    [
+        ("prompt-once", "Backend colab-notebook is ready", 2, 0),
+        ("tls", "Colab is temporarily unavailable", 3, 2),
+        ("prompt", "Colab authorization could not be verified", 3, 2),
+        ("forbidden", "Colab denied access", 1, 2),
+        ("adc-false-success", "Colab authorization could not be verified", 3, 2),
+    ],
+)
+def test_colab_doctor_retries_read_only_and_redacts_cli_output(
+    fake_bin: Path,
+    tmp_path: Path,
+    failure: str,
+    expected: str,
+    attempts: int,
+    exit_code: int,
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "colab-doctor")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_ACCESS_PROBE_FAILURE"] = failure
+
+    result = run_command(
+        [LAUNCHER, "-b", "colab", "--doctor"], cwd=project, env=env, check=False
+    )
+
+    assert result.returncode == exit_code
+    assert expected in result.stdout
+    assert "private-test-marker" not in result.stdout
+    assert "uv tool install" not in result.stdout
+    assert calls(Path(env["FAKE_LOG"])) == [
+        ["colab", "version"], *([["colab", "sessions"]] * attempts)
+    ]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("collect", [False, True])
+def test_colab_target_preflight_failure_records_not_submitted(
+    fake_bin: Path, tmp_path: Path, collect: bool
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "preflight-failure")
+    env = launcher_environment(fake_bin, tmp_path)
+    env["FAKE_COLAB_ACCESS_PROBE_FAILURE"] = "tls"
+    command = [LAUNCHER, "-b", "colab"]
+    if collect:
+        command.extend(["--collect", "dist"])
+    result = run_command([*command, "build"], cwd=project, env=env, check=False)
+
+    assert result.returncode == 2
+    assert "Colab is temporarily unavailable" in result.stdout
+    assert calls(Path(env["FAKE_LOG"])) == [
+        ["colab", "version"], *([["colab", "sessions"]] * 3)
+    ]
+    latest = next((tmp_path / "state" / "projects").glob("*/runs/latest.json"))
+    record = json.loads(latest.read_text(encoding="utf-8"))
+    assert record["phase"] == "preflight"
+    assert record["failure_code"] == "preflight_failed"
+    assert record["session_created"] is False
+    assert record["target_submission"] == "not_submitted"
+    assert record["retry_safe"] is True
+    assert record["replay_safe"] is False
+    assert len(record["attempts"]) == 1
+    attempt = record["attempts"][0]
+    assert attempt["target_submission"] == "not_submitted"
+    assert attempt["outcome"] == "not_submitted"
+    assert "exit_code" not in attempt
+
+
+@pytest.mark.integration
+def test_colab_stop_runs_directly_when_discovery_would_fail(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    install_fake_colab(fake_bin)
+    project = external_project(tmp_path / "colab-cleanup")
+    env = launcher_environment(fake_bin, tmp_path)
+    env.update({"FAKE_COLAB_ACCESS_PROBE_FAILURE": "tls", "COLAB_SESSION": "cleanup"})
+    remote = Path(env["FAKE_REMOTE"])
+    remote.mkdir()
+    marker = remote / "session-cleanup"
+    marker.touch()
+
+    run_command([LAUNCHER, "-b", "colab", "--stop"], cwd=project, env=env)
+
+    assert not marker.exists()
+    assert calls(Path(env["FAKE_LOG"])) == [["colab", "stop", "-s", "cleanup"]]
+
+
+@pytest.mark.integration
 def test_colab_ssh_doctor_checks_client_and_key_without_opening_ssh(
     prototype: Path, fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -2324,6 +2585,12 @@ def test_authentication_failure_blocks_provider_operation(
     assert result.returncode == 2
     assert "authentication or access probe failed" in result.stdout
     assert forbidden_fragment not in json.dumps(calls(Path(env["FAKE_LOG"])))
+    if backend == "colab-notebook":
+        assert "Colab authentication is required" in result.stdout
+        assert "Retrying" not in result.stdout
+        assert calls(Path(env["FAKE_LOG"])) == [
+            ["colab", "version"], ["colab", "sessions"]
+        ]
 
 
 def test_prerequisites_enforces_minimum_python_version(

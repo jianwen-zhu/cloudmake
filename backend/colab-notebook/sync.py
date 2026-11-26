@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import shutil
 import tarfile
@@ -7,7 +8,8 @@ from pathlib import Path, PurePosixPath
 
 
 ROOT = Path("/content/.cloud-build/workspace")
-ARCHIVE = Path("/content/cloud-build-source.tar.gz")
+INCOMING = Path("/content")
+ARCHIVE_DIGEST = Path("/content/cloud-build-source.archive.sha256")
 INCOMING_FINGERPRINT = Path("/content/cloud-build-source.sha256")
 INCOMING_OWNER = Path("/content/cloud-build-owner.json")
 SOURCE = ROOT / "src"
@@ -15,6 +17,14 @@ STAGING = ROOT / "src.new"
 OLD = ROOT / "src.old"
 FINGERPRINT = ROOT / "source.sha256"
 OWNER = ROOT / ".cloudmake-owner.json"
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def within(path: Path, root: Path) -> bool:
@@ -50,10 +60,18 @@ def extract_safely(archive: tarfile.TarFile) -> None:
 
 
 ROOT.mkdir(parents=True, exist_ok=True)
+expected_archive_digest = ARCHIVE_DIGEST.read_text(encoding="utf-8").strip()
+if len(expected_archive_digest) != 64 or any(
+    character not in "0123456789abcdef" for character in expected_archive_digest
+):
+    raise ValueError("invalid incoming source archive digest")
+archive_path = INCOMING / f"cloud-build-source-{expected_archive_digest}.tar.gz"
+if sha256(archive_path) != expected_archive_digest:
+    raise ValueError("incoming source archive digest mismatch")
 shutil.rmtree(STAGING, ignore_errors=True)
 STAGING.mkdir(parents=True)
 
-with tarfile.open(ARCHIVE, "r:gz") as archive:
+with tarfile.open(archive_path, "r:gz") as archive:
     extract_safely(archive)
 
 shutil.rmtree(OLD, ignore_errors=True)

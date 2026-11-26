@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -114,7 +115,9 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
     assert installed_runtime == expected_runtime
 
     version = run_command([launcher, "--version"], cwd=tmp_path)
-    assert version.stdout.strip() == f"cloudmake {(PROJECT_ROOT / 'VERSION').read_text().strip()}"
+    expected_version = (PROJECT_ROOT / "VERSION").read_text().strip()
+    assert (runtime / "VERSION").read_text().strip() == expected_version
+    assert version.stdout.strip() == f"cloudmake {expected_version}"
 
     template = run_command(
         [launcher, "--host-template", "generic"], cwd=tmp_path
@@ -125,3 +128,16 @@ def test_install_copies_a_self_contained_runtime(tmp_path: Path) -> None:
     project = sample_project(tmp_path)
     dry_run = run_command([launcher, "-C", project, "--sync-dry-run"], cwd=tmp_path)
     assert "Makefile" in dry_run.stdout
+
+    state = tmp_path / "state"
+    run_command(
+        [launcher, "-C", project, "-b", "local", "build"],
+        cwd=tmp_path,
+        env={
+            "CLOUDMAKE_CONFIG_HOME": str(tmp_path / "config"),
+            "CLOUDMAKE_STATE_HOME": str(state),
+            "CLOUDMAKE_CACHE_HOME": str(tmp_path / "cache"),
+        },
+    )
+    receipt = next(state.glob("projects/*/runs/latest.json"))
+    assert json.loads(receipt.read_text())["cloudmake_version"] == expected_version

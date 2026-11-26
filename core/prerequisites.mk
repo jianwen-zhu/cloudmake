@@ -9,6 +9,7 @@ BACKEND_REQUIRES_PYTHON ?= no
 BACKEND_VALIDATE ?= :
 BACKEND_DOCTOR_COMPATIBILITY ?= :
 BACKEND_DOCTOR_PROBE ?= :
+BACKEND_DOCTOR_FAILURE_HINT ?= $(BACKEND_INSTALL_HINT)
 BACKEND_VERSION_COMMAND ?= :
 BACKEND_TESTED_CLIENT ?= not recorded
 PYTHON_BIN ?= python3
@@ -56,7 +57,7 @@ doctor: prerequisites
 	@echo '[doctor] Probing backend $(BACKEND) without allocating compute...'
 	@if ! { $(BACKEND_DOCTOR_PROBE); }; then \
 		echo '[doctor] Backend $(BACKEND) is installed but its authentication or access probe failed.' >&2; \
-		printf '%s\n' '$(BACKEND_INSTALL_HINT)' >&2; \
+		$(if $(BACKEND_DOCTOR_FAILURE_HINT),printf '%s\n' '$(BACKEND_DOCTOR_FAILURE_HINT)' >&2;) \
 		exit 2; \
 	fi
 	@echo '[doctor] Backend $(BACKEND) is ready.'

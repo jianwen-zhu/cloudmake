@@ -398,9 +398,10 @@ drivers the project itself requires.
 
 ### 2. Install cloudmake
 
-The current stateless release is Cloudmake 1.1.1. Durable workspaces,
-checkpoints, and cross-VM restoration are reserved for the stateful 2.0 series.
-Install the stateless release's launcher from the versioned tool checkout:
+Cloudmake 1.x is the stateless release line. Durable workspaces, checkpoints, and
+cross-VM restoration are reserved for the stateful 2.0 series.
+For a published release, use its exact tag and verify the peeled commit against
+the release record before installation. For example, to install 1.1.1:
 
 ```sh
 git clone --branch v1.1.1 --depth 1 https://github.com/jianwen-zhu/cloudmake.git
@@ -412,6 +413,13 @@ make install
 The final command must print `cloudmake 1.1.1`. For an immutable deployment,
 also verify that the checkout's `HEAD` is the published 1.1.1 release commit
 listed with the release artifact and tag.
+
+From any verified source archive or checkout, the installed CLI can be
+checked against its packaged version without contacting a provider:
+
+```sh
+test "$(~/.local/bin/cloudmake --version)" = "cloudmake $(cat VERSION)"
+```
 
 Installation creates an unprivileged launcher under `~/.local/bin/cloudmake`
 and installs its self-contained runtime under `~/.local/libexec/cloudmake/`.
@@ -649,6 +657,18 @@ mismatches that `colab version` and `colab sessions` do not expose. If it fails,
 do not allocate compute or copy Google credentials into Cloudmake; reinstall the
 exact Colab CLI dependency set qualified by the Cloudmake release.
 
+The native Colab doctor runs `colab sessions` with stdin closed and a
+10-second timeout per attempt. A temporary connection failure or a sign-in
+prompt triggers up to two read-only retries. The CLI can display the same
+sign-in prompt after a failed token refresh or when sign-in is needed.
+Cloudmake reports when it cannot verify authorization and directs you to
+`colab sessions` in your own terminal if the prompt persists. Explicit
+authentication and permissions rejections produce separate diagnostics.
+The doctor displays a summary and keeps the CLI's raw probe output out of
+Cloudmake logs. An explicit `cloudmake -b colab --stop` goes directly to the
+selected session after local checks, so discovery failure cannot block it.
+The stop command still requires provider access.
+
 Cloudmake uses `colab new`, `sessions`, `upload`, `download`, `exec`, `url`, and
 `stop`. The source is fingerprinted before upload. An unchanged tree reuses the
 remote source and session-local build directory in the named live runtime.
@@ -691,6 +711,33 @@ An unreachable pre-existing session is left untouched because ownership cannot
 be verified. In both cases the requested project target was not submitted and
 is safe to retry.
 
+The host also bounds each native Colab status call, workspace ownership probe,
+owner/fingerprint download, and target-request upload with
+`COLAB_CONTROL_COMMAND_TIMEOUT` (default `60` seconds). Each staged source
+upload and the remote source sync has a separate
+`COLAB_SETUP_COMMAND_TIMEOUT` (default `180` seconds). These deadlines include
+client connection time, even if the Colab CLI's kernel timeout never starts.
+When one expires during target setup, Cloudmake stops the local CLI, releases
+the session lock, and records the requested target as `not_submitted`. A
+timed-out read can be retried explicitly. A timed-out write can still complete
+at the provider, so check the session before retrying it.
+
+Allocation calls are separately bounded by
+`COLAB_ALLOCATION_COMMAND_TIMEOUT` (default `30`). A previously selected session
+that is temporarily absent from one listing receives bounded discovery
+rechecks. After `colab new` crosses the provider boundary, a timeout creates a
+saved per-session recovery record and starts bounded discovery polling. A late
+named session is adopted automatically. If discovery remains empty or
+inconclusive, Cloudmake returns a temporary `allocation-deferred` result with an
+exact `--start` command and delay. That next invocation reconciles the saved
+attempt before doing anything else. After a two-minute grace period and repeated
+successful empty listings across invocations, it may issue one replacement for
+that recovery window; subsequent replacements are rate-limited by a ten-minute
+cooldown. Colab provides no allocation idempotency key, so the duplicate-runtime
+risk is printed before replacement. Unnamed (`[?]`) sessions are never stopped.
+This recovery concerns provider allocation only: the project target remains
+`not_submitted` and is never replayed.
+
 Colab sessions are reusable but not durable. If remote ownership or fingerprint
 control state is positively confirmed absent, Cloudmake treats the runtime as
 fresh/reset, warns that runtime-local generated files may be gone, and performs
@@ -699,6 +746,10 @@ before synchronization. Projects that need repeatable session setup may declare 
 idempotent Make target with `COLAB_SESSION_PREPARE_TARGET=TARGET`; it runs after
 a fresh/reset sync and is skipped while its source-bound session receipt remains
 valid. A source change conservatively runs preparation again.
+Each changed source archive is uploaded under a name containing its SHA-256
+digest. The runtime verifies the received bytes before extraction; a missing or
+stale archive stops synchronization before project target submission. This is
+an integrity/reconciliation check, not a persistent workspace or checkpoint.
 The retry boundary and provider-identity limitation are detailed in the
 [Colab session resilience design](docs/colab-session-resilience.md).
 
